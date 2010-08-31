@@ -1,0 +1,14 @@
+Installation Instructions
+*************************
+
+Copyright (C) 2010  StumbleUpon, Inc.
+
+This file is free documentation; StumbleUpon, Inc gives
+unlimited permission to copy, distribute and modify it.
+
+Basic Installation
+==================
+
+Just type `make', and everything should work as long as you have Java
+and GNU make installed in your PATH.  On some BSD systems, you may have
+to type `gmake' instead.

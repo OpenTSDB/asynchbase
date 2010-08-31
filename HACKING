@@ -1,0 +1,51 @@
+Want to contribute?  Great!  This file will guide you through some of
+design decision / ideology you should try to adhere to.
+
+The basics:
+  - Know the complexity of your algorithms.  When you're calling a
+    method in another library, make sure you're aware of the its
+    complexity.  Is it O(n2) or O(n log n)?  How much memory will it
+    allocate?  For instance, Collections.sort() works in O(n log n)
+    as expected but it does 3 array copies!  So it's O(3n) = O(n) in
+    space instead of O(1).
+  - Avoid allocating objects whenever you can.  If you can, re-use the
+    same objects in a loop in order to avoid generating too much garbage
+    for the GC to collect.  Objects that are expected to be used very
+    frequently should be create once and stored in an attribute.
+
+The build system:
+  - No Ant / Ivy / Maven madness.  Using XML to specify a build system
+    is a dumb idea and those tools are way too slow and don't even do
+    proper dependency tracking out of the box.  They don't come with a
+    set of standard rules that make packaging easy.
+  - Don't add new dependencies unless you have a compelling reason to do
+    so.  The code of any dependency will be audited before we can allow
+    this new dependency.
+
+Code:
+  - The #1 rule is to write readable code.  How much time will it take
+    for someone else to understand that method?  If something is not
+    obvious, it should be commented.
+  - Stick to the coding style in the files you're editing.
+  - Avoid lines longer than 80 characters.  There are a few cases where
+    Java is so verbose that trying to wrap things around to avoid long
+    lines makes the code unnecessarily hard to read.
+  - Everything should be properly Javadoc'ed.  Everything.  Including
+    private stuff (except maybe 1-line private helper functions).
+    Document the RuntimeExceptions one should expect to handle.
+    All javadoc comments are to be written in proper English.
+  - The javadoc (internal and user-facing) must document the
+    synchronization requirements.  What is thread-safe?  Which monitor
+    needs to be acquired before accessing this attribute?
+  - No checked exceptions.  People should RTFM and handle whatever
+    exceptions they want to handle.  There's a disagreement in the
+    community about the usefulness and effectiveness of checked
+    exceptions.  I haven't been convinced about the pros so I chose
+    to not use them.
+  - Use fine-grained exception types.  Everything must derive from
+    HBaseException.  Exceptions should contain all the data required to
+    help the user code recover from them.  HBase's own code is a very
+    good example of how to not (ab)use IOException.
+  - Local variables are named_like_this, I think it's more readable
+    compared to somethingLikeThis.  I think there's a reason why latin
+    languages put a space between words.

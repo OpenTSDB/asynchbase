@@ -4,3 +4,16 @@
 
 This is an alternative Java library to use HBase in applications that require
 a fully asynchronous, non-blocking, thread-safe, high-performance HBase API.
+
+This HBase client differs significantly from HBase's client (HTable).
+Switching to it is not easy as it requires to rewrite all the code that was
+interacting with any HBase API.  This pays off in applications that are
+asynchronous by nature or that want to use several threads to interact
+efficiently with HBase.
+
+Please read the Javadoc starting from the HBaseClient class.  This class
+replaces all your HTable instances.  Unlike HTable, you should have only
+one instance of HBaseClient in your application, regardless of the number
+of tables or threads you want to use.  The Javadoc also spells out rules
+you have to follow in order to use the API properly in a multi-threaded
+application.
