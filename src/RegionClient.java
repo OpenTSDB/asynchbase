@@ -72,8 +72,7 @@ import com.stumbleupon.async.Deferred;
  * random times.  The bottom line is that any data only used in the Netty IO
  * threads doesn't require synchronization, everything else does.
  */
-final class RegionClient extends ReplayingDecoder<VoidEnum>
-  implements ChannelDownstreamHandler {
+final class RegionClient extends ReplayingDecoder<VoidEnum> {
 
   private static final Logger LOG = LoggerFactory.getLogger(RegionClient.class);
 
@@ -545,7 +544,10 @@ final class RegionClient extends ReplayingDecoder<VoidEnum>
    */
   void sendRpc(final HBaseRpc rpc) {
     if (chan != null) {
-      Channels.write(chan, rpc);
+      final ChannelBuffer serialized = encode(rpc);
+      if (serialized != null) {
+        Channels.write(chan, serialized);
+      }
     } else {
       synchronized (this) {
         if (pending_rpcs == null) {
@@ -574,7 +576,10 @@ final class RegionClient extends ReplayingDecoder<VoidEnum>
       for (final HBaseRpc rpc : rpcs) {
         if (chan != null) {
           LOG.debug("Executing RPC queued: {}", rpc);
-          Channels.write(chan, rpc);
+          final ChannelBuffer serialized = encode(rpc);
+          if (serialized != null) {
+            Channels.write(chan, serialized);
+          }
         }
       }
     }
@@ -646,28 +651,6 @@ final class RegionClient extends ReplayingDecoder<VoidEnum>
       LOG.debug(e.toString());
     }
     super.handleUpstream(ctx, e);
-  }
-
-  /**
-   * Handles messages going downstream (to the wire).
-   * <p>
-   * This method can be called from any thread so it needs to be thread-safe.
-   * @param ctx The context of the channel handler.
-   * @param event The event traveling downstream.
-   */
-  @Override
-  public void handleDownstream(final ChannelHandlerContext ctx,
-                               ChannelEvent event) {
-    if (event instanceof MessageEvent) {
-      final MessageEvent me = (MessageEvent) event;
-      final ChannelBuffer buf = encode((HBaseRpc) me.getMessage());
-      if (buf == null) {
-        return;
-      }
-      event = new DownstreamMessageEvent(ctx.getChannel(), me.getFuture(),
-                                         buf, me.getRemoteAddress());
-    }
-    ctx.sendDownstream(event);
   }
 
   @Override
