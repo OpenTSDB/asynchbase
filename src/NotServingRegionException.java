@@ -45,7 +45,7 @@ public final class NotServingRegionException extends RecoverableException {
 
   @Override
   NotServingRegionException make(final Object region) {
-    return new NotServingRegionException((byte[]) region);
+    return new NotServingRegionException(((String) region).getBytes());
   }
 
   private static final long serialVersionUID = 1281000942;
