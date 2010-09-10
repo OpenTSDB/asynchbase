@@ -239,24 +239,30 @@ final class RegionInfo implements Comparable<RegionInfo> {
         }
       }
 
+      // Now find the last comma in both `a' and `b'.  We need to start the
+      // search from the end as the row key could have an arbitrary number of
+      // commas and we don't know its length.
+      final int a_comma = findCommaFromEnd(a, i);
+      final int b_comma = findCommaFromEnd(b, i);
       // If either `a' or `b' is followed immediately by another comma, then
       // they are the first region (it's the empty start key).
       i++;   // No need to check against `length', there MUST be more bytes.
-      if (a[i] == ',' && b[i] != ',') {
-        return -1;  // a < b  because a is the start key, b is not.
-      } else if (b[i] == ',') {
-        return 1;   // a > b  because b is the start key, a is not.
+      if (a_comma != b_comma) {
+        if (a_comma == i) {
+          return -1;  // a < b  because a is the start key, b is not.
+        } else if (b_comma == i) {
+          return 1;   // a > b  because b is the start key, a is not.
+        }
       }
 
       // Now either both are the start key (in which case we need to keep
       // comparing the "start codes" to pick up the most recent region)
       // or neither is and we simply compare the start keys.
-      i++;  // No need to check against `length' again.
       do {
         if (a[i] != b[i]) {
-          if (a[i] == ',') {
+          if (i == a_comma) {
             return -1;  // `a' has a smaller start key.  a < b
-          } else if (b[i] == ',') {
+          } else if (i == b_comma) {
             return 1;   // `b' has a smaller start key.  a > b
           }
           return (a[i] & 0xFF) - (b[i] & 0xFF);  // The start keys differ.
@@ -264,6 +270,16 @@ final class RegionInfo implements Comparable<RegionInfo> {
         i++;
       } while (i < length);
       return a.length - b.length;
+    }
+
+    private static int findCommaFromEnd(final byte[] b, final int offset) {
+      for (int i = b.length - 1; i > offset; i--) {
+        if (b[i] == ',') {
+          return i;
+        }
+      }
+      throw new IllegalArgumentException("No comma found in " + Bytes.pretty(b)
+                                         + " after offset " + offset);
     }
 
   }
