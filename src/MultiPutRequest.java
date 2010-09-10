@@ -75,8 +75,15 @@ final class MultiPutRequest extends HBaseRpc {
   /** ID of the explicit {@link RowLock} to use for these edits, if any.  */
   private final long lockid;
 
-  /** How many times have we attempted to retry those edits?  */
-  private final byte attempt;
+  /**
+   * How many times have we attempted to retry those edits?.
+   * We don't use HBaseRpc.attempt because when a multiPut partially fails,
+   * the RPC will succeed but the RPC response will indicate which edits have
+   * failed.  Because the RPC has succeeded, {@link RegionClient#decode} will
+   * set {@code super.attempt} to 0.  So instead we need our own counter of
+   * the number of retries already attempted.
+   */
+  private final byte retrycnt;
 
   /**
    * Maps a region name to all the edits for that region.
@@ -101,6 +108,17 @@ final class MultiPutRequest extends HBaseRpc {
       this.qualifier = qualifier;
       this.value = value;
     }
+
+    public String toString() {
+      final StringBuilder buf = new StringBuilder(4 + qualifier.length
+                                                  + 2 + value.length + 2);
+      buf.append('(');
+      Bytes.pretty(buf, qualifier);
+      buf.append(", ");
+      Bytes.pretty(buf, value);
+      buf.append(')');
+      return buf.toString();
+    }
   }
 
   /**
@@ -110,24 +128,25 @@ final class MultiPutRequest extends HBaseRpc {
     super(MULTI_PUT);
     this.wal = durable;
     this.lockid = RowLock.NO_LOCK;
-    this.attempt = 0;
+    this.retrycnt = 0;
   }
 
   MultiPutRequest(final boolean durable, final long lockid) {
     super(MULTI_PUT);
     this.wal = durable;
     this.lockid = lockid;
-    this.attempt = 0;
+    this.retrycnt = 0;
   }
 
   private MultiPutRequest(final boolean durable,
                           final long lockid,
-                          final byte attempt) {
+                          final byte retrycnt) {
     super(MULTI_PUT);
     this.wal = durable;
     this.lockid = lockid;
-    this.attempt = attempt;
+    this.retrycnt = retrycnt;
   }
+
 
   /** Returns the number of edits in this multi-put.  */
   public int size() {
@@ -176,7 +195,7 @@ final class MultiPutRequest extends HBaseRpc {
                                final ByteMap<Integer> failures) {
     final MultiPutRequest retry =
       new MultiPutRequest(request.wal, request.lockid,
-                          (byte) (request.attempt + 1));
+                          (byte) (request.retrycnt + 1));
     final ByteMap<ByteMap<ByteMap<ArrayList<Cell>>>> region2edits =  // OMG
       request.region2edits;
     request = null;
@@ -191,6 +210,16 @@ final class MultiPutRequest extends HBaseRpc {
         : new ByteMap<ByteMap<ArrayList<Cell>>>();
       retry.region2edits.put(region_name, region);
       if (failed_index == 0) {
+        // We took a shortcut to avoid copying some objects in memory, but we
+        // still need to know how many edits we've just added to `retry'.
+        for (final Map.Entry<byte[], ByteMap<ArrayList<Cell>>> put
+             : region2edits.get(region_name)) {
+          for (Map.Entry<byte[], ArrayList<Cell>> edits : put.getValue()) {
+            for (final Cell cell : edits.getValue()) {
+              retry.size++;
+            }
+          }
+        }
         continue;
       }
 
@@ -220,16 +249,23 @@ final class MultiPutRequest extends HBaseRpc {
               retryput.put(edits.getKey(), retrycells);
             }
             retrycells.add(cell);
+            retry.size++;
           }
         }
       }
     }
 
-    if (retry.attempt >= 5) {  // XXX don't hardcode
+    if (retry.size <= 0) {  // Sanity check.
+      throw new AssertionError("Impossible, we attempted to retry a failed"
+        + " multiPut but there was no edit in the retry RPC."
+        + "  Original RPC = " + request + ", failures = " + failures
+        + ", retry RPC = " + retry);
+    } else if (retry.retrycnt >= 5) {  // XXX don't hardcode
       // We're going to throw away all our hard work above, but at least we'll
       // log only the edits that failed.
       // XXX use a more specific exception type..?
-      throw new NonRecoverableException("Edits failed: " + retry);
+      throw new NonRecoverableException("Edits keep failing: " + retry
+        + ", it *could* be that one of them is using an invalid family.");
     }
     return retry;
   }
@@ -406,6 +442,16 @@ final class MultiPutRequest extends HBaseRpc {
     }  // Yay, we made it!
 
     return buf;
+  }
+
+  public String toString() {
+    return "MultiPutRequest"
+      + "(wal=" + wal
+      + ", lockid=" + lockid
+      + ", retrycnt=" + retrycnt
+      + ", size=" + size
+      + ", region2edits=" + region2edits
+      + ')';
   }
 
 }
