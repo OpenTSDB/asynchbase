@@ -1493,6 +1493,7 @@ public final class HBaseClient {
     final String hostport = host + ':' + port;
 
     RegionClient client;
+    SocketChannel chan = null;
     synchronized (ip2client) {
       client = ip2client.get(hostport);
       if (client != null) {
@@ -1502,15 +1503,17 @@ public final class HBaseClient {
       // We don't use Netty's ClientBootstrap class because it makes it
       // unnecessarily complicated to have control over which ChannelPipeline
       // exactly will be given to the channel.  It's over-designed.
-      final SocketChannel chan =
-        channel_factory.newChannel(new RegionClientPipeline());
+      chan = channel_factory.newChannel(new RegionClientPipeline());
+      client = chan.getPipeline().get(RegionClient.class);
+      ip2client.put(hostport, client);  // This is guaranteed to return null.
+    }
+    if (chan != null) {
+      // Configure and connect the channel without locking ip2client.
       final SocketChannelConfig config = chan.getConfig();
       config.setConnectTimeoutMillis(5000);
       config.setTcpNoDelay(true);
       config.setKeepAlive(true);  // TODO(tsuna): Is this really needed?
       chan.connect(new InetSocketAddress(host, port));  // Won't block.
-      client = chan.getPipeline().get(RegionClient.class);
-      ip2client.put(hostport, client);  // This is guaranteed to return null.
     }
     return client;
   }
