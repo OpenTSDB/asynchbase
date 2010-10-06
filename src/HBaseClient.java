@@ -321,6 +321,8 @@ public final class HBaseClient {
    * The opposite mapping is stored in {@link #region2client}.
    * There's no consistency guarantee with that other map.
    * See the javadoc for {@link #regions_cache} regarding consistency.
+   * <p>
+   * Each list in the map is protected by its own monitor lock.
    */
   private final ConcurrentHashMap<RegionClient, ArrayList<RegionInfo>>
     client2regions = new ConcurrentHashMap<RegionClient, ArrayList<RegionInfo>>();
@@ -1399,7 +1401,9 @@ public final class HBaseClient {
         regions = newlist;
       }
     }
-    regions.add(region);
+    synchronized (regions) {
+      regions.add(region);
+    }
 
     // Don't interleave logging with the operations above, in order to attempt
     // to reduce the duration of the race windows.
@@ -1446,7 +1450,9 @@ public final class HBaseClient {
       if (regions != null) {
         // `remove()' on an ArrayList causes an array copy.  Should we switch
         // to a LinkedList instead?
-        regions.remove(region);
+        synchronized (regions) {
+          regions.remove(region);
+        }
       }
     }
   }
@@ -1657,9 +1663,17 @@ public final class HBaseClient {
 
     RegionClient old;
     if (client != null) {
-      final ArrayList<RegionInfo> regions = client2regions.remove(client);
+      ArrayList<RegionInfo> regions = client2regions.remove(client);
       if (regions != null) {
-        for (final RegionInfo region : regions) {
+        // Make a copy so we don't need to synchronize on it while iterating.
+        RegionInfo[] regions_copy;
+        synchronized (regions) {
+          regions_copy = regions.toArray(new RegionInfo[regions.size()]);
+          regions = null;
+          // If any other thread still has a reference to `regions', their
+          // updates will be lost (and we don't care).
+        }
+        for (final RegionInfo region : regions_copy) {
           final byte[] table = region.table();
           final byte[] stop_key = region.stopKey();
           // If stop_key is the empty array:
