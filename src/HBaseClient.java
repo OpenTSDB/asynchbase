@@ -1406,7 +1406,7 @@ public final class HBaseClient {
     LOG.info((oldclient == null ? "Added" : "Replaced") + " client for"
              + " region " + region + ", which was "
              + (oldregion == null ? "added to" : "updated in")
-             + " the region cache"
+             + " the regions cache"
              + (regions.size() < 2 ? ": " + client : ".  Now we know that "
                 + client + " is hosting those regions: " + regions));
 
@@ -1432,14 +1432,14 @@ public final class HBaseClient {
     if (oldregion != null && oldregion != region) {
       // XXX do we want to just re-add oldregion back?  This exposes another
       // race condition (we re-add it and overwrite yet another region change).
-      LOG.warn("Oops, invalidated the wrong region cache entry."
+      LOG.warn("Oops, invalidated the wrong regions cache entry."
                + "  Meant to remove " + region + " but instead removed "
                + oldregion);
     }
 
     if (client != null) {
       if (LOG.isDebugEnabled()) {
-        LOG.debug("Invalidated region cache for " + region + " as " + client
+        LOG.debug("Invalidated regions cache for " + region + " as " + client
                   + " no longer seems to be serving that region");
       }
       final ArrayList<RegionInfo> regions = client2regions.get(client);
@@ -1589,8 +1589,8 @@ public final class HBaseClient {
         removeClientFromCache(this);
       } catch (Exception e) {
         LoggerFactory.getLogger(RegionClientPipeline.class)
-          .error("Uncaught exception when calling back to notify of a"
-                 + " channel disconnection on " + getChannel(), e);
+          .error("Uncaught exception when handling a disconnection of "
+                 + getChannel(), e);
       }
     }
 
