@@ -1967,6 +1967,8 @@ public final class HBaseClient {
    * Gets a hostname or an IP address and returns the textual representation
    * of the IP address.
    * <p>
+   * <strong>This method can block</strong> as there is no API for
+   * asynchronous DNS resolution in the JDK.
    * @param host The hostname to resolve.
    * @return The IP address associated with the given hostname,
    * or {@code null} if the address couldn't be resolved.
@@ -1975,9 +1977,13 @@ public final class HBaseClient {
     final long start = System.nanoTime();
     try {
       final String ip = InetAddress.getByName(host).getHostAddress();
-      if (LOG.isDebugEnabled()) {
-        LOG.debug("Resolved IP of `" + host + "' to " + ip + " in "
-                  + (System.nanoTime() - start) + "ns");
+      final long latency = System.nanoTime() - start;
+      if (latency > 500000/*ns*/ && LOG.isDebugEnabled()) {
+        LOG.debug("Resolved IP of `" + host + "' to "
+                  + ip + " in " + latency + "ns");
+      } else if (latency >= 3000000/*ns*/) {
+        LOG.warn("Slow DNS lookup!  Resolved IP of `" + host + "' to "
+                 + ip + " in " + latency + "ns");
       }
       return ip;
     } catch (UnknownHostException e) {
