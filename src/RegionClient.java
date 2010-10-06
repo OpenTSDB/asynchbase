@@ -150,7 +150,7 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
    * becomes negative.  They don't even have to start at 0, but we do it for
    * simplicity and ease of debugging.
    */
-  private AtomicInteger rpcid = new AtomicInteger(-1);
+  private final AtomicInteger rpcid = new AtomicInteger(-1);
 
   private final TimerTask flush_timer = new TimerTask() {
     public void run(final Timeout timeout) {
