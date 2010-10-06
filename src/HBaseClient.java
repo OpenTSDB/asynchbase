@@ -1617,7 +1617,7 @@ public final class HBaseClient {
         // find which entry in the map was used for the rootregion.  This
         // kinda sucks but I couldn't find an easier way.
         String hostport = null;
-        synchronized(this) {
+        synchronized (ip2client) {
           final Iterator<Map.Entry<String, RegionClient>> it =
             ip2client.entrySet().iterator();
           while (it.hasNext()) {
