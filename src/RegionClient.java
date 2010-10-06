@@ -392,6 +392,21 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
         writeHBaseByteArray(buf, family);          // 3rd param.
         return buf;
       }
+
+      public String toString() {
+        final StringBuilder buf = new StringBuilder(
+          51 + region_name.length + 2 + 6 + row.length + 2 + 9
+          + family.length + 2 + 10 + 1 + 1);
+        buf.append("HBaseRpc(method=\"getClosestRowBefore\", region_name=");
+        Bytes.pretty(buf, region_name);
+        buf.append(", row=");
+        Bytes.pretty(buf, row);
+        buf.append(", family=");
+        Bytes.pretty(buf, family);
+        buf.append(", attempt=").append(attempt);
+        buf.append(')');
+        return buf.toString();
+      }
     };
 
     final Deferred<ArrayList<KeyValue>> d = rpc.getDeferred()
