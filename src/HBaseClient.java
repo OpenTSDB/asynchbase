@@ -1663,19 +1663,18 @@ public final class HBaseClient {
           final byte[] table = region.table();
           final byte[] stop_key = region.stopKey();
           // If stop_key is the empty array:
-          //   This region is the last region for this table.  If this table
-          //   has only 1 region, then its start_key will also be the empty
-          //   array.  So in this case we must use floorEntry() to find the
-          //   greatest key less than *or equal to* the stop_key.
+          //   This region is the last region for this table.  In order to
+          //   find the start key of the last region, we append a '\0' byte
+          //   at the end of the table name and search for the entry with a
+          //   key right before it.
           // Otherwise:
-          //   Use lowerEntry() here because the stop_key of the region we want
-          //   to remove is actually the start key of *another* region, so what
-          //   we want really is the first entry with a key *strictly* lower
-          //   than stop_key.
+          //   Search for the entry with a key right before the stop_key.
+          final byte[] search_key =
+            createRegionSearchKey(stop_key.length == 0
+                                  ? Arrays.copyOf(table, table.length + 1)
+                                  : table, stop_key);
           final Map.Entry<byte[], RegionInfo> entry =
-            (stop_key.length == 0
-             ? regions_cache.floorEntry(createRegionSearchKey(table, stop_key))
-             : regions_cache.lowerEntry(createRegionSearchKey(table, stop_key)));
+            regions_cache.lowerEntry(search_key);
           if (entry != null && entry.getValue() == region) {
             // Invalidate the regions cache first, as it's the most damaging
             // one if it contains stale data.

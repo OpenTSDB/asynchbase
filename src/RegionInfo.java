@@ -231,8 +231,14 @@ final class RegionInfo implements Comparable<RegionInfo> {
       int i;
       for (i = 0; i < length; i++) {
         final byte ai = a[i];  // Saves one pointer deference every iteration.
-        if (ai != b[i]) {  // The name of the tables differ.
-          return (ai & 0xFF) - (b[i] & 0xFF);  // "promote" to unsigned.
+        final byte bi = b[i];  // Saves one pointer deference every iteration.
+        if (ai != bi) {  // The name of the tables differ.
+          if (ai == ',') {
+            return -1001;  // `a' has a smaller table name.  a < b
+          } else if (bi == ',') {
+            return 1001;  // `b' has a smaller table name.  a > b
+          }
+          return (ai & 0xFF) - (bi & 0xFF);  // "promote" to unsigned.
         }
         if (ai == ',') {  // Remember: at this point ai == bi.
           break;  // We're done comparing the table names.  They're equal.
@@ -249,9 +255,9 @@ final class RegionInfo implements Comparable<RegionInfo> {
       i++;   // No need to check against `length', there MUST be more bytes.
       if (a_comma != b_comma) {
         if (a_comma == i) {
-          return -1;  // a < b  because a is the start key, b is not.
+          return -1002;  // a < b  because a is the start key, b is not.
         } else if (b_comma == i) {
-          return 1;   // a > b  because b is the start key, a is not.
+          return 1002;   // a > b  because b is the start key, a is not.
         }
       }
 
@@ -261,9 +267,9 @@ final class RegionInfo implements Comparable<RegionInfo> {
       do {
         if (a[i] != b[i]) {
           if (i == a_comma) {
-            return -1;  // `a' has a smaller start key.  a < b
+            return -1003;  // `a' has a smaller start key.  a < b
           } else if (i == b_comma) {
-            return 1;   // `b' has a smaller start key.  a > b
+            return 1003;   // `b' has a smaller start key.  a > b
           }
           return (a[i] & 0xFF) - (b[i] & 0xFF);  // The start keys differ.
         }
