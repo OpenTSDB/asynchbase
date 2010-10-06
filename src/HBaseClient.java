@@ -1900,11 +1900,18 @@ public final class HBaseClient {
                                   final Object ctx, final byte[] data,
                                   final Stat stat) {
           if (rc == Code.NONODE.intValue()) {
-            LOG.error("The znode for the -ROOT- region doesn't exist, sleeping");
-            disconnectZK();
+            LOG.error("The znode for the -ROOT- region doesn't exist!");
+            final DataCallback dcb = this;
             timer.newTimeout(new TimerTask() {
                 public void run(final Timeout timeout) {
-                  connectZK();
+                  final ZooKeeper zk = ZKClient.this.zk;
+                  if (zk != null) {
+                    LOG.debug("Retrying to find the -ROOT- region in ZooKeeper");
+                    zk.getData(base_path + "/root-region-server",
+                               ZKClient.this, dcb, null);
+                  } else {
+                    connectZK();
+                  }
                 }
               }, 1000, MILLISECONDS);
             return;
