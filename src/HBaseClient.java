@@ -200,17 +200,8 @@ public final class HBaseClient {
    * - Properly handle disconnects.
    *    - Attempt to reconnect a couple of times, see if it was a transient
    *      network blip.
-   *    - If reconnecting doesn't work, fail all the in flight RPCs and hand
-   *      over all the pending RPCs back to this class, somehow.  The failed
-   *      RPCs can be retried, the pending ones can either be failed as well
-   *      in order to trigger their retry logic (if any), or we can try to
-   *      identify to which region server they should go and re-send them.
    *    - If the -ROOT- region is unavailable when we start, we should
-   *      periodically check to see if it's available, or put a watch in ZK.
-   *    - RegionClientPipeline doesn't gracefully handle when a region is
-   *      down at the time it initially attempts to connect to it.  It's
-   *      because there's no DISCONNECTED event generated.  Only an OPEN
-   *      followed by a CLOSED (plus a ConnectException) are generated.
+   *      put a watch in ZK instead of polling it every second.
    * - Use a global Timer (Netty's HashedWheelTimer is good) to handle all
    *   the timed tasks.
    *     - Exponential backoff for things like reconnecting, retrying to
@@ -348,7 +339,7 @@ public final class HBaseClient {
    * us because we want to purge disconnected clients from the cache as
    * quickly as possible after the disconnection, to avoid handing out clients
    * that are going to cause unnecessary errors.
-   * @see OnDisconnect
+   * @see RegionClientPipeline#handleDisconnect
    */
   private final HashMap<String, RegionClient> ip2client =
     new HashMap<String, RegionClient>();
@@ -513,7 +504,7 @@ public final class HBaseClient {
         public Object call(final ArrayList<Object> arg) {
           // Normally, now that we've shutdown() every client, all our caches should
           // be empty since each shutdown() generates a DISCONNECTED event, which
-          // causes RegionClientPipeline to call invalidateRegionCache().
+          // causes RegionClientPipeline to call removeClientFromCache().
           synchronized (ip2client) {
             if (!ip2client.isEmpty()) {
               LOG.error("Some clients are left in the client cache and haven't been"
@@ -1048,7 +1039,7 @@ public final class HBaseClient {
     final RegionInfo region = getRegion(table, key);
     if (region != null) {
       final RegionClient client = region2client.get(region);
-      if (client != null) {
+      if (client != null && client.isAlive()) {
         request.setRegion(region);
         final Deferred<Object> d = request.getDeferred();
         client.sendRpc(request);
@@ -1077,7 +1068,7 @@ public final class HBaseClient {
    */
   private static boolean increaseRequestAttempt(final HBaseRpc rpc) {
     rpc.attempt++;
-    return rpc.attempt > 4;  // XXX Don't hardcode.
+    return rpc.attempt > 10;  // XXX Don't hardcode.
   }
 
   /**
@@ -1092,7 +1083,13 @@ public final class HBaseClient {
     // META in order to verify whether there's indeed a hole, and if there's
     // one, throw a BrokenMetaException explaining where the hole is.
     try {
-      return Deferred.fromError(new NonRecoverableException("Too many attempts: " + request));
+      final Exception e =
+        new NonRecoverableException("Too many attempts: " + request);
+      final Deferred<Object> d = request.popDeferred();
+      if (d != null) {
+        d.callback(e);
+      }
+      return Deferred.fromError(e);
     } finally {
       request.attempt = 0;  // In case this HBaseRpc instance gets re-used.
     }
@@ -1124,7 +1121,7 @@ public final class HBaseClient {
     if (meta_region != null) {
       // Lookup in .META. which region server has the region we want.
       final RegionClient client = region2client.get(meta_region);
-      if (client != null) {
+      if (client != null && client.isAlive()) {
         return client.getClosestRowBefore(meta_region.name(), meta_key, INFO)
           .addCallback(meta_lookup_done)
           // This errback needs to run *after* the callback above.
@@ -1377,32 +1374,39 @@ public final class HBaseClient {
     if (client == oldclient) {  // We were racing with another thread to
       return client;            // discover this region, we lost the race.
     }
-    // Don't put any code between here and the next put (see next comment).
+    RegionInfo oldregion;
+    ArrayList<RegionInfo> regions;
+    // If we get a ConnectException immediately when trying to connect to the
+    // RegionServer, Netty delivers a CLOSED ChannelStateEvent from a "boss"
+    // thread while we may still be handling the OPEN event in an NIO thread.
+    // Locking the client prevents it from being able to buffer requests when
+    // this happens.  After we release the lock, the it will find it's dead.
+    synchronized (client) {
+      // Don't put any code between here and the next put (see next comment).
 
-    // 2. Store the region in the sorted map.
-    // This will effectively "publish" the result of our work to other
-    // threads.  The window between when the previous `put' becomes visible
-    // to all other threads and when we're done updating the sorted map is
-    // when we may unnecessarily re-lookup the same region again.  It's an
-    // acceptable trade-off.  We avoid extra synchronization complexity in
-    // exchange of occasional duplicate work (which should be rare anyway).
-    final RegionInfo oldregion = regions_cache.put(region_name, region);
+      // 2. Store the region in the sorted map.
+      // This will effectively "publish" the result of our work to other
+      // threads.  The window between when the previous `put' becomes visible
+      // to all other threads and when we're done updating the sorted map is
+      // when we may unnecessarily re-lookup the same region again.  It's an
+      // acceptable trade-off.  We avoid extra synchronization complexity in
+      // exchange of occasional duplicate work (which should be rare anyway).
+      oldregion = regions_cache.put(region_name, region);
 
-    // 3. Update the reverse mapping created in step 1.
-    // This is done last because it's only used to gracefully handle
-    // disconnections and isn't used for serving.  There's a race condition
-    // where we connect and immediately get disconnected from a RegionServer
-    // before we get a chance to update this map.   XXX fix that.
-    ArrayList<RegionInfo> regions = client2regions.get(client);
-    if (regions == null) {
-      final ArrayList<RegionInfo> newlist = new ArrayList<RegionInfo>();
-      regions = client2regions.putIfAbsent(client, newlist);
-      if (regions == null) {   // We've just put `newlist'.
-        regions = newlist;
+      // 3. Update the reverse mapping created in step 1.
+      // This is done last because it's only used to gracefully handle
+      // disconnections and isn't used for serving.
+      regions = client2regions.get(client);
+      if (regions == null) {
+        final ArrayList<RegionInfo> newlist = new ArrayList<RegionInfo>();
+        regions = client2regions.putIfAbsent(client, newlist);
+        if (regions == null) {   // We've just put `newlist'.
+          regions = newlist;
+        }
       }
-    }
-    synchronized (regions) {
-      regions.add(region);
+      synchronized (regions) {
+        regions.add(region);
+      }
     }
 
     // Don't interleave logging with the operations above, in order to attempt
@@ -1502,7 +1506,7 @@ public final class HBaseClient {
     SocketChannel chan = null;
     synchronized (ip2client) {
       client = ip2client.get(hostport);
-      if (client != null) {
+      if (client != null && client.isAlive()) {
         return client;
       }
 
@@ -1595,7 +1599,21 @@ public final class HBaseClient {
 
       disconnected = true;  // So we don't clean up the same client twice.
       try {
-        removeClientFromCache(this);
+        final RegionClient client = super.get(RegionClient.class);
+        SocketAddress remote = super.getChannel().getRemoteAddress();
+        // At this point Netty gives us no easy way to access the
+        // SocketAddress of the peer we tried to connect to, so we need to
+        // find which entry in the map was used for the rootregion.  This
+        // kinda sucks but I couldn't find an easier way.
+        if (remote == null) {
+          remote = slowSearchClientIP(client);
+        }
+
+        // Prevent the client from buffering requests while we invalidate
+        // everything we have about it.
+        synchronized (client) {
+          removeClientFromCache(client, remote);
+        }
       } catch (Exception e) {
         LoggerFactory.getLogger(RegionClientPipeline.class)
           .error("Uncaught exception when handling a disconnection of "
@@ -1606,108 +1624,130 @@ public final class HBaseClient {
   }
 
   /**
-   * Removes all the cache entries referred to the client using the given
-   * pipeline.
-   * @param pipeline The pipeline associated with the channel that is (or was)
-   * connected to the client for which we must purge all cache data.
+   * Performs a slow search of the IP used by the given client.
+   * <p>
+   * This is needed when we're trying to find the IP of the client before its
+   * channel has successfully connected, because Netty's API offers no way of
+   * retrieving the IP of the remote peer until we're connected to it.
+   * @param client The client we want the IP of.
+   * @return The IP of the client, or {@code null} if we couldn't find it.
    */
-  private void removeClientFromCache(ChannelPipeline pipeline) {
-    final RegionClient client = pipeline.get(RegionClient.class);
-    final SocketAddress remote = pipeline.getChannel().getRemoteAddress();
-    if (remote == null) {
-      // This channel isn't even connected to a remote peer, so it can't be in
-      // our cache as we can't possibly have used it without being connected.
-      // Special case: if this client is for the -ROOT- region, then it means
-      // that we've just read a stale address from ZooKeeper.
-      if (client == rootregion) {
-        rootregion = null;
-        // At this point Netty gives us no easy way to access the
-        // SocketAddress of the peer we tried to connect to, so we need to
-        // find which entry in the map was used for the rootregion.  This
-        // kinda sucks but I couldn't find an easier way.
-        String hostport = null;
-        synchronized (ip2client) {
-          final Iterator<Map.Entry<String, RegionClient>> it =
-            ip2client.entrySet().iterator();
-          while (it.hasNext()) {
-            final Map.Entry<String, RegionClient> e = it.next();
-            if (e.getValue() == client) {
-              hostport = e.getKey();
-              it.remove();
-              break;
-            }
-          }
+  private InetSocketAddress slowSearchClientIP(final RegionClient client) {
+    String hostport = null;
+    synchronized (ip2client) {
+      for (final Map.Entry<String, RegionClient> e : ip2client.entrySet()) {
+        if (e.getValue() == client) {
+          hostport = e.getKey();
+          break;
         }
-        LOG.warn("Couldn't connect to the -ROOT- region @ " + hostport);
       }
-      return;
     }
 
-    pipeline = null;  // No longer need this reference.
+    if (hostport == null) {
+      HashMap<String, RegionClient> copy;
+      synchronized (ip2client) {
+        copy = new HashMap<String, RegionClient>(ip2client);
+      }
+      LOG.error("WTF?  Should never happen!  Couldn't find " + client
+                + " in " + copy);
+      return null;
+    }
+
+    LOG.warn("Couldn't connect to the RegionServer @ " + hostport);
+    final int colon = hostport.indexOf(':', 1);
+    if (colon < 1) {
+      LOG.error("WTF?  Should never happen!  No `:' found in " + hostport);
+      return null;
+    }
+    final String host = getIP(hostport.substring(0, colon));
+    int port;
+    try {
+      port = parsePortNumber(hostport.substring(colon + 1,
+                                                hostport.length()));
+    } catch (NumberFormatException e) {
+      LOG.error("WTF?  Should never happen!  Bad port in " + hostport, e);
+      return null;
+    }
+    return new InetSocketAddress(host, port);
+  }
+
+  /**
+   * Removes all the cache entries referred to the given client.
+   * @param client The client for which we must invalidate everything.
+   * @param remote The address of the remote peer, if known, or null.
+   */
+  private void removeClientFromCache(final RegionClient client,
+                                     final SocketAddress remote) {
+    if (client == rootregion) {
+      LOG.info("Lost connection with the -ROOT- region");
+      rootregion = null;
+    }
+    ArrayList<RegionInfo> regions = client2regions.remove(client);
+    if (regions != null) {
+      // Make a copy so we don't need to synchronize on it while iterating.
+      RegionInfo[] regions_copy;
+      synchronized (regions) {
+        regions_copy = regions.toArray(new RegionInfo[regions.size()]);
+        regions = null;
+        // If any other thread still has a reference to `regions', their
+        // updates will be lost (and we don't care).
+      }
+      for (final RegionInfo region : regions_copy) {
+        final byte[] table = region.table();
+        final byte[] stop_key = region.stopKey();
+        // If stop_key is the empty array:
+        //   This region is the last region for this table.  In order to
+        //   find the start key of the last region, we append a '\0' byte
+        //   at the end of the table name and search for the entry with a
+        //   key right before it.
+        // Otherwise:
+        //   Search for the entry with a key right before the stop_key.
+        final byte[] search_key =
+          createRegionSearchKey(stop_key.length == 0
+                                ? Arrays.copyOf(table, table.length + 1)
+                                : table, stop_key);
+        final Map.Entry<byte[], RegionInfo> entry =
+          regions_cache.lowerEntry(search_key);
+        if (entry != null && entry.getValue() == region) {
+          // Invalidate the regions cache first, as it's the most damaging
+          // one if it contains stale data.
+          regions_cache.remove(entry.getKey());
+          LOG.debug("Removed from regions cache: {}", region);
+        }
+        final RegionClient oldclient = region2client.remove(region);
+        if (client == oldclient) {
+          LOG.debug("Association removed: {} -> {}", region, client);
+        } else if (oldclient != null) {  // Didn't remove what we expected?!
+          LOG.warn("When handling disconnection of " + client
+                   + " and removing " + region + " from region2client"
+                   + ", it was found that " + oldclient + " was in fact"
+                   + " serving this region");
+        }
+      }
+    }
+
+    if (remote == null) {
+      return;  // Can't continue without knowing the remote address.
+    }
+
     String hostport = null;
     if (remote instanceof InetSocketAddress) {
       final InetSocketAddress sock = (InetSocketAddress) remote;
       final InetAddress addr = sock.getAddress();
       if (addr == null) {
-        LOG.error("Unresolved IP for " + remote
+        LOG.error("WTF?  Unresolved IP for " + remote
                   + ".  This shouldn't happen.");
         return;
       } else {
         hostport = addr.getHostAddress() + ':' + sock.getPort();
       }
     } else {
-        LOG.error("Found a non-InetSocketAddress remote: " + remote
+        LOG.error("WTF?  Found a non-InetSocketAddress remote: " + remote
                   + ".  This shouldn't happen.");
         return;
     }
 
     RegionClient old;
-    if (client != null) {
-      ArrayList<RegionInfo> regions = client2regions.remove(client);
-      if (regions != null) {
-        // Make a copy so we don't need to synchronize on it while iterating.
-        RegionInfo[] regions_copy;
-        synchronized (regions) {
-          regions_copy = regions.toArray(new RegionInfo[regions.size()]);
-          regions = null;
-          // If any other thread still has a reference to `regions', their
-          // updates will be lost (and we don't care).
-        }
-        for (final RegionInfo region : regions_copy) {
-          final byte[] table = region.table();
-          final byte[] stop_key = region.stopKey();
-          // If stop_key is the empty array:
-          //   This region is the last region for this table.  In order to
-          //   find the start key of the last region, we append a '\0' byte
-          //   at the end of the table name and search for the entry with a
-          //   key right before it.
-          // Otherwise:
-          //   Search for the entry with a key right before the stop_key.
-          final byte[] search_key =
-            createRegionSearchKey(stop_key.length == 0
-                                  ? Arrays.copyOf(table, table.length + 1)
-                                  : table, stop_key);
-          final Map.Entry<byte[], RegionInfo> entry =
-            regions_cache.lowerEntry(search_key);
-          if (entry != null && entry.getValue() == region) {
-            // Invalidate the regions cache first, as it's the most damaging
-            // one if it contains stale data.
-            regions_cache.remove(entry.getKey());
-            LOG.debug("Removed from regions cache: {}", region);
-          }
-          final RegionClient oldclient = region2client.remove(region);
-          if (client == oldclient) {
-            LOG.debug("Association removed: {} -> {}", region, client);
-          } else if (oldclient != null) {  // Didn't remove what we expected?!
-            LOG.warn("When handling disconnection of " + client
-                     + " and removing " + region + " from region2client"
-                     + ", it was found that " + oldclient + " was in fact"
-                     + " serving this region");
-          }
-        }
-      }
-    }
-
     synchronized (ip2client) {
       old = ip2client.remove(hostport);
     }
@@ -1716,10 +1756,6 @@ public final class HBaseClient {
       LOG.warn("When expiring " + client + " from the client cache (host:port="
                + hostport + "), it was found that there was no entry"
                + " corresponding to " + remote + ".  This shouldn't happen.");
-    }
-    if (client == rootregion) {
-      LOG.info("Lost connection with the -ROOT- region");
-      rootregion = null;
     }
   }
 

@@ -26,7 +26,6 @@
  */
 package org.hbase.async;
 
-import java.net.ConnectException;
 import java.net.SocketAddress;
 import java.util.ArrayList;
 import java.util.Collection;
@@ -81,6 +80,10 @@ import com.stumbleupon.async.Deferred;
  * {@link HBaseClient} calls methods of this class from random threads at
  * random times.  The bottom line is that any data only used in the Netty IO
  * threads doesn't require synchronization, everything else does.
+ * <p>
+ * Acquiring the monitor on an object of this class will prevent it from
+ * accepting write requests as well as buffering requests if the underlying
+ * channel isn't connected.
  */
 final class RegionClient extends ReplayingDecoder<VoidEnum> {
 
@@ -110,6 +113,16 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
    * different thread.
    */
   private volatile Channel chan;
+
+  /**
+   * Set to {@code true} once we've disconnected from the server.
+   * This way, if any thread is still trying to use this client after it's
+   * been removed from the caches in the {@link HBaseClient}, we will
+   * immediately fail / reschedule its requests.
+   * <p>
+   * Manipulating this value requires synchronizing on `this'.
+   */
+  private boolean dead = false;
 
   /**
    * Multi-put request in which we accumulate edits before sending them.
@@ -169,9 +182,33 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
     this.hbase_client = hbase_client;
   }
 
+  /**
+   * Tells whether or not this handler should be used.
+   * <p>
+   * This method is not synchronized.  You need to synchronize on this
+   * instance if you need a memory visibility guarantee.  You may not need
+   * this guarantee if you're OK with the RPC finding out that the connection
+   * has been reset "the hard way" and you can retry the RPC.  In this case,
+   * you can call this method as a hint.  After getting the initial exception
+   * back, this thread is guaranteed to see this method return {@code false}
+   * without synchronization needed.
+   * @return {@code false} if this handler is known to have been disconnected
+   * from the server and sending an RPC (via {@link #sendRpc} or any other
+   * indirect mean such as {@link #getClosestRowBefore}) will fail immediately
+   * by having the RPC's {@link Deferred} called back immediately with a
+   * {@link ConnectionResetException}.  This typically means that you got a
+   * stale reference (or that the reference to this instance is just about to
+   * be invalidated) and that you shouldn't use this instance.
+   */
+  public boolean isAlive() {
+    return !dead;
+  }
+
   /** Periodically flushes buffered edits.  */
   private void periodicFlush() {
-    if (chan != null) {
+    if (chan != null || dead) {
+      // If we're dead, we want to flush our edits (this will cause them to
+      // get failed / retried).
       if (LOG.isDebugEnabled()) {
         LOG.debug("Periodic flush timer: flushing edits for " + this);
       }
@@ -575,6 +612,11 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
       }
     } else {
       synchronized (this) {
+        if (dead) {
+          failOrRetryRpcs(new SingletonList<HBaseRpc>(rpc),
+                          new ConnectionResetException(null));
+          return;
+        }
         if (pending_rpcs == null) {
           pending_rpcs = new ArrayList<HBaseRpc>();
         }
@@ -643,6 +685,7 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
 
     ArrayList<HBaseRpc> rpcs;
     synchronized (this) {
+      dead = true;
       rpcs = pending_rpcs;
       pending_rpcs = null;
     }
@@ -685,15 +728,7 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
     final Channel c = event.getChannel();
     final SocketAddress remote = c.getRemoteAddress();
 
-    if (e instanceof ConnectException) {
-      // Maybe the remote side refused our connection (because it's down).
-      // Let's try to reconnect see if it works out.
-      if (remote != null) {
-        LOG.warn("Couldn't connect to " + remote + ", retrying...", e);
-        c.connect(remote);   // XXX don't retry indefinitely.
-        return;
-      }  // if remote is null, we don't know who to reconnect to...
-    } else if (e instanceof RejectedExecutionException) {
+    if (e instanceof RejectedExecutionException) {
       LOG.warn("RPC rejected by the executor,"
                + " ignore this if we're shutting down", e);
     } else {
