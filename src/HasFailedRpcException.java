@@ -27,35 +27,14 @@
 package org.hbase.async;
 
 /**
- * Exception thrown when attempting to use a nonexistent column family.
+ * Interface implemented by {@link HBaseException}s that can tell you which
+ * RPC failed.
  */
-public final class NoSuchColumnFamilyException extends NonRecoverableException
-implements HasFailedRpcException {
-
-  static final String REMOTE_CLASS =
-    "org.apache.hadoop.hbase.regionserver.NoSuchColumnFamilyException";
-
-  final HBaseRpc failed_rpc;
+public interface HasFailedRpcException {
 
   /**
-   * Constructor.
-   * @param msg The message of the exception, potentially with a stack trace.
-   * @param failed_rpc The RPC that caused this exception, if known, or null.
+   * Returns the RPC that caused this exception.
    */
-  NoSuchColumnFamilyException(final String msg, final HBaseRpc failed_rpc) {
-    super(msg + "\nCaused by RPC: " + failed_rpc);
-    this.failed_rpc = failed_rpc;
-  }
-
-  public HBaseRpc getFailedRpc() {
-    return failed_rpc;
-  }
-
-  @Override
-  NoSuchColumnFamilyException make(final Object msg, final HBaseRpc rpc) {
-    return new NoSuchColumnFamilyException(msg.toString(), rpc);
-  }
-
-  private static final long serialVersionUID = 1280993542;
+  HBaseRpc getFailedRpc();
 
 }

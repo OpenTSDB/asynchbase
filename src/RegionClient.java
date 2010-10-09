@@ -94,13 +94,13 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
   static {
     REMOTE_EXCEPTION_TYPES = new HashMap<String, HBaseException>();
     REMOTE_EXCEPTION_TYPES.put(NoSuchColumnFamilyException.REMOTE_CLASS,
-                               new NoSuchColumnFamilyException(null));
+                               new NoSuchColumnFamilyException(null, null));
     REMOTE_EXCEPTION_TYPES.put(NotServingRegionException.REMOTE_CLASS,
-                               new NotServingRegionException(null));
+                               new NotServingRegionException(null, null));
     REMOTE_EXCEPTION_TYPES.put(UnknownScannerException.REMOTE_CLASS,
-                               new UnknownScannerException(null));
+                               new UnknownScannerException(null, null));
     REMOTE_EXCEPTION_TYPES.put(UnknownRowLockException.REMOTE_CLASS,
-                               new UnknownRowLockException(null));
+                               new UnknownRowLockException(null, null));
   }
 
   /** The HBase client we belong to.  */
@@ -835,7 +835,7 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
     final long start = System.nanoTime();
     LOG.debug("------------------>> ENTERING DECODE >>------------------");
     final int rpcid = buf.readInt();
-    final Object decoded = deserialize(buf);
+    final Object decoded = deserialize(buf, rpcid);
     final HBaseRpc rpc = rpcs_inflight.remove(rpcid);
     if (LOG.isDebugEnabled()) {
       LOG.debug("rpcid=" + rpcid
@@ -895,10 +895,12 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
   /**
    * De-serializes an RPC response.
    * @param buf The buffer from which to de-serialize the response.
+   * @param rpcid The ID of the RPC for which we're de-serializing the
+   * response.
    * @return The de-serialized RPC response (which can be {@code null}
    * or an exception).
    */
-  private static Object deserialize(final ChannelBuffer buf) {
+  private Object deserialize(final ChannelBuffer buf, final int rpcid) {
     // The 1st byte of the payload tells us whether the request failed.
     if (buf.readByte() != 0x00) {  // 0x00 means no error.
       // In case of failures, the rest of the response is just 2
@@ -908,7 +910,7 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
       final String msg = HBaseRpc.readHadoopString(buf);
       final HBaseException exc = REMOTE_EXCEPTION_TYPES.get(type);
       if (exc != null) {
-        return exc.make(msg);
+        return exc.make(msg, rpcs_inflight.get(rpcid));
       } else {
         return new RemoteException(type, msg);
       }

@@ -38,6 +38,7 @@ hbaseasync_SOURCES = \
 	src/ConnectionResetException.java	\
 	src/DeleteRequest.java	\
 	src/GetRequest.java	\
+	src/HasFailedRpcException.java	\
 	src/HBaseClient.java	\
 	src/HBaseException.java	\
 	src/HBaseRpc.java	\

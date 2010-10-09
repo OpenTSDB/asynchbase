@@ -30,32 +30,31 @@ package org.hbase.async;
  * Exception thrown when we attempted to use a region that wasn't serving from
  * that particular RegionServer.  It probably moved somewhere else.
  */
-public final class NotServingRegionException extends RecoverableException {
+public final class NotServingRegionException extends RecoverableException
+implements HasFailedRpcException {
 
   static final String REMOTE_CLASS =
     "org.apache.hadoop.hbase.NotServingRegionException";
 
-  private final byte[] region;
+  final HBaseRpc failed_rpc;
 
   /**
    * Constructor.
-   * @param region The name of the region that caused this exception.
+   * @param msg The message of the exception, potentially with a stack trace.
+   * @param failed_rpc The RPC that caused this exception, if known, or null.
    */
-  NotServingRegionException(final byte[] region) {
-    super(Bytes.pretty(region));
-    this.region = region;
+  NotServingRegionException(final String msg, final HBaseRpc failed_rpc) {
+    super(msg + "\nCaused by RPC: " + failed_rpc);
+    this.failed_rpc = failed_rpc;
   }
 
-  /**
-   * Returns the name of the region that caused this exception.
-   */
-  public byte[] getRegion() {
-    return region;
+  public HBaseRpc getFailedRpc() {
+    return failed_rpc;
   }
 
   @Override
-  NotServingRegionException make(final Object region) {
-    return new NotServingRegionException(((String) region).getBytes());
+  NotServingRegionException make(final Object msg, final HBaseRpc rpc) {
+    return new NotServingRegionException(msg.toString(), rpc);
   }
 
   private static final long serialVersionUID = 1281000942;
