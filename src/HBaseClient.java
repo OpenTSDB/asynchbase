@@ -1381,7 +1381,7 @@ public final class HBaseClient {
       return client;            // discover this region, we lost the race.
     }
     RegionInfo oldregion;
-    ArrayList<RegionInfo> regions;
+    int nregions;
     // If we get a ConnectException immediately when trying to connect to the
     // RegionServer, Netty delivers a CLOSED ChannelStateEvent from a "boss"
     // thread while we may still be handling the OPEN event in an NIO thread.
@@ -1402,7 +1402,7 @@ public final class HBaseClient {
       // 3. Update the reverse mapping created in step 1.
       // This is done last because it's only used to gracefully handle
       // disconnections and isn't used for serving.
-      regions = client2regions.get(client);
+      ArrayList<RegionInfo> regions = client2regions.get(client);
       if (regions == null) {
         final ArrayList<RegionInfo> newlist = new ArrayList<RegionInfo>();
         regions = client2regions.putIfAbsent(client, newlist);
@@ -1412,6 +1412,7 @@ public final class HBaseClient {
       }
       synchronized (regions) {
         regions.add(region);
+        nregions = regions.size();
       }
     }
 
@@ -1419,10 +1420,9 @@ public final class HBaseClient {
     // to reduce the duration of the race windows.
     LOG.info((oldclient == null ? "Added" : "Replaced") + " client for"
              + " region " + region + ", which was "
-             + (oldregion == null ? "added to" : "updated in")
-             + " the regions cache"
-             + (regions.size() < 2 ? ": " + client : ".  Now we know that "
-                + client + " is hosting those regions: " + regions));
+             + (oldregion == null ? "added to" : "updated in") + " the"
+             + " regions cache.  Now we know that " + client + " is hosting "
+             + nregions + " region" + (nregions > 1 ? 's' : "") + '.');
 
     return client;
   }
