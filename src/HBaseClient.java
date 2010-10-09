@@ -211,6 +211,8 @@ public final class HBaseClient {
    *     - Retry to find -ROOT- when -ROOT- is momentarily dead.
    *     - Don't retry to find a region forever, if there's a hole in .META.
    *       we'll simply never find that region.
+   *     - I don't think NSREs are properly handled everywhere, e.g. when
+   *       opening a scanner.
    * - Stats:
    *     - QPS per RPC type.
    *     - Latency histogram per RPC type (requires open-sourcing the SU Java
@@ -932,9 +934,10 @@ public final class HBaseClient {
   private Deferred<Object> doPut(final List<PutRequest> requests,
                                  final boolean durable) {
     final PutRequest req0 = requests.get(0);
-    if (increaseRequestAttempt(req0)) {  // TODO(tsuna): Doing this only on
-      return tooManyAttempts(req0);      // the 1st request can be a problem.
+    if (cannotRetryRequest(req0)) {        // TODO(tsuna): Doing this only on
+      return tooManyAttempts(req0, null);  // the 1st request can be a problem.
     }
+    req0.attempt++;
     final byte[] table = req0.table();   // The requests we've been given are
     final byte[] key = req0.key();       // supposed to go to the same region.
     final RegionInfo region = getRegion(table, key);
@@ -1031,9 +1034,10 @@ public final class HBaseClient {
    * de-serialized back from the network).
    */
   Deferred<Object> sendRpcToRegion(final HBaseRpc request) {
-    if (increaseRequestAttempt(request)) {
-      return tooManyAttempts(request);
+    if (cannotRetryRequest(request)) {
+      return tooManyAttempts(request, null);
     }
+    request.attempt++;
     final byte[] table = request.table();
     final byte[] key = request.key();
     final RegionInfo region = getRegion(table, key);
@@ -1059,15 +1063,14 @@ public final class HBaseClient {
   }
 
   /**
-   * Increases by 1 the number of times we attempted to execute a given RPC.
+   * Checks whether or not an RPC can be retried once more.
    * @param rpc The RPC we're going to attempt to execute.
    * @return {@code true} if this RPC already had too many attempts,
-   * {@code false} otherwise.
+   * {@code false} otherwise (in which case it's OK to retry once more).
    * @throws NonRecoverableException if the request has had too many attempts
    * already.
    */
-  private static boolean increaseRequestAttempt(final HBaseRpc rpc) {
-    rpc.attempt++;
+  static boolean cannotRetryRequest(final HBaseRpc rpc) {
     return rpc.attempt > 10;  // XXX Don't hardcode.
   }
 
@@ -1075,8 +1078,11 @@ public final class HBaseClient {
    * Returns a {@link Deferred} containing an exception when an RPC couldn't
    * succeed after too many attempts.
    * @param request The RPC that was retried too many times.
+   * @param cause What was cause of the last failed attempt, if known.
+   * You can pass {@code null} if the cause is unknown.
    */
-  private static Deferred<Object> tooManyAttempts(final HBaseRpc request) {
+  static Deferred<Object> tooManyAttempts(final HBaseRpc request,
+                                          final HBaseException cause) {
     // TODO(tsuna): At this point, it's possible that we have to deal with
     // a broken META table where there's a hole.  For the sake of good error
     // reporting, at this point we should try to getClosestRowBefore + scan
@@ -1084,7 +1090,7 @@ public final class HBaseClient {
     // one, throw a BrokenMetaException explaining where the hole is.
     try {
       final Exception e =
-        new NonRecoverableException("Too many attempts: " + request);
+        new NonRecoverableException("Too many attempts: " + request, cause);
       final Deferred<Object> d = request.popDeferred();
       if (d != null) {
         d.callback(e);

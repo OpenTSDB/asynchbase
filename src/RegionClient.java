@@ -574,7 +574,11 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
     // Now the errback (2nd argument to `addCallbacks').
     new Callback<Object, Exception>() {
       public Object call(final Exception e) {
-        if (e instanceof NotServingRegionException) {
+        if (!(e instanceof RecoverableException)) {
+          return e;  // Let the error propagate.
+        } else if (HBaseClient.cannotRetryRequest(request)) {
+          return HBaseClient.tooManyAttempts(request, (HBaseException) e);
+        } else if (e instanceof NotServingRegionException) {
           // This is the worst case.  See HBASE-2898 for some more background.
           // Basically, one or more of the edits attempted to go to a region
           // that is no longer being served by this region server, but we don't
@@ -584,10 +588,16 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
           for (final byte[] region_name : request.regions()) {
             hbase_client.invalidateRegionCache(region_name);
           }
-          final ArrayList<PutRequest> edits = request.toPuts();
-          hbase_client.put(edits);
+          return hbase_client.put(request.toPuts());
+        } else if (e instanceof ConnectionResetException) {
+          return hbase_client.put(request.toPuts());
+        }  // else: e instanceof RecoverableException, so let's try again.
+        if (LOG.isDebugEnabled()) {
+          LOG.debug("Retrying multi-put request=" + request, e);
         }
-        return e;  // Let the error propagate.
+        request.attempt++;
+        sendRpc(request);
+        return addPutCallbacks(request);
       }
       public String toString() {
         return "multiPut errback";
@@ -853,12 +863,16 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
       // try to restart the RPC (which will probably cause a META lookup to
       // find where that region is now).
       final RegionInfo region = rpc.getRegion();
-      if (region != null && rpc.attempt <= 10) {  // XXX Don't hardcode.
+      if (region != null) {
         hbase_client.invalidateRegionCache(region);
-        hbase_client.sendRpcToRegion(rpc);  // Restart the RPC.
+        if (HBaseClient.cannotRetryRequest(rpc)) {
+          final HBaseException nsre = (NotServingRegionException) decoded;
+          rpc.popDeferred().callback(HBaseClient.tooManyAttempts(rpc, nsre));
+        } else {
+          hbase_client.sendRpcToRegion(rpc);  // Restart the RPC.
+        }
         return null;
       }  // else: This RPC wasn't targeted at a particular region.
-         //  -or- This RPC was already retried too many times.
          //   =>  We'll give the exception to the callback chain.
     }
     rpc.attempt = 0;  // In case this HBaseRpc instance gets re-used.

@@ -523,6 +523,7 @@ public final class Scanner {
           // We'll resume scanning on another region, and we want to pick up
           // right after the last key we successfully returned.  Padding the
           // last key with an extra 0 gives us the next possible key.
+          // TODO(tsuna): If we get 2 NSRE in a row, well pad the key twice!
           start_key = Arrays.copyOf(start_key, start_key.length + 1);
           return nextRows();  // XXX dangerous endless retry
         } else if (error instanceof UnknownScannerException) {
