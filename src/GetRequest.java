@@ -40,6 +40,8 @@ import org.jboss.netty.buffer.ChannelBuffer;
 public final class GetRequest extends HBaseRpc {
 
   private static final byte[] GET = new byte[] { 'g', 'e', 't' };
+  private static final byte[] EXISTS =
+    new byte[] { 'e', 'x', 'i', 's', 't', 's' };
 
   private byte[] family;     // TODO(tsuna): Handle multiple families?
   private byte[] qualifier;  // TODO(tsuna): Handle multiple qualifiers?
@@ -72,6 +74,29 @@ public final class GetRequest extends HBaseRpc {
    */
   public GetRequest(final String table, final String key) {
     this(table.getBytes(), key.getBytes());
+  }
+
+  /**
+   * Private constructor to build an "exists" RPC.
+   * @param unused Unused, simply used to help the compiler find this ctor.
+   * @param table The non-empty name of the table to use.
+   * @param key The row key to get in that table.
+   */
+  private GetRequest(final float unused,
+                     final byte[] table,
+                     final byte[] key) {
+    super(EXISTS, table, key);
+  }
+
+  /**
+   * Package-private factory method to build an "exists" RPC.
+   * @param table The non-empty name of the table to use.
+   * @param key The row key to get in that table.
+   * @return An {@link HBaseRpc} that will return a {@link Boolean}
+   * indicating whether or not the given table / key exists.
+   */
+  static HBaseRpc exists(final byte[] table, final byte[] key) {
+    return new GetRequest(0F, table, key);
   }
 
   /**

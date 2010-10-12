@@ -929,6 +929,8 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
    */
   private static Object deserializeObject(final ChannelBuffer buf) {
     switch (buf.readByte()) {  // Read the type of the response.
+      case  1:  // Boolean
+        return buf.readByte() != 0x00;
       case  6:  // Long
         return buf.readLong();
       case 14:  // Writable
