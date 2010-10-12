@@ -1004,10 +1004,10 @@ public final class HBaseClient {
                + Bytes.pretty(region_name));
       return Deferred.fromResult(null);
     }
-    final HBaseRpc release_request = new RowLockRequest.ReleaseRequest(lock);
-    release_request.setRegion(region);
-    final Deferred<Object> d = release_request.getDeferred();
-    client.sendRpc(release_request);
+    final HBaseRpc release = new RowLockRequest.ReleaseRequest(lock, region);
+    release.setRegion(region);
+    final Deferred<Object> d = release.getDeferred();
+    client.sendRpc(release);
     return d;
   }
 

@@ -256,6 +256,9 @@ public abstract class HBaseRpc {
    * @param region The target region of this RPC.
    */
   final void setRegion(final RegionInfo region) {
+    if (table == null) {
+      throw new AssertionError("Can't use setRegion if no table was given.");
+    }
     this.region = region;
   }
 
@@ -266,7 +269,7 @@ public abstract class HBaseRpc {
     return region;
   }
 
-  /** Package private way of accessing the Deferred of this RPC.  */
+  /** Package private way of accessing / creating the Deferred of this RPC.  */
   final Deferred<Object> getDeferred() {
     if (deferred == null) {
       deferred = new Deferred<Object>();
@@ -274,13 +277,18 @@ public abstract class HBaseRpc {
     return deferred;
   }
 
-  /** Package private way of accessing and removing the Deferred of this RPC.  */
+  /** Package private way of accessing and removing the Deferred of this RPC. */
   final Deferred<Object> popDeferred() {
     try {
       return deferred;
     } finally {
       deferred = null;
     }
+  }
+
+  /** Checks whether or not this RPC has a Deferred without creating one.  */
+  final boolean hasDeferred() {
+    return deferred != null;
   }
 
   public String toString() {

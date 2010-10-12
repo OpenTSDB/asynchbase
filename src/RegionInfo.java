@@ -141,8 +141,8 @@ final class RegionInfo implements Comparable<RegionInfo> {
   static byte[] tableFromRegionName(final byte[] region_name) {
     int comma = 1;  // Can't be at the beginning.
     for (/**/; comma < region_name.length; comma++) {
-      if (region_name[comma] == ',') {  // Hopefully a table name can't
-        break;                          // contain a comma.  XXX True?
+      if (region_name[comma] == ',') {
+        break;
       }
     }
     if (comma == region_name.length) {

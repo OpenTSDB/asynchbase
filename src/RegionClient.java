@@ -761,6 +761,10 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
    * an error and there's nothing to write.
    */
   private ChannelBuffer encode(final HBaseRpc rpc) {
+    if (!rpc.hasDeferred()) {
+      throw new AssertionError("Should never happen!  rpc=" + rpc);
+    }
+
     // TODO(tsuna): Add rate-limiting here.  We don't want to send more than
     // N QPS to a given region server.
     // TODO(tsuna): Check the size() of rpcs_inflight.  We don't want to have

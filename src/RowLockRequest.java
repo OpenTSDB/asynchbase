@@ -102,8 +102,17 @@ public final class RowLockRequest extends HBaseRpc {
 
     private final RowLock lock;
 
-    public ReleaseRequest(final RowLock lock) {
-      super(UNLOCK_ROW);
+    /**
+     * Constructor.
+     * @param lock The lock we wanna release.
+     * @param region The region corresponding to {@code lock.region()}.
+     */
+    ReleaseRequest(final RowLock lock, final RegionInfo region) {
+      super(UNLOCK_ROW, region.table(),
+            // This isn't actually the key we locked, but it doesn't matter
+            // as this information is useless for this RPC, we simply supply
+            // a key to the parent constructor to make it happy.
+            region.stopKey());
       this.lock = lock;
     }
 
