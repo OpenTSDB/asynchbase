@@ -30,7 +30,6 @@ import java.net.SocketAddress;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
-import java.util.List;
 import java.util.Map;
 import java.util.NoSuchElementException;
 import java.util.concurrent.ConcurrentHashMap;
@@ -125,20 +124,10 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
   private boolean dead = false;
 
   /**
-   * Multi-put request in which we accumulate edits before sending them.
-   * Because whether or not we write to the WAL is a property on an entire
-   * MultiPut, not on a per-edit basis, we have to buffer edits that want
-   * durability separately from edits that don't want durability.
-   *
+   * Multi-put request in which we accumulate buffered edits.
    * Manipulating this reference requires synchronizing on `this'.
    */
-  private MultiPutRequest mput_not_durable;
-
-  /**
-   * Multi-put request in which we accumulate edits that need to be durable.
-   * Manipulating this reference requires synchronizing on `this'.
-   */
-  private MultiPutRequest mput_durable;
+  private MultiPutRequest edit_buffer;
 
   /**
    * RPCs we've been asked to serve while disconnected from the RegionServer.
@@ -245,32 +234,16 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
    */
   public Deferred<Object> flush() {
     // Copy the edits to local variables and null out the buffers.
-    MultiPutRequest mput_not_durable;
-    MultiPutRequest mput_durable;
+    MultiPutRequest edit_buffer;
     synchronized (this) {
-      mput_not_durable = this.mput_not_durable;
-      this.mput_not_durable = null;
-      mput_durable = this.mput_durable;
-      this.mput_durable = null;
+      edit_buffer = this.edit_buffer;
+      this.edit_buffer = null;
     }
-    if (mput_not_durable == null && mput_durable == null) {  // Nothing to do.
+    if (edit_buffer == null) {  // Nothing to do.
       return Deferred.fromResult(null);
-    } else if (mput_not_durable == null || mput_durable == null) {  // Either.
-      final MultiPutRequest multiput =
-        mput_durable == null ? mput_not_durable : mput_durable;
-      final Deferred<Object> d = multiput.getDeferred();
-      sendRpc(multiput);
-      return d;
     }
-
-    // If we get here, we have to flush both durable and non-durable edits.
-    // Flush the non-durable ones first, they'll be easier on HBase.
-    @SuppressWarnings("unchecked")
-    final Deferred<Object> d =
-    (Deferred) Deferred.group(mput_not_durable.getDeferred(),
-                              mput_durable.getDeferred());
-    sendRpc(mput_not_durable);
-    sendRpc(mput_durable);
+    final Deferred<Object> d = edit_buffer.getDeferred();
+    sendRpc(edit_buffer);
     return d;
   }
 
@@ -473,136 +446,131 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
       };
 
   /**
-   * Executes one or more "put" request on HBase.
-   * @param requests A non-empty list of edits that are guaranteed to be sent
-   * out together at the same time, in the same single RPC.
-   * If any of the edits specifies an explicit row lock, then we expect all
-   * edits in the list have the <b>same</b> explicit row lock.
-   * @param region_name The name of the region all those edits belongs to.
-   * @param durable If {@code true}, the success of this RPC guarantees that
-   * HBase has stored the edits in a durable fashion.  See {@link PutRequest}.
-   * @return A deferred object that indicates the completion of the request.
-   * The {@link Object} has not special meaning and can be {@code null}.
+   * Buffers the given edit and possibly flushes the buffer if needed.
+   * <p>
+   * If the edit buffer grows beyond a certain size, we will flush it
+   * even though the flush interval specified by the client hasn't
+   * elapsed yet.
+   * @param request An edit to sent to HBase.
    */
-  public Deferred<Object> put(final List<PutRequest> requests,
-                              final byte[] region_name,
-                              final boolean durable) {
+  private void bufferEdit(final PutRequest request) {
     MultiPutRequest multiput;
-    if (requests.get(0).lockid() != RowLock.NO_LOCK  // Explicit row lock?
-        || hbase_client.getFlushInterval() == 0) {   // No buffering allowed.
-      // Don't buffer the edits, flush them immediately.  If the first edit
-      // specifies has an explicit row lock, we assume that they all have the
-      // same explicit row lock.
-      multiput = new MultiPutRequest(durable, requests.get(0).lockid());
-      multiput.add(requests, region_name);
-      final Deferred<Object> d = addPutCallbacks(multiput);
-      sendRpc(multiput);
-      return d;
-    }
-
-    // Note that we need just a single Deferred for all of the PutRequests.
-    final Deferred<Object> d = new Deferred<Object>();
 
     synchronized (this) {
-      if (durable) {
-        if (mput_durable == null) {
-          mput_durable = new MultiPutRequest(true);
-          addPutCallbacks(mput_durable);
-        }
-        multiput = mput_durable;
-      } else {
-        if (mput_not_durable == null) {
-          mput_not_durable = new MultiPutRequest(false);
-          addPutCallbacks(mput_not_durable);
-        }
-        multiput = mput_not_durable;
+      if (edit_buffer == null) {
+        edit_buffer = new MultiPutRequest();
+        addMultiPutCallbacks(edit_buffer);
       }
+      multiput = edit_buffer;
       // Unfortunately we have to hold the monitor on `this' while we do
       // this entire atomic dance.
-      multiput.add(requests, region_name);
-      // Make `d' run when the MultiPutRequest completes.
-      multiput.getDeferred().chain(d);
-      if (chan == null || multiput.size() < 127 - 1) {  // XXX Don't hardcode.
-        return d;   // The edits got buffered, stop here.
+      multiput.add(request);
+      if (multiput.size() < 1024) {  // XXX Don't hardcode.
+        return;   // We're going to buffer this edit for now, stop here.
       }
       // Execute the edits buffered so far.  But first we must clear
       // the reference to the buffer we're about to send to HBase.
-      if (durable) {
-        mput_durable = null;
-      } else {
-        mput_not_durable = null;
-      }
+      edit_buffer = null;
     }
 
     sendRpc(multiput);
-    return d;
   }
 
   /**
-   * Creates a new callback to handle the response to a multi-put request.
-   * @param request The request for which we must handle the response.  We need
-   * it in case we need to retry some of the edits due to a partial failure
-   * where not all the edits in the batch have been applied.
+   * Creates callbacks to handle a multi-put and adds them to the request.
+   * @param request The request for which we must handle the response.
    */
-  private Deferred<Object> addPutCallbacks(final MultiPutRequest request) {
-    return request.getDeferred().addCallbacks(new Callback<Object, Object>() {
+  private void addMultiPutCallbacks(final MultiPutRequest request) {
+    final class MultiPutCallback implements Callback<Object, Object> {
       public Object call(final Object resp) {
         if (!(resp instanceof MultiPutResponse)) {
+          if (resp instanceof PutRequest) {  // Single-edit multi-put?
+            return null;  // Yes, nothing to do.  See multiPutToSinglePut.
+          }
           throw new InvalidResponseException(MultiPutResponse.class, resp);
         }
         final MultiPutResponse response = (MultiPutResponse) resp;
         final Bytes.ByteMap<Integer> failures = response.failures();
         if (failures.isEmpty()) {
+          for (final PutRequest edit : request.edits()) {
+            edit.popDeferred().callback(null);  // Success.
+          }
           return null;  // Yay, success!
         }
-        final MultiPutRequest retry = MultiPutRequest.retry(request, failures);
         // TODO(tsuna): Wondering whether logging this at the WARN level
         // won't be too spammy / distracting.  Maybe we can tune this down to
         // DEBUG once the pretty bad bug HBASE-2898 is fixed.
         LOG.warn("Some edits failed for " + failures
                  + ", hopefully it's just due to a region split.");
-        // Retry the failed edits.  They should go to the same region server.
-        // If they weren't supposed to go to the same region server, we would
-        // have gotten an NSRE and we wouldn't be here.
-        sendRpc(retry);
-        return addPutCallbacks(retry);
+        for (final PutRequest edit : request.handlePartialFailure(failures)) {
+          retryEdit(edit, null);
+        }
+        return null;  // We're retrying, so let's call it a success for now.
       }
       public String toString() {
-        return "type multiPut response";
+        return "multiPut response";
       }
-    },
-    // Now the errback (2nd argument to `addCallbacks').
-    new Callback<Object, Exception>() {
+    };
+    final class MultiPutErrback implements Callback<Object, Exception> {
       public Object call(final Exception e) {
         if (!(e instanceof RecoverableException)) {
-          return e;  // Let the error propagate.
-        } else if (HBaseClient.cannotRetryRequest(request)) {
-          return HBaseClient.tooManyAttempts(request, (HBaseException) e);
-        } else if (e instanceof NotServingRegionException) {
-          // This is the worst case.  See HBASE-2898 for some more background.
-          // Basically, one or more of the edits attempted to go to a region
-          // that is no longer being served by this region server, but we don't
-          // know which.  So the only thing we can do is to invalidate our
-          // cache for all the regions involved in the multiPut and then re-try
-          // all the edits.
-          for (final byte[] region_name : request.regions()) {
-            hbase_client.invalidateRegionCache(region_name);
+          for (final PutRequest edit : request.edits()) {
+            edit.popDeferred().callback(e);
           }
-          return hbase_client.put(request.toPuts());
-        } else if (e instanceof ConnectionResetException) {
-          return hbase_client.put(request.toPuts());
-        }  // else: e instanceof RecoverableException, so let's try again.
-        if (LOG.isDebugEnabled()) {
-          LOG.debug("Retrying multi-put request=" + request, e);
+          return e;  // Can't recover from this error, let it propagate.
         }
-        request.attempt++;
-        sendRpc(request);
-        return addPutCallbacks(request);
+        if (LOG.isDebugEnabled()) {
+          LOG.debug("Multi-put request failed, retrying each of the "
+                    + request.size() + " edits individually.", e);
+        }
+        for (final PutRequest edit : request.edits()) {
+          retryEdit(edit, (RecoverableException) e);
+        }
+        return null;  // We're retrying, so let's call it a success for now.
       }
       public String toString() {
         return "multiPut errback";
       }
-    });
+    };
+    request.getDeferred().addCallbacks(new MultiPutCallback(),
+                                       new MultiPutErrback());
+  }
+
+  /**
+   * Retries an edit that failed with a recoverable error.
+   * @param edit The edit that failed.
+   * @param e The recoverable error that caused the edit to fail, if known.
+   * Can be {@code null}.
+   * @param The deferred result of the new attempt to send this edit.
+   */
+  private Deferred<Object> retryEdit(final PutRequest edit,
+                                     final RecoverableException e) {
+    if (HBaseClient.cannotRetryRequest(edit)) {
+      return HBaseClient.tooManyAttempts(edit, e);
+    }
+    edit.setBufferable(false);
+    return hbase_client.sendRpcToRegion(edit);
+  }
+
+  /**
+   * Creates callbacks to handle a single-put and adds them to the request.
+   * @param edit The edit for which we must handle the response.
+   */
+  private void addSingleEditCallbacks(final PutRequest edit) {
+    // There's no callback to add on a single put request, because
+    // the remote method returns `void', so we only need an errback.
+    final class PutErrback implements Callback<Object, Exception> {
+      public Object call(final Exception e) {
+        if (!(e instanceof RecoverableException)) {
+          return e;  // Can't recover from this error, let it propagate.
+        }
+        return retryEdit(edit, (RecoverableException) e);
+      }
+      public String toString() {
+        return "put errback";
+      }
+    };
+    edit.getDeferred().addErrback(new PutErrback());
   }
 
   /**
@@ -614,8 +582,22 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
    * call {@link HBaseRpc#getDeferred} (since presumably you'll need to either
    * return that Deferred or attach a callback to it).
    */
-  void sendRpc(final HBaseRpc rpc) {
+  void sendRpc(HBaseRpc rpc) {
     if (chan != null) {
+      if (rpc instanceof PutRequest) {
+        final PutRequest edit = (PutRequest) rpc;
+        if (edit.canBuffer() && hbase_client.getFlushInterval() > 0) {
+          bufferEdit(edit);
+          return;
+        }
+        addSingleEditCallbacks(edit);
+      } else if (rpc instanceof MultiPutRequest) {
+        // Transform single-edit multi-put into single-put.
+        final MultiPutRequest multiput = (MultiPutRequest) rpc;
+        if (multiput.size() == 1) {
+          rpc = multiPutToSinglePut(multiput);
+        }
+      }
       final ChannelBuffer serialized = encode(rpc);
       if (serialized != null) {
         Channels.write(chan, serialized);
@@ -634,6 +616,30 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
       }
       LOG.debug("RPC queued: {}", rpc);
     }
+  }
+
+  /**
+   * Transforms the given single-edit multi-put into a regular single-put.
+   * @param multiput The single-edit multi-put to transform.
+   */
+  private PutRequest multiPutToSinglePut(final MultiPutRequest multiput) {
+    final PutRequest edit = multiput.edits().get(0);
+    addSingleEditCallbacks(edit);
+    // Once the single-edit is done, we still need to make sure we're
+    // going to run the callback chain of the MultiPutRequest.
+    final class Multi2SingleCB implements Callback<Object, Object> {
+      public Object call(final Object arg) {
+        // If there was a problem, let the MultiPutRequest know.
+        // Otherwise, give the PutRequest in argument to the MultiPutRequest
+        // callback.  This is kind of a kludge: the MultiPutRequest callback
+        // will understand that this means that this single-edit was already
+        // successfully executed on its own.
+        multiput.callback(arg instanceof Exception ? arg : edit);
+        return arg;
+      }
+    }
+    edit.getDeferred().addBoth(new Multi2SingleCB());
+    return edit;
   }
 
   // -------------------------------------- //
@@ -1110,7 +1116,7 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
 
   public String toString() {
     final StringBuilder buf = new StringBuilder(13 + 10 + 6 + 64 + 16 + 1
-                                                + 9 + 2 + 1 + 2 + 17 + 2 + 1);
+                                                + 9 + 2 + 17 + 2 + 1);
     buf.append("RegionClient@")           // =13
       .append(hashCode())                 // ~10
       .append("(chan=")                   // = 6
@@ -1118,16 +1124,12 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
       .append(", #pending_rpcs=");        // =16
     int npending_rpcs;
     int nedits;
-    int ndedits;
     synchronized (this) {
       npending_rpcs = pending_rpcs == null ? 0 : pending_rpcs.size();
-      ndedits = mput_not_durable == null ? 0 : mput_not_durable.size();
-      nedits = mput_durable == null ? 0 : mput_durable.size();
+      nedits = edit_buffer == null ? 0 : edit_buffer.size();
     }
     buf.append(npending_rpcs)             // = 1
       .append(", #edits=")                // = 9
-      .append(ndedits)                    // ~ 2
-      .append('+')                        // = 1
       .append(nedits);                    // ~ 2
     buf.append(", #rpcs_inflight=")       // =17
       .append(rpcs_inflight.size())       // ~ 2

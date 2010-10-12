@@ -33,10 +33,8 @@ import java.net.SocketAddress;
 import java.net.UnknownHostException;
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.Collections;
 import java.util.HashMap;
 import java.util.Iterator;
-import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentSkipListMap;
@@ -96,7 +94,7 @@ import com.stumbleupon.async.Deferred;
  *
  * <a name="#durability"></a>
  * <h1>Data Durability</h1>
- * Some methods in this class take a {@code durable} argument.  When an edit
+ * Some methods or RPC types take a {@code durable} argument.  When an edit
  * requests to be durable, the success of the RPC guarantees that the edit is
  * safely and durably stored by HBase and won't be lost.  In case of server
  * failures, the edit won't be lost although it may become momentarily
@@ -785,8 +783,7 @@ public final class HBaseClient {
   }
 
   /**
-   * Durably stores data in HBase.  This is equivalent to
-   *   {@link #put(PutRequest, boolean) put}{@code (request, true)}
+   * Stores data in HBase.
    * <p>
    * Note that this provides no guarantee as to the order in which subsequent
    * {@code put} requests are going to be applied to the backend.  If you need
@@ -800,163 +797,7 @@ public final class HBaseClient {
    * TODO(tsuna): Document failures clients are expected to handle themselves.
    */
   public Deferred<Object> put(final PutRequest request) {
-    return put(new SingletonList<PutRequest>(request), true);
-  }
-
-  /**
-   * Stores data in HBase.
-   * <p>
-   * Note that this provides no guarantee as to the order in which subsequent
-   * {@code put} requests are going to be applied to the backend.  If you need
-   * ordering, you must enforce it manually yourself by starting the next
-   * {@code put} once the {@link Deferred} of this one completes successfully.
-   * @param request The {@code put} request.
-   * @param durable If {@code true}, the success of this RPC guarantees that
-   * HBase has stored the edit in a <a href="#durability">durable</a> fashion.
-   * When in doubt, use {@link #put(PutRequest)}.
-   * @return A deferred object that indicates the completion of the request.
-   * The {@link Object} has not special meaning and can be {@code null}
-   * (think of it as {@code Deferred<Void>}).  But you probably want to attach
-   * at least an errback to this {@code Deferred} to handle failures.
-   * TODO(tsuna): Document failures clients are expected to handle themselves.
-   */
-  public Deferred<Object> put(final PutRequest request,
-                              final boolean durable) {
-    return put(new SingletonList<PutRequest>(request), durable);
-  }
-
-  /**
-   * Durably stores data in HBase.  This is equivalent to
-   *   {@link #put(PutRequest, boolean) put}{@code (requests, true)}
-   * <p>
-   * Note that this provides no guarantee as to the order in which each of the
-   * {@code put} requests are going to be applied to the backend.  If you need
-   * ordering, you must enforce it manually yourself by starting the next
-   * {@code put} once the {@link Deferred} of this one completes successfully.
-   * @param requests A list of {@code put} requests.  The list will not be
-   * modified.
-   * @return A deferred object that indicates the completion of the request.
-   * The {@link Object} has not special meaning and can be {@code null}
-   * (think of it as {@code Deferred<Void>}).  But you probably want to attach
-   * at least an errback to this {@code Deferred} to handle failures.
-   * TODO(tsuna): Document failures clients are expected to handle themselves.
-   */
-  public Deferred<Object> put(final List<PutRequest> requests) {
-    return put(requests, true);
-  }
-
-  /**
-   * Stores data in HBase.
-   * <p>
-   * Note that this provides no guarantee as to the order in which each of the
-   * {@code put} requests are going to be applied to the backend.  If you need
-   * ordering, you must enforce it manually yourself by starting the next
-   * {@code put} once the {@link Deferred} of this one completes successfully.
-   * @param requests A list of {@code put} requests.  The list will not be
-   * modified.  If the list is empty, the {@link Deferred} returned will be
-   * called back immediately.
-   * @param durable If {@code true}, the success of this RPC guarantees that
-   * HBase has stored the edits in a <a href="#durability">durable</a> fashion.
-   * When in doubt, use {@link #put(List)}.
-   * @return A deferred object that indicates the completion of the request.
-   * The {@link Object} has not special meaning and can be {@code null}
-   * (think of it as {@code Deferred<Void>}).  But you probably want to attach
-   * at least an errback to this {@code Deferred} to handle failures.
-   * TODO(tsuna): Document failures clients are expected to handle themselves.
-   */
-  public Deferred<Object> put(List<PutRequest> requests,
-                              final boolean durable) {
-    // The javadoc of this method was supposed to read:
-    //   This method provides an additional guarantee: all edits passed in
-    //   argument that are for the same {@code (table, key)} pair will be
-    //   applied atomically in HBase.
-    // HBase tried to provide this guarantee but at the time of writing this,
-    // it doesn't.  There's a little bit of background in HBASE-2898.
-    final int size = requests.size();
-    if (size == 1) {  // Fast path for single edits (common).
-      return doPut(requests, durable);
-    } else if (size == 0) {
-      return Deferred.fromResult(null);
-    }
-
-    // We promised not to change the list we were given so let's clone it.
-    final ArrayList<PutRequest> reqs = new ArrayList<PutRequest>(requests);
-    requests = null;  // free()
-    // Let's sort it so we group every edit by (table, key).  You'd think
-    // this will just happen in O(n log n) time and O(1) space, but you'd be
-    // wrong.  Collections.sort copies the PutRequest[] out of the ArrayList
-    // and passes it on to Arrays.sort, which makes another copy!  Yay Java!
-    // Memory has gotten a lot cheaper anyway...  I guess.  Er...
-    Collections.sort(reqs, PutRequest.ROW_TABLE_CMP);
-
-    // Now that the table is sorted, every edit with the same (table, key)
-    // will be next to each other.  So we walk the array as long as we keep
-    // seeing the same (table, key) pair.  Each time we find a different pair,
-    // we send all the identical consecutive ones we've seen up to that point.
-    byte[] current_table = reqs.get(0).table();
-    byte[] current_key = reqs.get(0).key();
-    long current_lockid = reqs.get(0).lockid();
-    int batch_begin;
-    int batch_end;
-    // XXX if we have 100 different rows that are close to each other but we
-    // don't know which region hosts them, we're going to do 100 identical
-    // META lookups in parallel for that region.  That's bad.
-    final ArrayList<Deferred<Object>> deferreds =
-      new ArrayList<Deferred<Object>>(4);
-    for (batch_begin = 0, batch_end = 1; batch_end < size; batch_end++) {
-      final PutRequest req = reqs.get(batch_end);
-      if (Bytes.memcmp(current_key, req.key()) != 0
-          || Bytes.memcmp(current_table, req.table()) != 0
-          || current_lockid != req.lockid()) {
-        deferreds.add(doPut(reqs.subList(batch_begin, batch_end), durable));
-        batch_begin = batch_end;
-        current_table = req.table();
-        current_key = req.key();
-        current_lockid = req.lockid();
-      }
-    }
-    deferreds.add(doPut(reqs.subList(batch_begin, batch_end), durable));
-    // Return a single Deferred that will wait until each batch of edits has
-    // completed (successfully or not).
-    @SuppressWarnings("unchecked")
-    final Deferred<Object> d = (Deferred) Deferred.group(deferreds);
-    return d;
-  }
-
-  /**
-   * Actually send a list of {@code put} requests to a RegionServer.
-   * @param requests A non-empty list of puts that <strong>must</strong> all
-   * go to the same {@code (table, key)}.
-   * @param durable If {@code true}, the success of this RPC guarantees that
-   * HBase has stored the edits in a <a href="#durability">durable</a> fashion.
-   * @return A deferred object that indicates the completion of the request.
-   */
-  private Deferred<Object> doPut(final List<PutRequest> requests,
-                                 final boolean durable) {
-    final PutRequest req0 = requests.get(0);
-    if (cannotRetryRequest(req0)) {        // TODO(tsuna): Doing this only on
-      return tooManyAttempts(req0, null);  // the 1st request can be a problem.
-    }
-    req0.attempt++;
-    final byte[] table = req0.table();   // The requests we've been given are
-    final byte[] key = req0.key();       // supposed to go to the same region.
-    final RegionInfo region = getRegion(table, key);
-    if (region != null) {
-      final RegionClient client = region2client.get(region);
-      if (client != null) {
-        return client.put(requests, region.name(), durable);
-      }
-    }
-    return locateRegion(table, key)
-      .addCallbackDeferring(
-      new Callback<Deferred<Object>, RegionClient>() {
-        public Deferred<Object> call(final RegionClient unused) {
-          return doPut(requests, durable);
-        }
-        public String toString() {
-          return "restart Put call";
-        }
-      });
+    return sendRpcToRegion(request);
   }
 
   /**

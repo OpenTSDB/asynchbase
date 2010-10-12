@@ -27,13 +27,12 @@
 package org.hbase.async;
 
 import java.util.ArrayList;
-import java.util.List;
-import java.util.Map;
-import java.util.Set;
+import java.util.Collections;
+import java.util.Comparator;
 
 import org.jboss.netty.buffer.ChannelBuffer;
 
-import static org.hbase.async.Bytes.ByteMap;
+import org.slf4j.LoggerFactory;
 
 /**
  * Package-private class to group {@link PutRequest} into a multi-put.
@@ -43,269 +42,94 @@ import static org.hbase.async.Bytes.ByteMap;
  */
 final class MultiPutRequest extends HBaseRpc {
 
-  /*
-   * TODO(tsuna): This class is totally insane.  The deeply nested generics
-   * (map-of-maps-of-maps-of-list-of-edits) hurt my head and are hard to read
-   * and probably not space / time efficient.  I did it this way to stay close
-   * to the "wire format", which is ridiculously complicated and inefficient.
-   *
-   * Maybe we should just stuff all the PutRequest together in an array and
-   * then sort it kinda like what PutRequest.ROW_TABLE_CMP does, and then
-   * walk the sorted array as we do the serialization kinda like what
-   * HBaseClient#doPut does.  This would probably be both faster (no need to
-   * rebalance the RB-trees of TreeMaps and do O(n log n) operations) and take
-   * less memory (no crazy nesting of maps which create several Entry objects
-   * per edit).
-   */
-
   private static final byte[] MULTI_PUT = new byte[] {
     'm', 'u', 'l', 't', 'i', 'P', 'u', 't'
   };
 
   /**
-   * Whether or not the server should use its WAL (Write Ahead Log).
-   * Setting this to {@code false} makes the operation complete faster
-   * (sometimes significantly faster) but that's in exchange of data
-   * durability: if the server crashes before its next flush, this edit
-   * will be lost.  This is typically good only for batch imports where
-   * in case of a server failure, the whole import can be done again.
+   * All the edits in this multi-put.
+   * We'll sort this list before serializing it.
+   * @see MultiPutComparator
    */
-  private final boolean wal;
-
-  /** ID of the explicit {@link RowLock} to use for these edits, if any.  */
-  private final long lockid;
-
-  /**
-   * How many times have we attempted to retry those edits?.
-   * We don't use HBaseRpc.attempt because when a multiPut partially fails,
-   * the RPC will succeed but the RPC response will indicate which edits have
-   * failed.  Because the RPC has succeeded, {@link RegionClient#decode} will
-   * set {@code super.attempt} to 0.  So instead we need our own counter of
-   * the number of retries already attempted.
-   */
-  private final byte retrycnt;
-
-  /**
-   * Maps a region name to all the edits for that region.
-   * This makes my head hurt too.  This unnecessary complication is inherent
-   * to how the MultiPut has to be written to the wire.  Basically, here's
-   * how the maps are nested:
-   * <pre>  region --> row key --> family --> list of (qualifier, value)</pre>
-   * Get ready for some serious generic nesting.
-   */
-  private final ByteMap<ByteMap<ByteMap<ArrayList<Cell>>>> region2edits =
-    new ByteMap<ByteMap<ByteMap<ArrayList<Cell>>>>();  // OMG
-
-  /** How many edits are in the crazy map above.  */
-  private int size;
-
-  /** A (qualifier, value) pair, which thus uniquely identifies a cell.  */
-  private static final class Cell {
-    final byte[] qualifier;
-    final byte[] value;
-
-    public Cell(final byte[] qualifier, final byte[] value) {
-      this.qualifier = qualifier;
-      this.value = value;
-    }
-
-    public String toString() {
-      final StringBuilder buf = new StringBuilder(4 + qualifier.length
-                                                  + 2 + value.length + 2);
-      buf.append('(');
-      Bytes.pretty(buf, qualifier);
-      buf.append(", ");
-      Bytes.pretty(buf, value);
-      buf.append(')');
-      return buf.toString();
-    }
-  }
+  private final ArrayList<PutRequest> edits = new ArrayList<PutRequest>();
 
   /**
    * Constructor.
    */
-  public MultiPutRequest(final boolean durable) {
+  public MultiPutRequest() {
     super(MULTI_PUT);
-    this.wal = durable;
-    this.lockid = RowLock.NO_LOCK;
-    this.retrycnt = 0;
   }
-
-  MultiPutRequest(final boolean durable, final long lockid) {
-    super(MULTI_PUT);
-    this.wal = durable;
-    this.lockid = lockid;
-    this.retrycnt = 0;
-  }
-
-  private MultiPutRequest(final boolean durable,
-                          final long lockid,
-                          final byte retrycnt) {
-    super(MULTI_PUT);
-    this.wal = durable;
-    this.lockid = lockid;
-    this.retrycnt = retrycnt;
-  }
-
 
   /** Returns the number of edits in this multi-put.  */
   public int size() {
-    return size;
+    return edits.size();
   }
 
   /**
-   * Adds a number of "put" requests in this multi-put.
-   * @param requests A list of puts that are guaranteed to be sent
-   * out together at the same time, in the same single RPC.
-   * @param region_name The name of the region all those edits belongs to.
+   * Adds a "put" request in this multi-put.
+   * <p>
+   * @param request The edit to add in this multi-put.
+   * This edit <b>must not</b> specify an explicit row lock.
    */
-  void add(final List<PutRequest> requests, final byte[] region_name) {
-    ByteMap<ByteMap<ArrayList<Cell>>> region = region2edits.get(region_name);
-    if (region == null) {
-      region = new ByteMap<ByteMap<ArrayList<Cell>>>();
-      region2edits.put(region_name, region);
+  public void add(final PutRequest request) {
+    if (request.lockid() != RowLock.NO_LOCK) {
+      throw new AssertionError("Should never happen!  We don't do multi-put"
+        + " with RowLocks but we've been given an edit that has one!"
+        + "  edit=" + request + ", this=" + this);
     }
+    edits.add(request);
+  }
 
-    for (final PutRequest request : requests) {
-      ByteMap<ArrayList<Cell>> put = region.get(request.key());
-      if (put == null) {
-        put = new ByteMap<ArrayList<Cell>>();
-        region.put(request.key(), put);
-      }
-
-      ArrayList<Cell> cells = put.get(request.family());
-      if (cells == null) {
-        cells = new ArrayList<Cell>(1);
-        put.put(request.family(), cells);
-      }
-      cells.add(new Cell(request.qualifier(), request.value()));
-      size++;
-    }
+  /** Returns the list of individual puts that make up this multi-put.  */
+  ArrayList<PutRequest> edits() {
+    return edits;
   }
 
   /**
-   * Builds an RPC of edits that need to be retried.
-   * @param request The original request that failed (partially or entirely).
-   * @param failures A map of region name to the index of the first edit that
+   * Handles partial failures from a {@link MultiPutResponse}.
+   * @param failures A map from region name to the index of the first edit that
    * failed.
-   * @return A multi-put that contains all the edits after (and including) the
-   * index of the first failure, for each region that had failures.
+   * @return A list of edits that need to be retried.
    */
-  static MultiPutRequest retry(MultiPutRequest request,
-                               final ByteMap<Integer> failures) {
-    final MultiPutRequest retry =
-      new MultiPutRequest(request.wal, request.lockid,
-                          (byte) (request.retrycnt + 1));
-    final ByteMap<ByteMap<ByteMap<ArrayList<Cell>>>> region2edits =  // OMG
-      request.region2edits;
-    request = null;
-
-    for (final Map.Entry<byte[], Integer> fail : failures) {
-      final byte[] region_name = fail.getKey();
-      final int failed_index = fail.getValue();
-      // If failed_index is 0, all edits for this region have failed, so let's
-      // just re-use the same object instead of copying all of that crazy map.
-      final ByteMap<ByteMap<ArrayList<Cell>>> region =
-        failed_index == 0 ? region2edits.get(region_name)
-        : new ByteMap<ByteMap<ArrayList<Cell>>>();
-      retry.region2edits.put(region_name, region);
-      if (failed_index == 0) {
-        // We took a shortcut to avoid copying some objects in memory, but we
-        // still need to know how many edits we've just added to `retry'.
-        for (final Map.Entry<byte[], ByteMap<ArrayList<Cell>>> put
-             : region2edits.get(region_name)) {
-          for (Map.Entry<byte[], ArrayList<Cell>> edits : put.getValue()) {
-            for (final Cell cell : edits.getValue()) {
-              retry.size++;
-            }
-          }
+  Iterable<PutRequest> handlePartialFailure(final Bytes.ByteMap<Integer> failures) {
+    final ArrayList<PutRequest> retry =
+      new ArrayList<PutRequest>(edits.size() >>> 2);  // Start size = 4x smaller.
+    PutRequest prev = PutRequest.EMPTY_PUT;
+    int edits_per_region = 0;
+    int failed_index = -1;
+    for (final PutRequest edit : edits) {
+      final byte[] region_name = edit.getRegion().name();
+      final boolean new_region = !Bytes.equals(prev.getRegion().name(),
+                                               region_name);
+      if (new_region) {
+        edits_per_region = 0;
+        final Integer i = failures.get(region_name);
+        if (i == null) {  // Should never happen.
+          LoggerFactory.getLogger(MultiPutRequest.class)
+            .error("WTF?  Partial failures for " + this + " = " + failures
+                   + ", no results for region=" + Bytes.pretty(region_name));
+          prev = PutRequest.EMPTY_PUT;
+          continue;
         }
-        continue;
+        failed_index = i;
+      } else {
+        edits_per_region++;
       }
 
-      // Iterate over each individual edit for this region, until we reach the
-      // index of the edit that failed.  All edits after (and including) that
-      // index are then added to the retry RPC.
-      int i = 0;
-      for (final Map.Entry<byte[], ByteMap<ArrayList<Cell>>> put
-           : region2edits.get(region_name)) {
-        final ByteMap<ArrayList<Cell>> families = put.getValue();
-        for (Map.Entry<byte[], ArrayList<Cell>> edits : families) {
-          final ArrayList<Cell> cells = edits.getValue();
-          for (final Cell cell : cells) {
-            i++;
-            if (i < failed_index) {
-              continue;
-            }
-            // Retry this edit.
-            ByteMap<ArrayList<Cell>> retryput = region.get(put.getKey());
-            if (retryput == null) {
-              retryput = new ByteMap<ArrayList<Cell>>();
-              region.put(put.getKey(), retryput);
-            }
-            ArrayList<Cell> retrycells = retryput.get(edits.getKey());
-            if (retrycells == null) {
-              retrycells = new ArrayList<Cell>(1);
-              retryput.put(edits.getKey(), retrycells);
-            }
-            retrycells.add(cell);
-            retry.size++;
-          }
-        }
+      if (edits_per_region < failed_index) {
+        edit.popDeferred().callback(null);
+      } else {
+        retry.add(edit);
       }
+      prev = edit;
     }
-
-    if (retry.size <= 0) {  // Sanity check.
-      throw new AssertionError("Impossible, we attempted to retry a failed"
-        + " multiPut but there was no edit in the retry RPC."
-        + "  Original RPC = " + request + ", failures = " + failures
-        + ", retry RPC = " + retry);
-    } else if (retry.retrycnt >= 5) {  // XXX don't hardcode
-      // We're going to throw away all our hard work above, but at least we'll
-      // log only the edits that failed.
-      // XXX use a more specific exception type..?
-      throw new NonRecoverableException("Edits keep failing: " + retry
-        + ", it *could* be that one of them is using an invalid family.");
+    if (retry.isEmpty()) {  // Sanity check.
+      throw new AssertionError("Impossible, we attempted to retry a partially"
+        + " applied multiPut but we didn't find anything to retry."
+        + "  Original RPC = " + this + ", failures = " + failures
+        + ", edits to retry = " + retry);
     }
     return retry;
-  }
-
-  /**
-   * Returns a set of all the region names this multi-put request involves.
-   */
-  Set<byte[]> regions() {
-    return region2edits.keySet();
-  }
-
-  /**
-   * Transforms this multi-put back into a list of individual puts.
-   */
-  public ArrayList<PutRequest> toPuts() {
-    int nedits = 0;
-    for (final Map.Entry<byte[], ByteMap<ByteMap<ArrayList<Cell>>>> region
-         : region2edits) {
-      nedits += region.getValue().size();  // TreeMap's size() is in O(1).
-    }
-
-    final ArrayList<PutRequest> puts = new ArrayList<PutRequest>(nedits);
-    for (final Map.Entry<byte[], ByteMap<ByteMap<ArrayList<Cell>>>> region
-         : region2edits) {
-      final byte[] table = RegionInfo.tableFromRegionName(region.getKey());
-      for (Map.Entry<byte[], ByteMap<ArrayList<Cell>>> put : region.getValue())
-      {
-        final byte[] key = put.getKey();
-        for (Map.Entry<byte[], ArrayList<Cell>> edits : put.getValue()) {
-          final byte[] family = edits.getKey();
-          for (final Cell cell : edits.getValue()) {
-            // TODO(tsuna): opportunistically de-dup byte arrays?
-            puts.add(new PutRequest(table, key, family,
-                                    cell.qualifier, cell.value));
-          }
-        }
-      }
-    }
-
-    return puts;
   }
 
   /**
@@ -316,24 +140,32 @@ final class MultiPutRequest extends HBaseRpc {
    * prevent the RPC from being serialized.  That'd be a severe bug.
    */
   private int predictSerializedSize() {
+    // See the comment in serialize() about the for loop that follows.
     int size = 0;
     size += 4;  // int:  Number of parameters.
     size += 1;  // byte: Type of the 1st parameter.
     size += 1;  // byte: Type again (see HBASE-2877).
     size += 4;  // int:  How many regions do we want to edit?
 
-    for (final Map.Entry<byte[], ByteMap<ByteMap<ArrayList<Cell>>>> region
-         : region2edits) {
-      size += 3;  // vint: region name length (3 bytes => max length = 32768).
-      size += region.getKey().length;  // The region name.
-      size += 4;  // int:  How many edits for this region.
+    PutRequest prev = PutRequest.EMPTY_PUT;
+    for (final PutRequest edit : edits) {
+      final byte[] region_name = edit.getRegion().name();
+      final boolean new_region = !Bytes.equals(prev.getRegion().name(),
+                                               region_name);
+      final boolean new_key = new_region || !Bytes.equals(prev.key, edit.key);
+      final boolean new_family = new_key || !Bytes.equals(prev.family(),
+                                                          edit.family());
 
-      for (Map.Entry<byte[], ByteMap<ArrayList<Cell>>> put : region.getValue())
-      {
-        final int key_length = put.getKey().length;
-        final ByteMap<ArrayList<Cell>> families = put.getValue();
-        put = null;
+      if (new_region) {
+        size += 3;  // vint: region name length (3 bytes => max length = 32768).
+        size += region_name.length;  // The region name.
+        size += 4;  // int:  How many edits for this region.
+      }
 
+      final int key_length = edit.key.length;
+      final int family_length = edit.family().length;
+
+      if (new_key) {
         size += 1;  // byte: Version of Put.
         size += 3;  // vint: row key length (3 bytes => max length = 32768).
         size += key_length;  // The row key.
@@ -341,117 +173,180 @@ final class MultiPutRequest extends HBaseRpc {
         size += 8;  // long: Lock ID.
         size += 1;  // bool: Whether or not to write to the WAL.
         size += 4;  // int:  Number of families for which we have edits.
-
-        for (Map.Entry<byte[], ArrayList<Cell>> edits : families) {
-          final int family_length = edits.getKey().length;
-          final ArrayList<Cell> cells = edits.getValue();
-          edits = null;
-
-          size += 1;  // vint: Family length (guaranteed on 1 byte).
-          size += family_length;  // The family.
-          size += 4;  // int:  Number of KeyValues that follow.
-          size += 4;  // int:  Total number of bytes for all those KeyValues.
-          for (final Cell cell : cells) {
-            size += 4;  // int:   Key + value length.
-            size += 4;  // int:   Key length.
-            size += 4;  // int:   Value length.
-            size += 2;  // short: Row length.
-            size += key_length;             // The row key (again!).
-            size += 1;  // byte:  Family length.
-            size += family_length;          // The family (again!).
-            size += cell.qualifier.length;  // The qualifier.
-            size += 8;  // long:  Timestamp (again!).
-            size += 1;  // byte:  Type of edit.
-            size += cell.value.length;
-          }
-        }
       }
+
+      if (new_family) {
+        size += 1;  // vint: Family length (guaranteed on 1 byte).
+        size += family_length;  // The family.
+        size += 4;  // int:  Number of KeyValues that follow.
+        size += 4;  // int:  Total number of bytes for all those KeyValues.
+      }
+
+      size += 4;  // int:   Key + value length.
+      size += 4;  // int:   Key length.
+      size += 4;  // int:   Value length.
+      size += 2;  // short: Row length.
+      size += key_length;               // The row key (again!).
+      size += 1;  // byte:  Family length.
+      size += family_length;            // The family (again!).
+      size += edit.qualifier().length;  // The qualifier.
+      size += 8;  // long:  Timestamp (again!).
+      size += 1;  // byte:  Type of edit.
+      size += edit.value().length;
+
+      prev = edit;
     }
     return size;
   }
 
   /** Serializes this request.  */
   ChannelBuffer serialize() {
+    // Due to the wire format expected by HBase, we need to group all the
+    // edits by region, then by key, then by family.  HBase does this by
+    // building a crazy map-of-map-of-map-of-list-of-edits, but this is
+    // memory and time inefficient (lots of unnecessary references and
+    // O(n log n) operations).  The approach we take here is to sort the
+    // list and iterate on it.  Each time we find a different family or
+    // row key or region, we start a new set of edits.  Because the RPC
+    // format needs to know the number of edits or bytes that follows in
+    // various places, we store a "0" value and then later monkey-patch it
+    // once we cross a row key / family / region boundary, because we can't
+    // efficiently tell ahead of time how many edits or bytes will follow
+    // until we cross such boundaries.
+    Collections.sort(edits, MULTIPUT_CMP);
     final ChannelBuffer buf = newBuffer(predictSerializedSize());
     buf.writeInt(1);  // Number of parameters.
 
     // 1st and only param: a MultiPut object.
     buf.writeByte(57);   // Code for a `MultiPut' parameter.
     buf.writeByte(57);   // Code again (see HBASE-2877).
-    buf.writeInt(region2edits.size());  // How many regions do we want to edit?
+    buf.writeInt(0);  // How many regions do we want to edit?
+    //           ^------ We'll monkey patch this at the end.
 
-    for (final Map.Entry<byte[], ByteMap<ByteMap<ArrayList<Cell>>>> region
-         : region2edits) {
-      writeByteArray(buf, region.getKey());  // The region name.
+    int nregions = 0;
+    int nkeys_index = -1;
+    int nkeys = 0;
+    int nfamilies_index = -1;
+    int nfamilies = 0;
+    int nkeys_per_family_index = -1;
+    int nkeys_per_family = 0;
+    int nbytes_per_family = 0;
+    PutRequest prev = PutRequest.EMPTY_PUT;
+    for (final PutRequest edit : edits) {
+      final byte[] region_name = edit.getRegion().name();
+      final boolean new_region = !Bytes.equals(prev.getRegion().name(),
+                                               region_name);
+      final boolean new_key = new_region || !Bytes.equals(prev.key, edit.key);
+      final boolean new_family = new_key || !Bytes.equals(prev.family(),
+                                                          edit.family());
+      if (new_region) {
+        // Monkey-patch the number of edits of the previous region.
+        if (nkeys_index > 0) {
+          buf.setInt(nkeys_index, nkeys);
+          nkeys = 0;
+        }
 
-      // Number of edits for this region that follow.
-      buf.writeInt(region.getValue().size());
+        nregions++;
+        writeByteArray(buf, region_name);  // The region name.
+        nkeys_index = buf.writerIndex();
+        // Number of keys for which we have edits for this region.
+        buf.writeInt(0);  // We'll monkey patch this later.
+      }
 
-      for (Map.Entry<byte[], ByteMap<ArrayList<Cell>>> put : region.getValue())
-      {
+      final byte[] key = edit.key;
+      if (new_key) {
+        nkeys++;
+        // Monkey-patch the number of families of the previous key.
+        if (nfamilies_index > 0) {
+          buf.setInt(nfamilies_index, nfamilies);
+          nfamilies = 0;
+        }
+
         buf.writeByte(1);    // Undocumented versioning of Put.
-        final byte[] key = put.getKey();
         writeByteArray(buf, key);  // The row key.
-
-        final ByteMap<ArrayList<Cell>> families = put.getValue();
-        put = null;
 
         // Timestamp.  We always set it to Long.MAX_VALUE, which means "unset".
         // The RegionServer will set it for us, right before writing to the WAL
         // (or to the Memstore if we're not using the WAL).
         buf.writeLong(Long.MAX_VALUE);
 
-        buf.writeLong(lockid);             // Lock ID.
-        buf.writeByte(wal ? 0x01 : 0x00);  // Whether or not to use the WAL.
-        buf.writeInt(families.size());  // Number of families that follow.
-        for (Map.Entry<byte[], ArrayList<Cell>> edits : families) {
-          final byte[] family = edits.getKey();
-          final ArrayList<Cell> cells = edits.getValue();
-          edits = null;
-          writeByteArray(buf, family);  // The column family.
-          buf.writeInt(cells.size());   // Number of "KeyValues" that follow.
-
-          // Total number of bytes taken by those "KeyValues".
-          int size = 0;
-          final int size_pos = buf.writerIndex();
-          buf.writeInt(0);  // We'll monkey patch this later.
-
-          for (final Cell cell : cells) {
-            final int key_length = (2 + key.length + 1 + family.length
-                                    + cell.qualifier.length + 8 + 1);
-            size += 4 + 4 + key_length + cell.value.length;
-            // Write the length of the whole KeyValue (this is so useless...).
-            buf.writeInt(4 + 4 + key_length + cell.value.length);
-            buf.writeInt(key_length);             // Key length.
-            buf.writeInt(cell.value.length);      // Value length.
-
-            // Then the whole key.
-            buf.writeShort(key.length);      // Row length.
-            buf.writeBytes(key);             // The row key (again!).
-            buf.writeByte((byte) family.length);  // Family length.
-            buf.writeBytes(family);               // Write the family (again!).
-            buf.writeBytes(cell.qualifier);       // The qualifier.
-            buf.writeLong(Long.MAX_VALUE);        // The timestamp (again!).
-            buf.writeByte(0x04);                  // Type of edit (4 = Put).
-
-            buf.writeBytes(cell.value);           // Finally, the value.
-          }
-          buf.setInt(size_pos, size);
-        }
+        buf.writeLong(RowLock.NO_LOCK);    // Lock ID.
+        buf.writeByte(edit.durable() ? 0x01 : 0x00);  // Use the WAL?
+        nfamilies_index = buf.writerIndex();
+        // Number of families that follow.
+        buf.writeInt(0);  // We'll monkey patch this later.
       }
+
+      final byte[] family = edit.family();
+      if (new_family) {
+        nfamilies++;
+        writeByteArray(buf, family);  // The column family.
+
+        // Monkey-patch the number and size of edits for the previous family.
+        if (nkeys_per_family_index > 0) {
+          buf.setInt(nkeys_per_family_index, nkeys_per_family);
+          nkeys_per_family = 0;
+          buf.setInt(nkeys_per_family_index + 4, nbytes_per_family);
+          nbytes_per_family = 0;
+        }
+        nkeys_per_family_index = buf.writerIndex();
+        // Number of "KeyValues" that follow.
+        buf.writeInt(0);  // We'll monkey patch this later.
+        // Total number of bytes taken by those "KeyValues".
+        buf.writeInt(0);  // We'll monkey patch this later.
+      }
+      nkeys_per_family++;
+
+      final byte[] qualifier = edit.qualifier();
+      final byte[] value = edit.value();
+      final int key_length = edit.keyLength();
+      nbytes_per_family += 4 + 4 + key_length + value.length;
+      edit.serializeKeyValue(buf);
+      prev = edit;
     }  // Yay, we made it!
+
+    // Monkey-patch everything for the last set of edits.
+    buf.setInt(nkeys_per_family_index, nkeys_per_family);
+    buf.setInt(nkeys_per_family_index + 4, nbytes_per_family);
+    buf.setInt(nfamilies_index, nfamilies);
+    buf.setInt(nkeys_index, nkeys);
+
+    // Monkey-patch the number of regions affected by this RPC.
+    buf.setInt(4 + 4 + 2 + MULTI_PUT.length  // header length
+               + 4 + 1 + 1, nregions);
 
     return buf;
   }
 
   public String toString() {
-    return "MultiPutRequest"
-      + "(wal=" + wal
-      + ", lockid=" + lockid
-      + ", retrycnt=" + retrycnt
-      + ", size=" + size
-      + ", region2edits=" + region2edits
-      + ')';
+    return "MultiPutRequest(edits=" + edits + ')';
   }
+
+  /**
+   * Sorts {@link PutRequest}s appropriately for the multi-put RPC.
+   * We sort by region, row key, column family.  No ordering is needed on the
+   * column qualifier or value.
+   */
+  private static final MultiPutComparator MULTIPUT_CMP = new MultiPutComparator();
+
+  /** Sorts {@link PutRequest}s appropriately for the multi-put RPC.  */
+  private static final class MultiPutComparator implements Comparator<PutRequest> {
+
+    private MultiPutComparator() {  // Can't instantiate outside of this class.
+    }
+
+    @Override
+    public int compare(final PutRequest a, final PutRequest b) {
+      int d;
+      if ((d = Bytes.memcmp(a.getRegion().name(), b.getRegion().name())) != 0) {
+        return d;
+      } else if ((d = Bytes.memcmp(a.key, b.key)) != 0) {
+        return d;
+      }
+      return Bytes.memcmp(a.family(), b.family());
+    }
+
+  }
+
 
 }
