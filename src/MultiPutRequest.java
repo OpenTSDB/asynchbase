@@ -117,7 +117,7 @@ final class MultiPutRequest extends HBaseRpc {
       }
 
       if (edits_per_region < failed_index) {
-        edit.popDeferred().callback(null);
+        edit.callback(null);
       } else {
         retry.add(edit);
       }

@@ -277,13 +277,23 @@ public abstract class HBaseRpc {
     return deferred;
   }
 
-  /** Package private way of accessing and removing the Deferred of this RPC. */
-  final Deferred<Object> popDeferred() {
-    try {
-      return deferred;
-    } finally {
-      deferred = null;
+  /**
+   * Package private way of making an RPC complete by giving it its result.
+   * If this RPC has no {@link Deferred} associated to it, nothing will
+   * happen.  This may happen if the RPC was already called back.
+   * <p>
+   * Once this call to this method completes, this object can be re-used to
+   * re-send the same RPC, provided that no other thread still believes this
+   * RPC to be in-flight (guaranteeing this may be hard in error cases).
+   */
+  final void callback(final Object result) {
+    final Deferred<Object> d = deferred;
+    if (d == null) {
+      return;
     }
+    deferred = null;
+    attempt = 0;
+    d.callback(result);
   }
 
   /** Checks whether or not this RPC has a Deferred without creating one.  */

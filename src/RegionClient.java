@@ -280,7 +280,7 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
         final NonRecoverableException shuttingdown =
           new NonRecoverableException("shutting down");
         for (final HBaseRpc rpc : pending_rpcs) {
-          rpc.popDeferred().callback(shuttingdown);
+          rpc.callback(shuttingdown);
         }
       }
     }
@@ -493,7 +493,7 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
         final Bytes.ByteMap<Integer> failures = response.failures();
         if (failures.isEmpty()) {
           for (final PutRequest edit : request.edits()) {
-            edit.popDeferred().callback(null);  // Success.
+            edit.callback(null);  // Success.
           }
           return null;  // Yay, success!
         }
@@ -515,7 +515,7 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
       public Object call(final Exception e) {
         if (!(e instanceof RecoverableException)) {
           for (final PutRequest edit : request.edits()) {
-            edit.popDeferred().callback(e);
+            edit.callback(e);
           }
           return e;  // Can't recover from this error, let it propagate.
         }
@@ -721,7 +721,7 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
     for (final HBaseRpc rpc : rpcs) {
       final RegionInfo region = rpc.getRegion();
       if (region == null) {  // Can't retry, dunno where this RPC should go.
-        rpc.popDeferred().callback(exception);
+        rpc.callback(exception);
       } else {
         hbase_client.sendRpcToRegion(rpc);  // Re-schedule the RPC.
       }
@@ -795,7 +795,7 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
       payload.setBytes(10, method);                   // method.length bytes
     } catch (Exception e) {
       LOG.error("Uncaught exception while serializing RPC: " + rpc, e);
-      rpc.popDeferred().callback(e);  // Make the RPC fail with the exception.
+      rpc.callback(e);  // Make the RPC fail with the exception.
       return null;
     }
 
@@ -817,7 +817,7 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
           + ".  This happened when sending out: " + rpc;
         LOG.error(wtf);
         // Make it fail.  This isn't an expected failure mode.
-        oldrpc.popDeferred().callback(new NonRecoverableException(wtf));
+        oldrpc.callback(new NonRecoverableException(wtf));
       }
     }
     return payload;
@@ -877,7 +877,7 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
         hbase_client.invalidateRegionCache(region);
         if (HBaseClient.cannotRetryRequest(rpc)) {
           final HBaseException nsre = (NotServingRegionException) decoded;
-          rpc.popDeferred().callback(HBaseClient.tooManyAttempts(rpc, nsre));
+          rpc.callback(HBaseClient.tooManyAttempts(rpc, nsre));
         } else {
           hbase_client.sendRpcToRegion(rpc);  // Restart the RPC.
         }
@@ -885,12 +885,9 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
       }  // else: This RPC wasn't targeted at a particular region.
          //   =>  We'll give the exception to the callback chain.
     }
-    rpc.attempt = 0;  // In case this HBaseRpc instance gets re-used.
 
     try {
-      // From the point where `popDeferred()' is invoked, the HBaseRpc object
-      // is re-usable to re-send the same RPC.
-      rpc.popDeferred().callback(decoded);
+      rpc.callback(decoded);
     } catch (Exception e) {
       LOG.error("Unexpected exception while handling RPC #" + rpcid
                 + ", rpc=" + rpc + ", buf=" + Bytes.pretty(buf), e);

@@ -929,17 +929,10 @@ public final class HBaseClient {
     // reporting, at this point we should try to getClosestRowBefore + scan
     // META in order to verify whether there's indeed a hole, and if there's
     // one, throw a BrokenMetaException explaining where the hole is.
-    try {
-      final Exception e =
-        new NonRecoverableException("Too many attempts: " + request, cause);
-      final Deferred<Object> d = request.popDeferred();
-      if (d != null) {
-        d.callback(e);
-      }
-      return Deferred.fromError(e);
-    } finally {
-      request.attempt = 0;  // In case this HBaseRpc instance gets re-used.
-    }
+    final Exception e = new NonRecoverableException("Too many attempts: "
+                                                    + request, cause);
+    request.callback(e);
+    return Deferred.fromError(e);
   }
 
   // --------------------------------------------------- //
