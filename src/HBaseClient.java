@@ -1277,7 +1277,7 @@ public final class HBaseClient {
     final RegionInfo oldregion = regions_cache.remove(region.name());
     final RegionClient client = region2client.remove(region);
 
-    if (oldregion != null && oldregion != region) {
+    if (oldregion != null && !Bytes.equals(oldregion.name(), region.name())) {
       // XXX do we want to just re-add oldregion back?  This exposes another
       // race condition (we re-add it and overwrite yet another region change).
       LOG.warn("Oops, invalidated the wrong regions cache entry."
@@ -1286,10 +1286,8 @@ public final class HBaseClient {
     }
 
     if (client != null) {
-      if (LOG.isDebugEnabled()) {
-        LOG.debug("Invalidated regions cache for " + region + " as " + client
-                  + " no longer seems to be serving that region");
-      }
+      LOG.info("Invalidated cache for " + region + " as " + client
+                + " no longer seems to be serving that region");
       final ArrayList<RegionInfo> regions = client2regions.get(client);
       if (regions != null) {
         // `remove()' on an ArrayList causes an array copy.  Should we switch
