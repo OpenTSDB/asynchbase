@@ -866,24 +866,14 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
       // exception handler where we'll close this channel, which will cause
       // all RPCs in flight to be failed.
       throw new NonRecoverableException(msg);
-    } else if (decoded instanceof NotServingRegionException) {
-      // If this RPC was targeted at a particular region and we got an NSRE,
-      // it means this RegionServer no longer hosts that region.  So we have
-      // to invalidate our region cache for this particular region and we can
-      // try to restart the RPC (which will probably cause a META lookup to
-      // find where that region is now).
-      final RegionInfo region = rpc.getRegion();
-      if (region != null) {
-        hbase_client.invalidateRegionCache(region);
-        if (HBaseClient.cannotRetryRequest(rpc)) {
-          final HBaseException nsre = (NotServingRegionException) decoded;
-          rpc.callback(HBaseClient.tooManyAttempts(rpc, nsre));
-        } else {
-          hbase_client.sendRpcToRegion(rpc);  // Restart the RPC.
-        }
-        return null;
-      }  // else: This RPC wasn't targeted at a particular region.
-         //   =>  We'll give the exception to the callback chain.
+    } else if (decoded instanceof NotServingRegionException
+               && rpc.getRegion() != null) {
+      // We only handle NSREs for RPCs targeted at a specific region, because
+      // if we don't know which region caused the NSRE (e.g. during multiPut)
+      // we can't do anything about it.
+      hbase_client.handleNSRE(rpc, rpc.getRegion().name(),
+                              (NotServingRegionException) decoded);
+      return null;
     }
 
     try {

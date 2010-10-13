@@ -290,6 +290,14 @@ public final class HBaseClient {
    * {@link region2client}, because it comes second in the fast-path
    * of every requests that need to locate a region.  The third map
    * is only used to handle RegionServer disconnections gracefully.
+   * <p>
+   * Note: before using the {@link RegionInfo} you pull out of this map,
+   * you <b>must</b> ensure that {@link RegionInfo#table} doesn't return
+   * {@link #EMPTY_ARRAY}.  If it does, it means you got a special entry
+   * used to indicate that this region is known to be unavailable right
+   * now due to an NSRE.  You must not use this {@link RegionInfo} as
+   * if it was a normal entry.
+   * @see #handleNSRE
    */
   private final ConcurrentSkipListMap<byte[], RegionInfo> regions_cache =
     new ConcurrentSkipListMap<byte[], RegionInfo>(RegionInfo.REGION_NAME_CMP);
@@ -345,6 +353,22 @@ public final class HBaseClient {
     new HashMap<String, RegionClient>();
 
   /**
+   * Map of region name to list of pending RPCs for this region.
+   * <p>
+   * The array-list isn't expected to be empty, except during rare race
+   * conditions.  When the list is non-empty, the first element in the
+   * list should be a special "probe" RPC we build to detect when the
+   * region NSRE'd is back online.
+   * <p>
+   * For more details on how this map is used, please refer to the
+   * documentation of {@link #handleNSRE}.
+   * <p>
+   * Each list in the map is protected by its own monitor lock.
+   */
+  private final ConcurrentSkipListMap<byte[], ArrayList<HBaseRpc>> got_nsre =
+    new ConcurrentSkipListMap<byte[], ArrayList<HBaseRpc>>(RegionInfo.REGION_NAME_CMP);
+
+  /**
    * Constructor.
    * @param quorum_spec The specification of the quorum, e.g.
    * {@code "host1,host2,host3"}.
@@ -372,11 +396,25 @@ public final class HBaseClient {
    */
   public Deferred<Object> flush() {
     final ArrayList<Deferred<Object>> d =
-      new ArrayList<Deferred<Object>>(client2regions.size());
+      new ArrayList<Deferred<Object>>(client2regions.size()
+                                      + got_nsre.size() * 8);
     // Bear in mind that we're traversing a ConcurrentHashMap, so we may get
     // clients that have been removed from the map since we started iterating.
     for (final RegionClient client : client2regions.keySet()) {
       d.add(client.flush());
+    }
+    for (final ArrayList<HBaseRpc> nsred : got_nsre.values()) {
+      synchronized (nsred) {
+        for (final HBaseRpc rpc : nsred) {
+          // TODO(tsuna): This is brittle, need to remember to edit this when
+          // adding new RPCs that change data in HBase.  Not good.
+          if (rpc instanceof PutRequest
+              || rpc instanceof AtomicIncrementRequest
+              || rpc instanceof DeleteRequest) {
+            d.add(rpc.getDeferred());
+          }
+        }
+      }
     }
     @SuppressWarnings("unchecked")
     final Deferred<Object> flushed = (Deferred) Deferred.group(d);
@@ -836,6 +874,12 @@ public final class HBaseClient {
   public Deferred<Object> unlockRow(final RowLock lock) {
     final byte[] region_name = lock.region();
     final RegionInfo region = regions_cache.get(region_name);
+    if (knownToBeNSREd(region)) {
+      // If this region has been NSRE'd, we can't possibly still hold a lock
+      // on one of its rows, as this would have prevented it from splitting.
+      // So let's just pretend the row has been unlocked.
+      return Deferred.fromResult(null);
+    }
     final RegionClient client = (region == null ? null
                                  : region2client.get(region));
     if (client == null) {
@@ -882,7 +926,26 @@ public final class HBaseClient {
     final byte[] table = request.table();
     final byte[] key = request.key();
     final RegionInfo region = getRegion(table, key);
+
+    final class RetryRpc<T> implements Callback<Deferred<Object>, T> {
+      public Deferred<Object> call(final T ignored) {
+        return sendRpcToRegion(request);
+      }
+      public String toString() {
+        return "retry RPC";
+      }
+    }
+
     if (region != null) {
+      if (knownToBeNSREd(region)) {
+        final NotServingRegionException nsre =
+          new NotServingRegionException("Region known to be unavailable",
+                                        request);
+        final Deferred<Object> d = request.getDeferred()
+          .addBothDeferring(new RetryRpc<Object>());
+        handleNSRE(request, region.name(), nsre);
+        return d;
+      }
       final RegionClient client = region2client.get(region);
       if (client != null && client.isAlive()) {
         request.setRegion(region);
@@ -892,15 +955,7 @@ public final class HBaseClient {
       }
     }
     return locateRegion(table, key)
-      .addCallbackDeferring(
-      new Callback<Deferred<Object>, RegionClient>() {
-        public Deferred<Object> call(RegionClient c) {
-          return sendRpcToRegion(request);
-        }
-        public String toString() {
-          return "restart call";
-        }
-      });
+      .addBothDeferring(new RetryRpc<RegionClient>());
   }
 
   /**
@@ -1155,6 +1210,8 @@ public final class HBaseClient {
    * @param meta_row The (parsed) result of the
    * {@link RegionClient#getClosestRowBefore} request sent to the
    * .META. (or -ROOT-) table.
+   * @return The client serving the region we discovered, or {@code null} if
+   * this region isn't being served right now (and we marked it as NSRE'd).
    */
   private RegionClient discoverRegion(final ArrayList<KeyValue> meta_row) {
     if (meta_row.isEmpty()) {
@@ -1169,6 +1226,10 @@ public final class HBaseClient {
       if (Arrays.equals(REGIONINFO, qualifier)) {
         final byte[][] tmp = new byte[1][];  // Yes, this is ugly.
         region = RegionInfo.fromKeyValue(kv, tmp);
+        if (knownToBeNSREd(region)) {
+          invalidateRegionCache(region.name(), true, "has marked it as split.");
+          return null;
+        }
         start_key = tmp[0];
       } else if (Arrays.equals(SERVER, qualifier)) {
         final byte[] hostport = kv.value();
@@ -1194,15 +1255,19 @@ public final class HBaseClient {
         }
       }
     }
-    if (host == null) {
-      throw new BrokenMetaException(region, "No server listed in .META.,"
-        + " didn't find any `info:server' cell in " + meta_row);
-    } else if (start_key == null) {
+    if (start_key == null) {
       throw new BrokenMetaException(null, "It didn't contain any"
         + " `info:regioninfo' cell:  " + meta_row);
     }
 
     final byte[] region_name = region.name();
+    if (host == null) {
+      // When there's no `info:server' cell, it typically means that the
+      // location of this region is about to be updated in META, so we
+      // consider this as an NSRE.
+      invalidateRegionCache(region_name, true, "no longer has it assigned.");
+      return null;
+    }
 
     // 1. Record the region -> client mapping.
     // This won't be "discoverable" until another map points to it, because
@@ -1271,48 +1336,360 @@ public final class HBaseClient {
    * This is package-private so that the low-level {@link RegionClient} can do
    * the invalidation itself when it gets a {@link NotServingRegionException}
    * back from a RegionServer.
-   * @param region The region for which to invalidate our cache.
+   * @param region_name The name of the region to invalidate in our caches.
+   * @param mark_as_nsred If {@code true}, after removing everything we know
+   * about this region, we'll store a special marker in our META cache to mark
+   * this region as "known to be NSRE'd", so that subsequent requests to this
+   * region will "fail-fast".
+   * @param reason If not {@code null}, will be used to log an INFO message
+   * about the cache invalidation done.
    */
-  void invalidateRegionCache(final RegionInfo region) {
-    final RegionInfo oldregion = regions_cache.remove(region.name());
+  private void invalidateRegionCache(final byte[] region_name,
+                                     final boolean mark_as_nsred,
+                                     final String reason) {
+    if (region_name == ROOT_REGION) {
+      if (reason != null) {
+        LOG.info("Invalidated cache for -ROOT- as " + rootregion
+                 + ' ' + reason);
+      }
+      rootregion = null;
+      return;
+    }
+    final RegionInfo oldregion = mark_as_nsred
+      ? regions_cache.put(region_name, new RegionInfo(EMPTY_ARRAY, region_name,
+                                                      EMPTY_ARRAY))
+      : regions_cache.remove(region_name);
+    final RegionInfo region = (oldregion != null ? oldregion
+                               : new RegionInfo(EMPTY_ARRAY, region_name,
+                                                EMPTY_ARRAY));
     final RegionClient client = region2client.remove(region);
 
-    if (oldregion != null && !Bytes.equals(oldregion.name(), region.name())) {
+    if (oldregion != null && !Bytes.equals(oldregion.name(), region_name)) {
       // XXX do we want to just re-add oldregion back?  This exposes another
       // race condition (we re-add it and overwrite yet another region change).
       LOG.warn("Oops, invalidated the wrong regions cache entry."
-               + "  Meant to remove " + region + " but instead removed "
-               + oldregion);
+               + "  Meant to remove " + Bytes.pretty(region_name)
+               + " but instead removed " + oldregion);
     }
 
-    if (client != null) {
-      LOG.info("Invalidated cache for " + region + " as " + client
-                + " no longer seems to be serving that region");
-      final ArrayList<RegionInfo> regions = client2regions.get(client);
-      if (regions != null) {
-        // `remove()' on an ArrayList causes an array copy.  Should we switch
-        // to a LinkedList instead?
-        synchronized (regions) {
-          regions.remove(region);
-        }
+    if (client == null) {
+      return;
+    }
+    final ArrayList<RegionInfo> regions = client2regions.get(client);
+    if (regions != null) {
+      // `remove()' on an ArrayList causes an array copy.  Should we switch
+      // to a LinkedList instead?
+      synchronized (regions) {
+        regions.remove(region);
       }
+    }
+    if (reason != null) {
+      LOG.info("Invalidated cache for " + region + " as " + client
+               + ' ' + reason);
     }
   }
 
   /**
-   * Invalidates any cached knowledge about the given region name.
-   * <p>
-   * This variant of {@link #invalidateRegionCache(RegionInfo)} is for cases
-   * where we only store the region name instead of the full {@link RegionInfo}
-   * object.  Try to avoid using it as much as possible.
-   * @param region_name The name of the region for which to invalidate our
-   * cache.
+   * Returns true if this region is known to be NSRE'd and shouldn't be used.
+   * @see #handleNSRE
    */
-  void invalidateRegionCache(final byte[] region_name) {
-    final RegionInfo region = regions_cache.get(region_name);
-    if (region != null) {
-      invalidateRegionCache(region);
+  private static boolean knownToBeNSREd(final RegionInfo region) {
+    return region.table() == EMPTY_ARRAY;
+  }
+
+  /**
+   * Low and high watermarks when buffering RPCs due to an NSRE.
+   * @see #handleNSRE
+   * XXX TODO(tsuna): Don't hardcode.
+   */
+  private static final short NSRE_LOW_WATERMARK  =  1000;
+  private static final short NSRE_HIGH_WATERMARK = 10000;
+
+  /** Log a message for every N RPCs we buffer due to an NSRE.  */
+  private static final short NSRE_LOG_EVERY      =   500;
+
+  /**
+   * Handles the {@link NotServingRegionException} for the given RPC.
+   * <p>
+   * This code will take ownership of the RPC in the sense that it will become
+   * responsible for re-scheduling the RPC later once the NSRE situation gets
+   * resolved by HBase.
+   *
+   * <h1>NSRE handling logic</h1>
+   * Whenever we get an NSRE for the first time for a particular region, we
+   * will add an entry for this region in the {@link #got_nsre} map.  We also
+   * replace the entry for this region in {@link #regions_cache} with a special
+   * entry that indicates that this region is known to be unavailable for now,
+   * due to the NSRE.  This entry is said to be special because it belongs to
+   * the table with an empty name (which is otherwise impossible).  This way,
+   * new RPCs that are sent out can still hit our local cache instead of
+   * requiring a META lookup and be directly sent to this method so they can
+   * be queued to wait until the NSRE situation is resolved by HBase.
+   * <p>
+   * When we first get an NSRE, we also create a "probe" RPC, the goal of
+   * which is to periodically poke HBase and check whether the NSRE situation
+   * was resolved.  The way we poke HBase is to send an "exists" RPC (which
+   * is actually just a "get" RPC that returns true or false instead of
+   * returning any data) for the table / key of the first RPC to trigger the
+   * NSRE.  As soon as the probe returns successfully, we know HBase resolved
+   * the NSRE situation and the region is back online.  Note that it doesn't
+   * matter what the result of the probe is, the only thing that matters is
+   * that the probe doesn't get NSRE'd.
+   * <p>
+   * Once the probe RPC succeeds, we flush out all the RPCs that are pending
+   * for the region that got NSRE'd.  When the probe fails, it's periodically
+   * re-scheduled with an exponential-ish backoff.
+   * <p>
+   * We put a cap on the number of RPCs we'll keep on hold while we wait for
+   * the NSRE to be resolved.  Say you have a high throughput application
+   * that's producing 100k write operations per second.  Even if it takes
+   * HBase just a second to bring the region back online, the application
+   * will have generated over 100k RPCs before we realize we're good to go.
+   * This means the application can easily run itself out of memory if we let
+   * the queue grow unbounded.  To prevent that from happening, the code has
+   * a low watermark and a high watermark on the number of pending RPCs for
+   * a particular region.  Once the low watermark is hit, one RPC will be
+   * failed with a {@link PleaseThrottleException}.  This is an advisory
+   * warning that HBase isn't keeping up and that the application should
+   * slow down its HBase usage momentarily.  After hitting the low watermark,
+   * further RPCs that are still getting NSRE'd on the same region will get
+   * buffered again until we hit the high watermark.  Once the high watermark
+   * is hit, all subsequent RPCs that get NSRE'd will immediately fail with a
+   * {@link PleaseThrottleException} (and they will fail-fast).
+   * @param rpc The RPC that failed or is going to fail with an NSRE.
+   * @param region_name The name of the region this RPC is going to.
+   * Obviously, this method cannot be used for RPCs that aren't targeted
+   * at a particular region.
+   * @param e The exception that caused (or may cause) this RPC to fail.
+   */
+  void handleNSRE(HBaseRpc rpc,
+                  final byte[] region_name,
+                  final NotServingRegionException e) {
+    final boolean can_retry_rpc = !cannotRetryRequest(rpc);
+    boolean known_nsre = true;  // We already aware of an NSRE for this region?
+    ArrayList<HBaseRpc> nsred_rpcs = got_nsre.get(region_name);
+    HBaseRpc exists_rpc = null;  // Our "probe" RPC.
+    if (nsred_rpcs == null) {  // Looks like this could be a new NSRE...
+      final ArrayList<HBaseRpc> newlist = new ArrayList<HBaseRpc>(64);
+      exists_rpc = GetRequest.exists(rpc.table, rpc.key);
+      newlist.add(exists_rpc);
+      if (can_retry_rpc) {
+        newlist.add(rpc);
+      }
+      nsred_rpcs = got_nsre.putIfAbsent(region_name, newlist);
+      if (nsred_rpcs == null) {  // We've just put `newlist'.
+        nsred_rpcs = newlist;    //   => We're the first thread to get
+        known_nsre = false;      //      the NSRE for this region.
+      }
     }
+
+    if (known_nsre) {  // Some RPCs seem to already be pending due to this NSRE
+      boolean reject = true;  // Should we reject this RPC (too many pending)?
+      int size;               // How many RPCs are already pending?
+
+      synchronized (nsred_rpcs) {
+        size = nsred_rpcs.size();
+        // If nsred_rpcs is empty, there was a race with another thread which
+        // is executing RetryNSREd.call and that just cleared this array and
+        // removed nsred_rpcs from got_nsre right after we got the reference,
+        // so we need to add it back there, unless another thread already
+        // did it (in which case we're really unlucky and lost 2 races).
+        if (size == 0) {
+          final ArrayList<HBaseRpc> added =
+            got_nsre.putIfAbsent(region_name, nsred_rpcs);
+          if (added == null) {  // We've just put `nsred_rpcs'.
+            exists_rpc = GetRequest.exists(rpc.table, rpc.key);
+            nsred_rpcs.add(exists_rpc);  // We hold the lock on nsred_rpcs
+            if (can_retry_rpc) {
+              nsred_rpcs.add(rpc);         // so we can safely add those 2.
+            }
+            known_nsre = false;  // We mistakenly believed it was known.
+          } else {  // We lost the second race.
+            // Here we synchronize on two different references without any
+            // apparent ordering guarantee, which can typically lead to
+            // deadlocks.  In this case though we're fine, as any other thread
+            // that still has a reference to `nsred_rpcs' is gonna go through
+            // this very same code path and will lock `nsred_rpcs' first
+            // before finding that it too lost 2 races, so it'll lock `added'
+            // second.  So there's actually a very implicit ordering.
+            if (can_retry_rpc) {
+              synchronized (added) {  // Won't deadlock (explanation above).
+                if (added.isEmpty()) {
+                  LOG.error("WTF?  Shouldn't happen!  Lost 2 races and found"
+                            + " an empty list of NSRE'd RPCs (" + added
+                            + ") for " + Bytes.pretty(region_name));
+                  exists_rpc = GetRequest.exists(rpc.table, rpc.key);
+                  added.add(exists_rpc);
+                } else {
+                  exists_rpc = added.get(0);
+                }
+                if (can_retry_rpc) {
+                  added.add(rpc);  // Add ourselves in the existing array...
+                }
+              }
+            }
+            nsred_rpcs = added;  // ... and update our reference.
+          }
+        }
+        // If `rpc' is the first element in nsred_rpcs, it's our "probe" RPC,
+        // in which case we must not add it to the array again.
+        else if ((exists_rpc = nsred_rpcs.get(0)) != rpc) {
+          if (size < NSRE_HIGH_WATERMARK) {
+            if (size == NSRE_LOW_WATERMARK) {
+              nsred_rpcs.add(null);  // "Skip" one slot.
+            } else if (can_retry_rpc) {
+              reject = false;
+              if (nsred_rpcs.contains(rpc)) {  // XXX O(n) check...  :-/
+                LOG.error("WTF?  Trying to add " + rpc + " twice to NSREd RPC"
+                          + " on " + Bytes.pretty(region_name));
+              } else {
+                nsred_rpcs.add(rpc);
+              }
+            }
+          }
+        } else {           // This is our probe RPC.
+          reject = false;  // So don't reject it.
+        }
+      } // end of the synchronized block.
+
+      // Stop here if this is a known NSRE and `rpc' is not our probe RPC.
+      if (known_nsre && exists_rpc != rpc) {
+        if (size != NSRE_HIGH_WATERMARK && size % NSRE_LOG_EVERY == 0) {
+          final String msg = "There are now " + size
+            + " RPCs pending due to NSRE on " + Bytes.pretty(region_name);
+          if (size + NSRE_LOG_EVERY < NSRE_HIGH_WATERMARK) {
+            LOG.info(msg);  // First message logged at INFO level.
+          } else {
+            LOG.warn(msg);  // Last message logged with increased severity.
+          }
+        }
+        if (reject) {
+          rpc.callback(new PleaseThrottleException(size + " RPCs waiting on "
+            + Bytes.pretty(region_name) + " to come back online", e, rpc));
+        }
+        return;  // This NSRE is already known and being handled.
+      }
+    }
+
+    // Mark this region as being NSRE'd in our regions_cache.
+    invalidateRegionCache(region_name, true, (known_nsre ? "still " : "")
+                          + "seems to be splitting or closing it.");
+
+    // Need a `final' variable to access from within the inner class below.
+    final ArrayList<HBaseRpc> rpcs = nsred_rpcs;  // Guaranteed non-null.
+    final HBaseRpc probe = exists_rpc;  // Guaranteed non-null.
+    nsred_rpcs = null;
+    exists_rpc = null;
+
+    if (known_nsre && probe.attempt > 1) {
+      // Our probe is almost guaranteed to cause a META lookup, so virtually
+      // every time we retry it its attempt count will be incremented twice
+      // (once for a META lookup, once to send the actual probe).  Here we
+      // decrement the attempt count to "de-penalize" the probe from causing
+      // META lookups, because that's what we want it to do.  If the probe
+      // is lucky and doesn't trigger a META lookup (rare) it'll get a free
+      // extra attempt, no big deal.
+      probe.attempt--;
+    } else if (!can_retry_rpc) {
+      // `rpc' isn't a probe RPC and can't be retried, make it fail-fast now.
+      rpc.callback(tooManyAttempts(rpc, e));
+    }
+
+    rpc = null;  // No longer need this reference.
+
+    // Callback we're going to add on our probe RPC.  When this callback gets
+    // invoked, it means that our probe RPC completed, so NSRE situation seems
+    // resolved and we can retry all the RPCs that were waiting on that region.
+    // We also use this callback as an errback to avoid leaking RPCs in case
+    // of an unexpected failure of the probe RPC (e.g. a RegionServer dying
+    // while it's splitting a region, which would cause a connection reset).
+    final class RetryNSREd implements Callback<Object, Object> {
+      public Object call(final Object arg) {
+        if (arg instanceof Exception) {
+          LOG.warn("Probe " + probe + " failed", (Exception) arg);
+        }
+        ArrayList<HBaseRpc> removed = got_nsre.remove(region_name);
+        if (removed != rpcs && removed != null) {  // Should never happen.
+          synchronized (removed) {                 // But just in case...
+            synchronized (rpcs) {
+              LOG.error("WTF?  Impossible!  Removed the wrong list of RPCs"
+                + " from got_nsre.  Was expecting list@"
+                + System.identityHashCode(rpcs) + " (size=" + rpcs.size()
+                + "), got list@" + System.identityHashCode(removed)
+                + " (size=" + removed.size() + ')');
+            }
+            for (final HBaseRpc r : removed) {
+              if (r != null && r != probe) {
+                sendRpcToRegion(r);  // We screwed up but let's not lose RPCs.
+              }
+            }
+            removed.clear();
+          }
+        }
+        removed = null;
+
+        synchronized (rpcs) {
+          if (LOG.isDebugEnabled()) {
+            LOG.debug("Retrying " + rpcs.size() + " RPCs now that the NSRE on "
+                      + Bytes.pretty(region_name) + " seems to have cleared");
+          }
+          final Iterator<HBaseRpc> i = rpcs.iterator();
+          if (i.hasNext()) {
+            HBaseRpc r = i.next();
+            if (r != probe) {
+              LOG.error("WTF?  Impossible!  Expected first == probe but first="
+                        + r + " and probe=" + probe);
+              sendRpcToRegion(r);
+            }
+            while (i.hasNext()) {
+              if ((r = i.next()) != null) {
+                sendRpcToRegion(r);
+              }
+            }
+          } else {
+            LOG.error("WTF?  Impossible!  Empty rpcs array=" + rpcs
+                      + " found by " + this);
+          }
+          rpcs.clear();
+        }
+
+        return arg;
+      }
+      public String toString() {
+        return "retry other RPCs NSRE'd on " + Bytes.pretty(region_name);
+      }
+    };
+
+    // It'll take a short while for HBase to clear the NSRE.  If a
+    // region is being split, we should be able to use it again pretty
+    // quickly, but if a META entry is stale (e.g. due to RegionServer
+    // failures / restarts), it may take up to several seconds.
+    final class NSRETimer implements TimerTask {
+      public void run(final Timeout timeout) {
+        if (probe.attempt == 0) {  // Brand new probe.
+          probe.getDeferred().addBoth(new RetryNSREd());
+        }
+        if (LOG.isDebugEnabled()) {
+          LOG.debug("Done waiting after NSRE on " + Bytes.pretty(region_name)
+                    + ", retrying " + probe);
+        }
+        // Make sure the probe will cause a META lookup.
+        invalidateRegionCache(region_name, false, null);
+        sendRpcToRegion(probe);  // Restart the RPC.
+      }
+      public String toString() {
+        return "probe NSRE " + probe;
+      }
+    };
+
+    // Linear backoff followed by exponential backoff.  Some NSREs can be
+    // resolved in a second or so, some seem to easily take ~6 seconds,
+    // sometimes more when a RegionServer has failed and the master is slowly
+    // splitting its logs and re-assigning its regions.
+    final int wait_ms = probe.attempt < 4
+      ? 200 * (probe.attempt + 2)     // 400, 600, 800, 1000
+      : 1000 + (1 << probe.attempt);  // 1016, 1032, 1064, 1128, 1256, 1512, ..
+    timer.newTimeout(new NSRETimer(), wait_ms, MILLISECONDS);
   }
 
   // ----------------------------------------------------------------- //

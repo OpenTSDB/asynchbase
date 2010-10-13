@@ -89,6 +89,9 @@ final class RegionInfo implements Comparable<RegionInfo> {
    * The start row of the region will be stored in {@code out_start_key[0]}.
    * Think "pointer-to-pointer" in Java (yeah!).
    * @return A newly created {@link RegionInfo}.
+   * If calling {@link #table} on the object returned gives a reference to
+   * {@link HBaseClient#EMPTY_ARRAY}, then the META entry indicates that the
+   * region has been split (and thus this entry shouldn't be used).
    * @throws RegionOfflineException if the META entry indicates that the
    * region is offline.
    * @throws BrokenMetaException if the {@link KeyValue} seems invalid.
@@ -107,9 +110,6 @@ final class RegionInfo implements Comparable<RegionInfo> {
     final boolean offline = buf.readByte() != 0;
     final long region_id = buf.readLong();
     final byte[] region_name = HBaseRpc.readByteArray(buf);
-    if (offline) {
-      throw new RegionOfflineException(region_name);
-    }
     // TODO(tsuna): Can we easily de-dup this array with another RegionInfo?
     byte[] table;
     try {
@@ -122,7 +122,6 @@ final class RegionInfo implements Comparable<RegionInfo> {
     final byte[] start_key = HBaseRpc.readByteArray(buf);
     // Table description and hash code are left, but we don't care.
 
-    final RegionInfo region = new RegionInfo(table, region_name, stop_key);
     if (LOG.isDebugEnabled()) {
       LOG.debug("Got " + Bytes.pretty(table) + "'s region ["
                 + Bytes.pretty(start_key) + '-'
@@ -130,6 +129,17 @@ final class RegionInfo implements Comparable<RegionInfo> {
                 + ", region_id=" + region_id + ", region_name="
                 + Bytes.pretty(region_name) + ", split=" + split);
     }
+    // RegionServers set both `offline' and `split' to `false' on the parent
+    // region after it's been split.  We normally don't expect to ever observe
+    // such regions as any META lookup should find the new daughter regions.
+    // But just in case, we make sure to not throw an exception in this case.
+    if (offline && !split) {
+      throw new RegionOfflineException(region_name);
+    }
+    // If the region has been split, we put a special marker instead of
+    // the table name to indicate that this region has been split.
+    final RegionInfo region = new RegionInfo(split ? EMPTY_ARRAY : table,
+                                             region_name, stop_key);
     out_start_key[0] = start_key;
     return region;
   }
@@ -154,15 +164,7 @@ final class RegionInfo implements Comparable<RegionInfo> {
 
   @Override
   public int compareTo(final RegionInfo other) {
-    int d;
-    if ((d = Bytes.memcmp(table, other.table)) != 0) {
-      return d;
-    } else if ((d = Bytes.memcmp(region_name, other.region_name)) != 0) {
-      return d;
-    } else {
-      d = Bytes.memcmp(stop_key, other.stop_key);
-    }
-    return d;
+    return Bytes.memcmp(region_name, other.region_name);
   }
 
   public boolean equals(final Object other) {
@@ -184,7 +186,11 @@ final class RegionInfo implements Comparable<RegionInfo> {
       // let's multiply its length by 2 to avoid re-allocations.
       + region_name.length + stop_key.length * 2);
     buf.append("RegionInfo(table=");
-    Bytes.pretty(buf, table);
+    if (table == EMPTY_ARRAY) {
+      buf.append("<NSRE marker>");
+    } else {
+      Bytes.pretty(buf, table);
+    }
     buf.append(", region_name=");
     Bytes.pretty(buf, region_name);
     buf.append(", stop_key=");
