@@ -486,30 +486,47 @@ public final class HBaseClient {
    * failure.  TODO(tsuna): Document possible / common failure scenarios.
    */
   public Deferred<Object> shutdown() {
-    // 1. Flush everything.
-    return flush().addCallback(new Callback<Object, Object>() {
+    // This is part of step 3.  We need to execute this in its own thread
+    // because Netty gets stuck in an infinite loop if you try to shut it
+    // down from within a thread of its own thread pool.  They don't want
+    // to fix this so as a workaround we always shut Netty's thread pool
+    // down from another thread.
+    final class ShutdownThread extends Thread {
+      ShutdownThread() {
+        super("HBaseClient@" + HBaseClient.super.hashCode() + " shutdown");
+      }
+      public void run() {
+        // This terminates the Executor.  TODO(tsuna): Don't do this if
+        // the executor doesn't belong to us (right now it always does).
+        channel_factory.releaseExternalResources();
+      }
+    };
+
+    // 3. Release all other resources.
+    final class ReleaseResourcesCB implements Callback<Object, Object> {
       public Object call(final Object arg) {
-        // 2. Terminate all connections.
-        return disconnectEverything().addCallback(
-          new Callback<Object, Object>() {
-            public Object call(final Object arg) {
-              LOG.debug("Releasing all remaining resources");
-              // 3. Release all other resources.
-              timer.stop();
-              // This terminate the Executor.  TODO(tsuna): Don't do this if
-              // the executor doesn't belong to us (right now it always does).
-              channel_factory.releaseExternalResources();
-              return arg;
-            }
-            public String toString() {
-              return "release resources callback";
-            }
-          });
+        LOG.debug("Releasing all remaining resources");
+        timer.stop();
+        new ShutdownThread().start();
+        return arg;
+      }
+      public String toString() {
+        return "release resources callback";
+      }
+    }
+
+    // 2. Terminate all connections.
+    final class DisconnectCB implements Callback<Object, Object> {
+      public Object call(final Object arg) {
+        return disconnectEverything().addCallback(new ReleaseResourcesCB());
       }
       public String toString() {
         return "disconnect callback";
       }
-    });
+    }
+
+    // 1. Flush everything.
+    return flush().addCallback(new DisconnectCB());
   }
 
   /**
