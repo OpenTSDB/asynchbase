@@ -261,6 +261,19 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
    * Attempts to gracefully terminate the connection to this RegionServer.
    */
   public Deferred<Object> shutdown() {
+    final class RetryShutdown<T> implements Callback<Deferred<Object>, T> {
+      private final int nrpcs;
+      RetryShutdown(final int nrpcs) {
+        this.nrpcs = nrpcs;
+      }
+      public Deferred<Object> call(final T ignored) {
+        return shutdown();
+      }
+      public String toString() {
+        return "wait until " + nrpcs + " RPCs complete";
+      }
+    };
+
     // First, check whether we have RPCs in flight.  If we do, we need to wait
     // until they complete.
     {
@@ -271,29 +284,34 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
       }
       final int size = inflight.size();
       if (size > 0) {
-        return Deferred.group(inflight).addCallbackDeferring(
-          new Callback<Deferred<Object>, ArrayList<Object>>() {
-            public Deferred<Object> call(final ArrayList<Object> arg) {
-              return shutdown();
-            }
-            public String toString() {
-              return "wait until " + size + " RPCs complete";
-            }
-          });
+        return Deferred.group(inflight)
+          .addCallbackDeferring(new RetryShutdown<ArrayList<Object>>(size));
+      }
+      // Then check whether have buffered edits.  If we do, flush them.
+      // Copy the edits to local variables and null out the buffers.
+      MultiPutRequest edit_buffer;
+      synchronized (this) {
+        edit_buffer = this.edit_buffer;
+        this.edit_buffer = null;
+      }
+      if (edit_buffer != null && edit_buffer.size() != 0) {
+        return doFlush(edit_buffer)
+          .addCallbackDeferring(new RetryShutdown<Object>(1));
       }
     }
 
     synchronized (this) {
       if (pending_rpcs != null && !pending_rpcs.isEmpty()) {
-        LOG.error("Shutdown requested on " + this
-                  + " while there are pending RPCs: " + pending_rpcs);
-        final NonRecoverableException shuttingdown =
-          new NonRecoverableException("shutting down");
+        final ArrayList<Deferred<Object>> pending =
+          new ArrayList<Deferred<Object>>(pending_rpcs.size());
         for (final HBaseRpc rpc : pending_rpcs) {
-          rpc.callback(shuttingdown);
+          pending.add(rpc.getDeferred());
         }
+        return Deferred.group(pending).addCallbackDeferring(
+          new RetryShutdown<ArrayList<Object>>(pending.size()));
       }
     }
+
     final Channel chancopy = chan;     // Make a copy as ...
     if (chancopy == null) {
       return Deferred.fromResult(null);
