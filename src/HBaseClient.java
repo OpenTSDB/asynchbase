@@ -1020,7 +1020,8 @@ public final class HBaseClient {
    * If you want to use a cache, call {@link #getRegion} instead.
    * @param table The table to which the row belongs.
    * @param key The row key for which we want to locate the region.
-   * @return A deferred client for the region that serves the given row.
+   * @return A deferred called back when the lookup completes.  The deferred
+   * carries an unspecified result.
    * @see #discoverRegion
    */
   private Deferred<Object> locateRegion(final byte[] table, final byte[] key) {
@@ -1033,10 +1034,32 @@ public final class HBaseClient {
       // Lookup in .META. which region server has the region we want.
       final RegionClient client = region2client.get(meta_region);
       if (client != null && client.isAlive()) {
-        return client.getClosestRowBefore(meta_region.name(), meta_key, INFO)
-          .addCallback(meta_lookup_done)
-          // This errback needs to run *after* the callback above.
-          .addErrback(newLocateRegionErrback(table, key));
+        final boolean has_permit = client.acquireMetaLookupPermit();
+        if (!has_permit) {
+          // If we failed to acquire a permit, it's worth checking if someone
+          // looked up the region we're interested in.  Every once in a while
+          // this will save us a META lookup.
+          if (getRegion(table, key) != null) {
+            return Deferred.fromResult(null);  // Looks like no lookup needed.
+          }
+        }
+        final Deferred<Object> d =
+          client.getClosestRowBefore(meta_region.name(), meta_key, INFO)
+          .addCallback(meta_lookup_done);
+        if (has_permit) {
+          final class ReleaseMetaLookupPermit implements Callback<Object, Object> {
+            public Object call(final Object arg) {
+              client.releaseMetaLookupPermit();
+              return arg;
+            }
+            public String toString() {
+              return "release .META. lookup permit";
+            }
+          };
+          d.addBoth(new ReleaseMetaLookupPermit());
+        }
+        // This errback needs to run *after* the callback above.
+        return d.addErrback(newLocateRegionErrback(table, key));
       }
     }
 

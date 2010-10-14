@@ -34,6 +34,7 @@ import java.util.Map;
 import java.util.NoSuchElementException;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.Semaphore;
 import java.util.concurrent.atomic.AtomicInteger;
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
 
@@ -162,6 +163,15 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
       return "flush commits of " + RegionClient.this;
     }
   };
+
+  /**
+   * Semaphore used to rate-limit META lookups and prevent "META storms".
+   * <p>
+   * Once we have more than this number of concurrent META lookups, we'll
+   * start to throttle ourselves slightly.
+   * @see #acquireMetaLookupPermit
+   */
+  private final Semaphore meta_lookups = new Semaphore(100);
 
   /**
    * Constructor.
@@ -374,6 +384,45 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
   };
 
   /**
+   * Attempts to acquire a permit before performing a META lookup.
+   * <p>
+   * This method should be called prior to starting a META lookup with
+   * {@link #getClosestRowBefore}.  Whenever it's called we try to acquire a
+   * permit from the {@link #meta_lookups} semaphore.  Because we promised a
+   * non-blocking API, we actually only wait for a handful of milliseconds to
+   * get a permit.  If you don't get one, you can proceed anyway without one.
+   * This strategy doesn't incur too much overhead seems rather effective to
+   * avoid "META storms".  For instance, if a thread creates 100k requests for
+   * slightly different rows that all miss our local META cache, then we'd
+   * kick off 100k META lookups.  The very small pause introduced by the
+   * acquisition of a permit is typically effective enough to let in-flight
+   * META lookups complete and throttle the application a bit, which will
+   * cause subsequent requests to hit our META cache.
+   * <p>
+   * If this method returns {@code true}, you <b>must</b> make sure you call
+   * {@link #releaseMetaLookupPermit} once you're done with META.
+   * @return {@code true} if a permit was acquired, {@code false} otherwise.
+   */
+  boolean acquireMetaLookupPermit() {
+    try {
+      // With such a low timeout, the JVM may chose to spin-wait instead of
+      // de-scheduling the thread (and causing context switches and whatnot).
+      return meta_lookups.tryAcquire(5, MILLISECONDS);
+    } catch (InterruptedException e) {
+      Thread.currentThread().interrupt();  // Make this someone else's problem.
+      return false;
+    }
+  }
+
+  /**
+   * Releases a META lookup permit that was acquired.
+   * @see #acquireMetaLookupPermit
+   */
+  void releaseMetaLookupPermit() {
+    meta_lookups.release();
+  }
+
+  /**
    * Finds the highest row that's less than or equal to the given row.
    * @param region_name The name of the region in which to search.
    * @param row The row to search.
@@ -385,7 +434,12 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
     Deferred<ArrayList<KeyValue>> getClosestRowBefore(final byte[] region_name,
                                                       final byte[] row,
                                                       final byte[] family) {
-    final HBaseRpc rpc = new HBaseRpc(GET_CLOSEST_ROW_BEFORE) {
+    final class GetClosestRowBefore extends HBaseRpc {
+      GetClosestRowBefore() {
+        super(GET_CLOSEST_ROW_BEFORE);
+      }
+
+      @Override
       ChannelBuffer serialize() {
         // region.length and row.length will use at most a 3-byte VLong.
         // This is because VLong wastes 1 byte of meta-data + 2 bytes of
@@ -419,6 +473,7 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
       }
     };
 
+    final HBaseRpc rpc = new GetClosestRowBefore();
     final Deferred<ArrayList<KeyValue>> d = rpc.getDeferred()
       .addCallback(got_closest_row_before);
     sendRpc(rpc);
