@@ -944,8 +944,11 @@ public final class HBaseClient {
     final byte[] key = request.key();
     final RegionInfo region = getRegion(table, key);
 
-    final class RetryRpc<T> implements Callback<Deferred<Object>, T> {
-      public Deferred<Object> call(final T ignored) {
+    final class RetryRpc implements Callback<Deferred<Object>, Object> {
+      public Deferred<Object> call(final Object arg) {
+        if (arg instanceof NonRecoverableException) {
+          return Deferred.fromError((NonRecoverableException) arg);
+        }
         return sendRpcToRegion(request);
       }
       public String toString() {
@@ -959,7 +962,7 @@ public final class HBaseClient {
           new NotServingRegionException("Region known to be unavailable",
                                         request);
         final Deferred<Object> d = request.getDeferred()
-          .addBothDeferring(new RetryRpc<Object>());
+          .addBothDeferring(new RetryRpc());
         handleNSRE(request, region.name(), nsre);
         return d;
       }
@@ -971,8 +974,7 @@ public final class HBaseClient {
         return d;
       }
     }
-    return locateRegion(table, key)
-      .addBothDeferring(new RetryRpc<RegionClient>());
+    return locateRegion(table, key).addBothDeferring(new RetryRpc());
   }
 
   /**
@@ -1019,12 +1021,9 @@ public final class HBaseClient {
    * @param table The table to which the row belongs.
    * @param key The row key for which we want to locate the region.
    * @return A deferred client for the region that serves the given row.
-   * @see #root_lookup_done
-   * @see #meta_lookup_done
    * @see #discoverRegion
    */
-  private Deferred<RegionClient> locateRegion(final byte[] table,
-                                              final byte[] key) {
+  private Deferred<Object> locateRegion(final byte[] table, final byte[] key) {
     // We don't know in which region this row key is.  Let's look it up.
     // First, see if we already know where to look in .META.
     final byte[] meta_key = createRegionSearchKey(table, key);
@@ -1049,17 +1048,7 @@ public final class HBaseClient {
     final RegionClient rootregion = this.rootregion;
     if (rootregion == null) {
       LOG.info("Need to find the -ROOT- region");
-      return zkclient.waitForRoot(
-        new Callback<Deferred<RegionClient>, RegionClient>() {
-          public Deferred<RegionClient> call(final RegionClient client) {
-            // Just restart the call, while we were waiting for the -ROOT-
-            // table we may also have looked up the right META entry.
-            return locateRegion(table, key);
-          }
-          public String toString() {
-            return "locateRegion find ROOT";
-          }
-        });
+      return zkclient.getDeferredRoot();
     }
     return rootregion.getClosestRowBefore(ROOT_REGION, root_key, INFO)
       .addCallback(root_lookup_done)
@@ -1068,29 +1057,26 @@ public final class HBaseClient {
   }
 
   /** Callback executed when a lookup in META completes.  */
-  private final Callback<RegionClient, ArrayList<KeyValue>> meta_lookup_done =
-      new Callback<RegionClient, ArrayList<KeyValue>>() {
-        public RegionClient call(final ArrayList<KeyValue> arg) {
-          return discoverRegion(arg);
-        }
-        public String toString() {
-          return "locateRegion in META";
-        }
-      };
+  private final class MetaCB implements Callback<Object, ArrayList<KeyValue>> {
+    public Object call(final ArrayList<KeyValue> arg) {
+      return discoverRegion(arg);
+    }
+    public String toString() {
+      return "locateRegion in META";
+    }
+  };
+  private final MetaCB meta_lookup_done = new MetaCB();
 
   /** Callback executed when a lookup in -ROOT- completes.  */
-  private final Callback<RegionClient, ArrayList<KeyValue>> root_lookup_done =
-      new Callback<RegionClient, ArrayList<KeyValue>>() {
-        public RegionClient call(final ArrayList<KeyValue> arg) {
-          discoverRegion(arg);
-          // Don't return the client, since it's a client for the .META.
-          // table, not the client for whatever table that was requested.
-          return null;
-        }
-        public String toString() {
-          return "locateRegion in ROOT";
-        }
-      };
+  private final class RootCB implements Callback<Object, ArrayList<KeyValue>> {
+    public Object call(final ArrayList<KeyValue> arg) {
+      return discoverRegion(arg);
+    }
+    public String toString() {
+      return "locateRegion in ROOT";
+    }
+  };
+  private final RootCB root_lookup_done = new RootCB();
 
   /**
    * Creates a new callback that handles errors during META lookups.
@@ -2039,7 +2025,7 @@ public final class HBaseClient {
      * -ROOT- region can queue up here to be called back when it's available.
      * Must grab this' monitor before accessing.
      */
-    private Deferred<RegionClient> deferred_rootregion;
+    private ArrayList<Deferred<Object>> deferred_rootregion;
 
     /**
      * Constructor.
@@ -2054,29 +2040,30 @@ public final class HBaseClient {
     }
 
     /**
-     * Returns a deferred client for the -ROOT- region.
+     * Returns a deferred that will be called back once we found -ROOT-.
      * @param cb The callback you want to be called once the -ROOT- region is
-     * discovered.  This callback <strong>must</strong> return its argument.
-     * @return A deferred client, on which {@code cb} has already been added.
+     * discovered.
+     * @return A deferred which will be invoked with an unspecified argument
+     * once we know where -ROOT- is.  Note that by the time you get called
+     * back, we may have lost the connection to the -ROOT- region again.
      */
-    public Deferred<RegionClient> waitForRoot(
-      final Callback<Deferred<RegionClient>, RegionClient> cb) {
+    public Deferred<Object> getDeferredRoot() {
+      final Deferred<Object> d = new Deferred<Object>();
       synchronized (this) {
         if (deferred_rootregion == null) {
-          deferred_rootregion = new Deferred<RegionClient>();
+          deferred_rootregion = new ArrayList<Deferred<Object>>();
         }
         connectZK();  // Kick off a connection if needed.
-        final Deferred<RegionClient> d = new Deferred<RegionClient>();
-        deferred_rootregion.chain(d);
-        return d.addCallbackDeferring(cb);
+        deferred_rootregion.add(d);
       }
+      return d;
     }
 
     /**
-     * Atomically returns and {@code null}s out the current deferred to which
-     * people waiting for the -ROOT- region are "subscribed".
+     * Atomically returns and {@code null}s out the current list of
+     * Deferreds waiting for the -ROOT- region.
      */
-    private Deferred<RegionClient> atomicGetAndRemoveDeferred() {
+    private ArrayList<Deferred<Object>> atomicGetAndRemoveWaiters() {
       synchronized (this) {
         try {
           return deferred_rootregion;
@@ -2104,7 +2091,7 @@ public final class HBaseClient {
             LOG.warn("No longer connected to ZooKeeper, event=" + event);
             disconnectZK();
             // Reconnect only if we're still trying to locate -ROOT-.
-            synchronized (ZKClient.this) {
+            synchronized (this) {
               if (deferred_rootregion != null) {
                 connectZK();
               }
@@ -2220,9 +2207,11 @@ public final class HBaseClient {
           final String hostport = host + ':' + port;
           LOG.info("Connecting to -ROOT- region @ " + hostport);
           final RegionClient client = rootregion = newClient(host, port);
-          final Deferred<RegionClient> d = atomicGetAndRemoveDeferred();
-          if (d != null) {
-            d.callback(client);
+          final ArrayList<Deferred<Object>> ds = atomicGetAndRemoveWaiters();
+          if (ds != null) {
+            for (final Deferred<Object> d : ds) {
+              d.callback(client);
+            }
           }
           disconnectZK();
           // By the time we're done, we may need to find -ROOT- again.  So
