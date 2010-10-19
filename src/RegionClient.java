@@ -442,19 +442,21 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
 
   /**
    * Finds the highest row that's less than or equal to the given row.
-   * @param region_name The name of the region in which to search.
+   * @param region The region in which to search.
+   * @param tabl The table to which the key belongs.
    * @param row The row to search.
    * @param family The family to get.
    * @return A Deferred {@link ArrayList} of {@link KeyValue}.  The list is
    * guaranteed to be non-{@code null} but may be empty.
    */
   public
-    Deferred<ArrayList<KeyValue>> getClosestRowBefore(final byte[] region_name,
+    Deferred<ArrayList<KeyValue>> getClosestRowBefore(final RegionInfo region,
+                                                      final byte[] tabl,
                                                       final byte[] row,
                                                       final byte[] family) {
     final class GetClosestRowBefore extends HBaseRpc {
       GetClosestRowBefore() {
-        super(GET_CLOSEST_ROW_BEFORE);
+        super(GET_CLOSEST_ROW_BEFORE, tabl, row);
       }
 
       @Override
@@ -464,6 +466,7 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
         // payload.  HBase's own KeyValue code uses a short to store the row
         // length.  Finally, family.length cannot be on more than 1 byte,
         // HBase's own KeyValue code uses a byte to store the family length.
+        final byte[] region_name = region.name();
         final ChannelBuffer buf = newBuffer(4      // num param
           + 1 + 2 + region_name.length             // 3 times 1 byte for the
           + 1 + 4 + row.length                     //   parm type + VLong
@@ -475,23 +478,10 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
         return buf;
       }
 
-      public String toString() {
-        final StringBuilder buf = new StringBuilder(
-          51 + region_name.length + 2 + 6 + row.length + 2 + 9
-          + family.length + 2 + 10 + 1 + 1);
-        buf.append("HBaseRpc(method=\"getClosestRowBefore\", region_name=");
-        Bytes.pretty(buf, region_name);
-        buf.append(", row=");
-        Bytes.pretty(buf, row);
-        buf.append(", family=");
-        Bytes.pretty(buf, family);
-        buf.append(", attempt=").append(attempt);
-        buf.append(')');
-        return buf.toString();
-      }
     };
 
     final HBaseRpc rpc = new GetClosestRowBefore();
+    rpc.setRegion(region);
     final Deferred<ArrayList<KeyValue>> d = rpc.getDeferred()
       .addCallback(got_closest_row_before);
     sendRpc(rpc);

@@ -966,7 +966,8 @@ public final class HBaseClient {
         handleNSRE(request, region.name(), nsre);
         return d;
       }
-      final RegionClient client = region2client.get(region);
+      final RegionClient client = (Bytes.equals(region.table(), ROOT)
+                                   ? rootregion : region2client.get(region));
       if (client != null && client.isAlive()) {
         request.setRegion(region);
         final Deferred<Object> d = request.getDeferred();
@@ -1025,10 +1026,14 @@ public final class HBaseClient {
    * @see #discoverRegion
    */
   private Deferred<Object> locateRegion(final byte[] table, final byte[] key) {
+    final boolean is_meta = Bytes.equals(table, META);
+    final boolean is_root = !is_meta && Bytes.equals(table, ROOT);
     // We don't know in which region this row key is.  Let's look it up.
     // First, see if we already know where to look in .META.
-    final byte[] meta_key = createRegionSearchKey(table, key);
-    final RegionInfo meta_region = getRegion(META, meta_key);
+    // Except, obviously, we don't wanna search in META for META or ROOT.
+    final byte[] meta_key = is_root ? null : createRegionSearchKey(table, key);
+    final RegionInfo meta_region = (is_meta || is_root
+                                    ? null : getRegion(META, meta_key));
 
     if (meta_region != null) {
       // Lookup in .META. which region server has the region we want.
@@ -1044,7 +1049,7 @@ public final class HBaseClient {
           }
         }
         final Deferred<Object> d =
-          client.getClosestRowBefore(meta_region.name(), meta_key, INFO)
+          client.getClosestRowBefore(meta_region, META, meta_key, INFO)
           .addCallback(meta_lookup_done);
         if (has_permit) {
           final class ReleaseMetaLookupPermit implements Callback<Object, Object> {
@@ -1063,17 +1068,21 @@ public final class HBaseClient {
       }
     }
 
-    // Alright so we don't even know where to look in .META.
-    // Let's lookup the right .META. entry in -ROOT-.
-    final byte[] root_key = createRegionSearchKey(META, meta_key);
     // Make a local copy to avoid race conditions where we test the reference
     // to be non-null but then it becomes null before the next statement.
     final RegionClient rootregion = this.rootregion;
     if (rootregion == null) {
       LOG.info("Need to find the -ROOT- region");
       return zkclient.getDeferredRoot();
+    } else if (is_root) {  // Don't search ROOT in ROOT.
+      return Deferred.fromResult(null);  // We already got ROOT (w00t).
     }
-    return rootregion.getClosestRowBefore(ROOT_REGION, root_key, INFO)
+    // Alright so we don't even know where to look in .META.
+    // Let's lookup the right .META. entry in -ROOT-.
+    final byte[] root_key = createRegionSearchKey(META, meta_key);
+    final RegionInfo root_region = new RegionInfo(ROOT, ROOT_REGION,
+                                                  EMPTY_ARRAY);
+    return rootregion.getClosestRowBefore(root_region, ROOT, root_key, INFO)
       .addCallback(root_lookup_done)
       // This errback needs to run *after* the callback above.
       .addErrback(newLocateRegionErrback(table, key));
@@ -1167,6 +1176,10 @@ public final class HBaseClient {
    * information in which we currently believe that the given row ought to be.
    */
   private RegionInfo getRegion(final byte[] table, final byte[] key) {
+    if (Bytes.equals(table, ROOT)) {
+      return new RegionInfo(ROOT, ROOT_REGION, EMPTY_ARRAY);
+    }
+
     byte[] region_name = createRegionSearchKey(table, key);
     Map.Entry<byte[], RegionInfo> entry = regions_cache.floorEntry(region_name);
     if (entry == null) {
