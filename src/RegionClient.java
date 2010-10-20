@@ -1109,20 +1109,26 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
   }
 
   public String toString() {
-    final StringBuilder buf = new StringBuilder(13 + 10 + 6 + 64 + 16 + 1 + 17
-                                                + 2 + 1);
+    final StringBuilder buf = new StringBuilder(13 + 10 + 6 + 64 + 16 + 1
+                                                + 9 + 2 + 1 + 2 + 17 + 2 + 1);
     buf.append("RegionClient@")           // =13
       .append(hashCode())                 // ~10
       .append("(chan=")                   // = 6
       .append(chan)                       // ~64 (up to 66 when using IPv4)
       .append(", #pending_rpcs=");        // =16
+    int npending_rpcs;
+    int nedits;
+    int ndedits;
     synchronized (this) {
-      if (pending_rpcs == null) {
-        buf.append('0');                  // = 1
-      } else {                            // or
-        buf.append(pending_rpcs.size());  // ~ 1
-      }
+      npending_rpcs = pending_rpcs == null ? 0 : pending_rpcs.size();
+      ndedits = mput_not_durable == null ? 0 : mput_not_durable.size();
+      nedits = mput_durable == null ? 0 : mput_durable.size();
     }
+    buf.append(npending_rpcs)             // = 1
+      .append(", #edits=")                // = 9
+      .append(ndedits)                    // ~ 2
+      .append('+')                        // = 1
+      .append(nedits);                    // ~ 2
     buf.append(", #rpcs_inflight=")       // =17
       .append(rpcs_inflight.size())       // ~ 2
       .append(')');                       // = 1
