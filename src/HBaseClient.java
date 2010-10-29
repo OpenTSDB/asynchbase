@@ -1085,7 +1085,6 @@ public final class HBaseClient {
     // to be non-null but then it becomes null before the next statement.
     final RegionClient rootregion = this.rootregion;
     if (rootregion == null) {
-      LOG.info("Need to find the -ROOT- region");
       return zkclient.getDeferredRoot();
     } else if (is_root) {  // Don't search ROOT in ROOT.
       return Deferred.fromResult(null);  // We already got ROOT (w00t).
@@ -2100,6 +2099,7 @@ public final class HBaseClient {
       final Deferred<Object> d = new Deferred<Object>();
       synchronized (this) {
         if (deferred_rootregion == null) {
+          LOG.info("Need to find the -ROOT- region");
           deferred_rootregion = new ArrayList<Deferred<Object>>();
         }
         connectZK();  // Kick off a connection if needed.
@@ -2137,11 +2137,11 @@ public final class HBaseClient {
             getRootRegion();
             break;
           default:
-            LOG.warn("No longer connected to ZooKeeper, event=" + event);
             disconnectZK();
             // Reconnect only if we're still trying to locate -ROOT-.
             synchronized (this) {
               if (deferred_rootregion != null) {
+                LOG.warn("No longer connected to ZooKeeper, event=" + event);
                 connectZK();
               }
             }
