@@ -211,10 +211,21 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
       if (LOG.isDebugEnabled()) {
         LOG.debug("Periodic flush timer: flushing edits for " + this);
       }
-      flush();
+      // Copy the edits to local variables and null out the buffers.
+      MultiPutRequest edit_buffer;
+      synchronized (this) {
+        edit_buffer = this.edit_buffer;
+        this.edit_buffer = null;
+      }
+      if (edit_buffer == null || edit_buffer.size() == 0) {
+        return;  // Nothing to flush, let's stop periodic flushes for now.
+      }
+      doFlush(edit_buffer);
     }
+  }
 
-    // Schedule the next periodic flush.
+  /** Schedules the next periodic flush of buffered edits.  */
+  private void scheduleNextPeriodicFlush() {
     final short interval = hbase_client.getFlushInterval();
     if (interval > 0) {
       // Since we often connect to many regions at the same time, we should
@@ -249,6 +260,22 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
       edit_buffer = this.edit_buffer;
       this.edit_buffer = null;
     }
+    return doFlush(edit_buffer);
+  }
+
+  /**
+   * Flushes the given multi-puts.
+   * <p>
+   * Typically this method should be called after atomically getting the
+   * buffers that we need to flush.
+   * @param edit_buffer Edits to flush, can be {@code null}.
+   * @return A {@link Deferred}, whose callback chain will be invoked the
+   * given edits have been flushed.  If the argument is {@code null}, returns
+   * a {@link Deferred} already called back.
+   */
+  private Deferred<Object> doFlush(final MultiPutRequest edit_buffer) {
+    // Note: the argument are shadowing the attribute of the same name.
+    // This is intentional.
     if (edit_buffer == null) {  // Nothing to do.
       return Deferred.fromResult(null);
     }
@@ -518,25 +545,33 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
    */
   private void bufferEdit(final PutRequest request) {
     MultiPutRequest multiput;
+    boolean schedule_flush = false;
 
     synchronized (this) {
       if (edit_buffer == null) {
         edit_buffer = new MultiPutRequest();
         addMultiPutCallbacks(edit_buffer);
+        schedule_flush = true;
       }
       multiput = edit_buffer;
       // Unfortunately we have to hold the monitor on `this' while we do
       // this entire atomic dance.
       multiput.add(request);
       if (multiput.size() < 1024) {  // XXX Don't hardcode.
-        return;   // We're going to buffer this edit for now, stop here.
+        multiput = null;   // We're going to buffer this edit for now.
+      } else {
+        // Execute the edits buffered so far.  But first we must clear
+        // the reference to the buffer we're about to send to HBase.
+        edit_buffer = new MultiPutRequest();
+        addMultiPutCallbacks(edit_buffer);
       }
-      // Execute the edits buffered so far.  But first we must clear
-      // the reference to the buffer we're about to send to HBase.
-      edit_buffer = null;
     }
 
-    sendRpc(multiput);
+    if (schedule_flush) {
+      scheduleNextPeriodicFlush();
+    } else if (multiput != null) {
+      sendRpc(multiput);
+    }
   }
 
   /**
@@ -729,7 +764,6 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
         }
       }
     }
-    periodicFlush();
   }
 
   @Override
