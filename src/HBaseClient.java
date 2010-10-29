@@ -331,6 +331,9 @@ public final class HBaseClient {
    * connected to it.
    * <p>
    * Access to this map must be synchronized by locking its monitor.
+   * Lock ordering: when locking both this map and a RegionClient, the
+   * RegionClient must always be locked first to avoid deadlocks.  Logging
+   * the contents of this map (or calling toString) requires copying it first.
    * <p>
    * This isn't a {@link ConcurrentHashMap} because we don't use it frequently
    * (just when connecting to / disconnecting from RegionServers) and when we
@@ -560,12 +563,22 @@ public final class HBaseClient {
           // Normally, now that we've shutdown() every client, all our caches should
           // be empty since each shutdown() generates a DISCONNECTED event, which
           // causes RegionClientPipeline to call removeClientFromCache().
+          HashMap<String, RegionClient> logme = null;
           synchronized (ip2client) {
             if (!ip2client.isEmpty()) {
-              LOG.error("Some clients are left in the client cache and haven't been"
-                        + " cleaned up: " + ip2client);
+              logme = new HashMap<String, RegionClient>(ip2client);
             }
             ip2client.clear();
+          }
+          if (logme != null) {
+            // Putting this logging statement inside the synchronized block
+            // can lead to a deadlock, since HashMap.toString() is going to
+            // call RegionClient.toString() on each entry, and this locks the
+            // client briefly.  Other parts of the code lock clients first and
+            // the ip2client HashMap second, so this can easily deadlock.
+            LOG.error("Some clients are left in the client cache and haven't"
+                      + " been cleaned up: " + logme);
+            logme = null;
           }
           zkclient.disconnectZK();
           return arg;
