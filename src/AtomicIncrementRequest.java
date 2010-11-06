@@ -26,7 +26,6 @@
  */
 package org.hbase.async;
 
-import java.util.Arrays;
 
 import org.jboss.netty.buffer.ChannelBuffer;
 

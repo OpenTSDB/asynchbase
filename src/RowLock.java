@@ -26,7 +26,6 @@
  */
 package org.hbase.async;
 
-import org.jboss.netty.buffer.ChannelBuffer;
 
 /**
  * An explicit row lock.
