@@ -1193,19 +1193,19 @@ public final class HBaseClient {
     byte[] region_name = createRegionSearchKey(table, key);
     Map.Entry<byte[], RegionInfo> entry = regions_cache.floorEntry(region_name);
     if (entry == null) {
-      if (LOG.isDebugEnabled()) {
-        LOG.debug("getRegion(table=" + Bytes.pretty(table) + ", key="
-                  + Bytes.pretty(key) + "): cache miss (nothing found).");
-      }
+      //if (LOG.isDebugEnabled()) {
+      //  LOG.debug("getRegion(table=" + Bytes.pretty(table) + ", key="
+      //            + Bytes.pretty(key) + "): cache miss (nothing found).");
+      //}
       return null;
     }
 
     if (!isCacheKeyForTable(table, entry.getKey())) {
-      if (LOG.isDebugEnabled()) {
-        LOG.debug("getRegion(table=" + Bytes.pretty(table) + ", key="
-                  + Bytes.pretty(key) + "): cache miss (diff table):"
-                  + " region=" + entry.getValue());
-      }
+      //if (LOG.isDebugEnabled()) {
+      //  LOG.debug("getRegion(table=" + Bytes.pretty(table) + ", key="
+      //            + Bytes.pretty(key) + "): cache miss (diff table):"
+      //            + " region=" + entry.getValue());
+      //}
       return null;
     }
 
@@ -1218,18 +1218,18 @@ public final class HBaseClient {
         // If the stop key is an empty byte array, it means this region is the
         // last region for this table and this key ought to be in that region.
         && Bytes.memcmp(key, stop_key) >= 0) {
-      if (LOG.isDebugEnabled()) {
-        LOG.debug("getRegion(table=" + Bytes.pretty(table) + ", key="
-                  + Bytes.pretty(key) + "): miss (key beyond stop_key):"
-                  + " region=" + region);
-      }
+      //if (LOG.isDebugEnabled()) {
+      //  LOG.debug("getRegion(table=" + Bytes.pretty(table) + ", key="
+      //            + Bytes.pretty(key) + "): miss (key beyond stop_key):"
+      //            + " region=" + region);
+      //}
       return null;
     }
 
-    if (LOG.isDebugEnabled()) {
-      LOG.debug("getRegion(table=" + Bytes.pretty(table) + ", key="
-                + Bytes.pretty(key) + "): cache hit, found: " + region);
-    }
+    //if (LOG.isDebugEnabled()) {
+    //  LOG.debug("getRegion(table=" + Bytes.pretty(table) + ", key="
+    //            + Bytes.pretty(key) + "): cache hit, found: " + region);
+    //}
     return region;
   }
 
