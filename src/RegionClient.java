@@ -700,16 +700,22 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
         Channels.write(chan, serialized);
       }
     } else {
+      boolean dead;  // Shadows this.dead;
       synchronized (this) {
-        if (dead) {
-          failOrRetryRpcs(new SingletonList<HBaseRpc>(rpc),
-                          new ConnectionResetException(null));
-          return;
+        if (!(dead = this.dead)) {
+          if (pending_rpcs == null) {
+            pending_rpcs = new ArrayList<HBaseRpc>();
+          }
+          pending_rpcs.add(rpc);
         }
-        if (pending_rpcs == null) {
-          pending_rpcs = new ArrayList<HBaseRpc>();
+      }
+      if (dead) {
+        if (rpc.getRegion() == null) {  // Can't retry.
+          rpc.callback(new ConnectionResetException(null));
+        } else {
+          hbase_client.sendRpcToRegion(rpc);  // Re-schedule the RPC.
         }
-        pending_rpcs.add(rpc);
+        return;
       }
       LOG.debug("RPC queued: {}", rpc);
     }
@@ -791,18 +797,25 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
    * all edits buffered will be re-scheduled.
    */
   private void cleanup(final Channel chan) {
-    final HBaseException exception = new ConnectionResetException(chan);
+    final ConnectionResetException exception =
+      new ConnectionResetException(chan);
     failOrRetryRpcs(rpcs_inflight.values(), exception);
     rpcs_inflight.clear();
 
     ArrayList<HBaseRpc> rpcs;
+    MultiPutRequest multiput;
     synchronized (this) {
       dead = true;
       rpcs = pending_rpcs;
       pending_rpcs = null;
+      multiput = edit_buffer;
+      edit_buffer = null;
     }
     if (rpcs != null) {
       failOrRetryRpcs(rpcs, exception);
+    }
+    if (multiput != null) {
+      multiput.callback(exception);  // Make it fail.
     }
   }
 
@@ -813,13 +826,17 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
    * retried.
    */
   private void failOrRetryRpcs(final Collection<HBaseRpc> rpcs,
-                               final HBaseException exception) {
+                               final ConnectionResetException exception) {
     for (final HBaseRpc rpc : rpcs) {
       final RegionInfo region = rpc.getRegion();
       if (region == null) {  // Can't retry, dunno where this RPC should go.
         rpc.callback(exception);
       } else {
-        hbase_client.sendRpcToRegion(rpc);  // Re-schedule the RPC.
+        final NotServingRegionException nsre =
+          new NotServingRegionException("Connection reset: "
+                                        + exception.getMessage(), rpc);
+        // Re-schedule the RPC by (ab)using the NSRE handling mechanism.
+        hbase_client.handleNSRE(rpc, region.name(), nsre);
       }
     }
   }
