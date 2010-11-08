@@ -1280,7 +1280,8 @@ public final class HBaseClient {
           return null;
         }
         start_key = tmp[0];
-      } else if (Arrays.equals(SERVER, qualifier)) {
+      } else if (Arrays.equals(SERVER, qualifier)
+                 && kv.value() != EMPTY_ARRAY) {  // Empty during NSRE.
         final byte[] hostport = kv.value();
         int colon = hostport.length - 1;
         for (/**/; colon > 0 /* Can't be at the beginning */; colon--) {
@@ -1303,6 +1304,10 @@ public final class HBaseClient {
             + Bytes.pretty(hostport), kv);
         }
       }
+      // TODO(tsuna): If this is the parent of a split region, there are two
+      // other KVs that could be useful: `info:splitA' and `info:splitB'.
+      // Need to investigate whether we can use those as a hint to update our
+      // regions_cache with the daughter regions of the split.
     }
     if (start_key == null) {
       throw new BrokenMetaException(null, "It didn't contain any"

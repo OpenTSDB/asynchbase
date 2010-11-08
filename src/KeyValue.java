@@ -198,7 +198,7 @@ public final class KeyValue implements Comparable<KeyValue> {
     HBaseRpc.checkNonEmptyArrayLength(buf, rowkey_length);
     final int value_length = buf.readInt();
     //LOG.debug("value_length="+value_length);
-    HBaseRpc.checkNonEmptyArrayLength(buf, value_length);
+    HBaseRpc.checkArrayLength(buf, value_length);
     final short key_length = buf.readShort();
     //LOG.debug("key_length="+key_length);
     HBaseRpc.checkArrayLength(buf, value_length);
@@ -217,11 +217,13 @@ public final class KeyValue implements Comparable<KeyValue> {
     final int qual_length = (rowkey_length - key_length - family_length
                              - 2 - 1 - 8 - 1);
     HBaseRpc.checkArrayLength(buf, qual_length);
-    final byte[] qualifier = new byte[qual_length];
+    final byte[] qualifier = (qual_length > 0 ? new byte[qual_length]
+                              : HBaseClient.EMPTY_ARRAY);
     buf.readBytes(qualifier);
     final long timestamp = buf.readLong();
     final byte key_type = buf.readByte();
-    final byte[] value = new byte[value_length];
+    final byte[] value = (value_length > 0 ? new byte[value_length]
+                          : HBaseClient.EMPTY_ARRAY);
     buf.readBytes(value);
     if (2 + key_length + 1 + family_length + qual_length + 8 + 1
         != rowkey_length) {  // XXX TMP DEBUG
