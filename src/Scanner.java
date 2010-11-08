@@ -479,10 +479,12 @@ public final class Scanner {
         if (response == null) {  // We're done scanning this region.
           final byte[] region_stop_key = region.stopKey();
           // Check to see if this region is the last we should scan (either
-          // because it's the last region or because its stop_key is greater
-          // than or equal to the stop_key of this scanner).
-          if (region_stop_key == EMPTY_ARRAY
-              || Bytes.memcmp(stop_key, region_stop_key) <= 0) {
+          // because (1) it's the last region or (3) because its stop_key is
+          // greater than or equal to the stop_key of this scanner provided
+          // that (2) we're not trying to scan until the end of the table).
+          if (region_stop_key == EMPTY_ARRAY                           // (1)
+              || (stop_key != EMPTY_ARRAY                              // (2)
+                  && Bytes.memcmp(stop_key, region_stop_key) <= 0)) {  // (3)
             get_next_rows_request = null;        // free();
             family = qualifier = null;           // free();
             start_key = stop_key = EMPTY_ARRAY;  // free() but mustn't be null.
