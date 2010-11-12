@@ -696,29 +696,34 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
         }
       }
       final ChannelBuffer serialized = encode(rpc);
-      if (serialized != null) {
+      if (serialized == null) {  // Error during encoding.
+        return;  // Stop here.  RPC has been failed already.
+      }
+      final Channel chan = this.chan;  // Volatile read.
+      if (chan != null) {  // Double check if we disconnected during encode().
         Channels.write(chan, serialized);
-      }
-    } else {
-      boolean dead;  // Shadows this.dead;
-      synchronized (this) {
-        if (!(dead = this.dead)) {
-          if (pending_rpcs == null) {
-            pending_rpcs = new ArrayList<HBaseRpc>();
-          }
-          pending_rpcs.add(rpc);
-        }
-      }
-      if (dead) {
-        if (rpc.getRegion() == null) {  // Can't retry.
-          rpc.callback(new ConnectionResetException(null));
-        } else {
-          hbase_client.sendRpcToRegion(rpc);  // Re-schedule the RPC.
-        }
         return;
-      }
-      LOG.debug("RPC queued: {}", rpc);
+      }  // else: continue to the "we're disconnected" code path below.
     }
+
+    boolean dead;  // Shadows this.dead;
+    synchronized (this) {
+      if (!(dead = this.dead)) {
+        if (pending_rpcs == null) {
+          pending_rpcs = new ArrayList<HBaseRpc>();
+        }
+        pending_rpcs.add(rpc);
+      }
+    }
+    if (dead) {
+      if (rpc.getRegion() == null) {  // Can't retry.
+        rpc.callback(new ConnectionResetException(null));
+      } else {
+        hbase_client.sendRpcToRegion(rpc);  // Re-schedule the RPC.
+      }
+      return;
+    }
+    LOG.debug("RPC queued: {}", rpc);
   }
 
   /**
