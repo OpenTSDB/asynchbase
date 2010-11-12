@@ -1786,14 +1786,12 @@ public final class HBaseClient {
       client = chan.getPipeline().get(RegionClient.class);
       ip2client.put(hostport, client);  // This is guaranteed to return null.
     }
-    if (chan != null) {
-      // Configure and connect the channel without locking ip2client.
-      final SocketChannelConfig config = chan.getConfig();
-      config.setConnectTimeoutMillis(5000);
-      config.setTcpNoDelay(true);
-      config.setKeepAlive(true);  // TODO(tsuna): Is this really needed?
-      chan.connect(new InetSocketAddress(host, port));  // Won't block.
-    }
+    // Configure and connect the channel without locking ip2client.
+    final SocketChannelConfig config = chan.getConfig();
+    config.setConnectTimeoutMillis(5000);
+    config.setTcpNoDelay(true);
+    config.setKeepAlive(true);  // TODO(tsuna): Is this really needed?
+    chan.connect(new InetSocketAddress(host, port));  // Won't block.
     return client;
   }
 
