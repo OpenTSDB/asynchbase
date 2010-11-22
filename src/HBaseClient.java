@@ -526,6 +526,22 @@ public final class HBaseClient {
       }
     }
 
+    // If some RPCs are waiting for -ROOT- to be discovered, we too must wait
+    // because some of those RPCs could be edits that we must not lose.
+    final Deferred<Object> d = zkclient.getDeferredRootIfBeingLookedUp();
+    if (d != null) {
+      final class RetryShutdown implements Callback<Object, Object> {
+        public Object call(final Object arg) {
+          shutdown();
+          return arg;
+        }
+        public String toString() {
+          return "retry shutdown";
+        }
+      }
+      return d.addBoth(new RetryShutdown());
+    }
+
     // 1. Flush everything.
     return flush().addCallback(new DisconnectCB());
   }
@@ -2090,8 +2106,6 @@ public final class HBaseClient {
 
     /**
      * Returns a deferred that will be called back once we found -ROOT-.
-     * @param cb The callback you want to be called once the -ROOT- region is
-     * discovered.
      * @return A deferred which will be invoked with an unspecified argument
      * once we know where -ROOT- is.  Note that by the time you get called
      * back, we may have lost the connection to the -ROOT- region again.
@@ -2107,6 +2121,27 @@ public final class HBaseClient {
         deferred_rootregion.add(d);
       }
       return d;
+    }
+
+    /**
+     * Like {@link getDeferredRoot} but returns null if we're not already
+     * trying to find -ROOT-.
+     * In other words calling this method doesn't trigger a -ROOT- lookup
+     * unless there's already one in flight.
+     * @return @{code null} if -ROOT- isn't being looked up right now,
+     * otherwise a deferred which will be invoked with an unspecified argument
+     * once we know where -ROOT- is.  Note that by the time you get called
+     * back, we may have lost the connection to the -ROOT- region again.
+     */
+    Deferred<Object> getDeferredRootIfBeingLookedUp() {
+      synchronized (this) {
+        if (deferred_rootregion == null) {
+          return null;
+        }
+        final Deferred<Object> d = new Deferred<Object>();
+        deferred_rootregion.add(d);
+        return d;
+      }
     }
 
     /**
