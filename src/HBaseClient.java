@@ -564,7 +564,7 @@ public final class HBaseClient {
     for (final RegionClient client : ip2client_copy.values()) {
       d.add(client.shutdown());
     }
-    if (rootregion != null) {
+    if (rootregion != null && rootregion.isAlive()) {
       // It's OK if we already did that in the loop above.
       d.add(rootregion.shutdown());
     }
