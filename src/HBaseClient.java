@@ -1098,7 +1098,7 @@ public final class HBaseClient {
     // Make a local copy to avoid race conditions where we test the reference
     // to be non-null but then it becomes null before the next statement.
     final RegionClient rootregion = this.rootregion;
-    if (rootregion == null) {
+    if (rootregion == null || !rootregion.isAlive()) {
       return zkclient.getDeferredRoot();
     } else if (is_root) {  // Don't search ROOT in ROOT.
       return Deferred.fromResult(null);  // We already got ROOT (w00t).
