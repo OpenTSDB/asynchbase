@@ -1258,7 +1258,23 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
     /** The header to send.  */
     private static final byte[] HELLO_HEADER;
     static {
-      HELLO_HEADER = new byte[4 + 1 + 4 + 2 + 29 + 2 + 48 + 2 + 47];
+      // CDH3 b3 includes a temporary patch that is non-backwards compatible
+      // and results in clients getting disconnected as soon as they send the
+      // header, because the HBase RPC protocol provides no mechanism to send
+      // an error message back to the client during the initial "hello" stage
+      // of a connection.
+      if (System.getProperty("org.hbase.async.cdh3b3") != null) {
+        final byte[] user = Bytes.UTF8(System.getProperty("user.name", "hbaseasync"));
+        HELLO_HEADER = new byte[4 + 1 + 4 + 4 + user.length];
+        headerCDH3b3(user);
+      } else {
+        HELLO_HEADER = new byte[4 + 1 + 4 + 2 + 29 + 2 + 48 + 2 + 47];
+        normalHeader();
+      }
+    }
+
+    /** Common part of the hello header: magic + version.  */
+    private static ChannelBuffer commonHeader() {
       final ChannelBuffer buf = ChannelBuffers.wrappedBuffer(HELLO_HEADER);
       buf.clear();  // Set the writerIndex to 0.
 
@@ -1266,6 +1282,13 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
       // "hrpc" followed by the version (3).
       // See HBaseServer#HEADER and HBaseServer#CURRENT_VERSION.
       buf.writeBytes(new byte[] { 'h', 'r', 'p', 'c', 3 });  // 4 + 1
+      return buf;
+    }
+
+    /** Hello header for HBase 0.90.0 and earlier.  */
+    private static void normalHeader() {
+      final ChannelBuffer buf = commonHeader();
+
       // Serialized UserGroupInformation to say who we are.
       // We're not nice so we're not gonna say who we are and we'll just send
       // `null' (hadoop.io.ObjectWritable$NullInstance).
@@ -1290,6 +1313,18 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
       // -4 because the length itself isn't part of the payload.
       // -5 because the "hrpc" + version isn't part of the payload.
       buf.setInt(5, buf.writerIndex() - 4 - 5);
+    }
+
+    /** CDH3b3-specific header for Hadoop "security".  */
+    private static void headerCDH3b3(final byte[] user) {
+      // Our username.
+      final ChannelBuffer buf = commonHeader();
+
+      // Length of the encoded string (useless).
+      buf.writeInt(4 + user.length);  // 4
+      // String as encoded by `WritableUtils.writeString'.
+      buf.writeInt(user.length);      // 4
+      buf.writeBytes(user);           // length bytes
     }
 
     private SayHelloFirstRpc() {  // Singleton, can't instantiate from outside.
