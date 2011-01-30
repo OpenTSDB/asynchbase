@@ -804,7 +804,7 @@ public final class Scanner {
     }
 
     /** Serializes this request.  */
-    ChannelBuffer serialize() {
+    ChannelBuffer serialize(final byte unused_server_version) {
       final ChannelBuffer buf = newBuffer(predictSerializedSize());
       buf.writeInt(2);  // Number of parameters.
 
@@ -876,7 +876,7 @@ public final class Scanner {
     }
 
     /** Serializes this request.  */
-    ChannelBuffer serialize() {
+    ChannelBuffer serialize(final byte unused_server_version) {
       final ChannelBuffer buf = newBuffer(4 + 1 + 8 + 1 + 4);
       buf.writeInt(2);  // Number of parameters.
       writeHBaseLong(buf, scanner_id);
@@ -901,7 +901,7 @@ public final class Scanner {
     }
 
     /** Serializes this request.  */
-    ChannelBuffer serialize() {
+    ChannelBuffer serialize(final byte unused_server_version) {
       final ChannelBuffer buf = newBuffer(4 + 1 + 8);
       buf.writeInt(1);  // Number of parameters.
       writeHBaseLong(buf, scanner_id);

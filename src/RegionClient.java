@@ -124,6 +124,20 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
   private boolean dead = false;
 
   /**
+   * What RPC protocol version is this RegionServer using?.
+   * -1 means unknown.  No synchronization is typically used to read / write
+   * this value, as it's typically accessed after a volatile read or updated
+   * before a volatile write on {@link #deferred_server_version}.
+   */
+  private byte server_version = -1;
+
+  /**
+   * If we're in the process of looking up the server version...
+   * ... This will be non-null.
+   */
+  private volatile Deferred<Long> deferred_server_version;
+
+  /**
    * Multi-put request in which we accumulate buffered edits.
    * Manipulating this reference requires synchronizing on `this'.
    */
@@ -381,39 +395,91 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
     return d;
   }
 
+  private static final byte[] GET_PROTOCOL_VERSION = new byte[] {
+    'g', 'e', 't',
+    'P', 'r', 'o', 't', 'o', 'c', 'o', 'l',
+    'V', 'e', 'r', 's', 'i', 'o', 'n'
+  };
+
+  final static class GetProtocolVersionRequest extends HBaseRpc {
+
+    GetProtocolVersionRequest() {
+      super(GET_PROTOCOL_VERSION);
+    }
+
+    ChannelBuffer serialize(final byte unused_server_version) {
+    /** Pre-serialized form for this RPC, which is always the same.  */
+      // num param + type 1 + string length + string + type 2 + long
+      final ChannelBuffer buf = newBuffer(4 + 1 + 1 + 44 + 1 + 8);
+      buf.writeInt(2);  // Number of parameters.
+      // 1st param.
+      writeHBaseString(buf, "org.apache.hadoop.hbase.ipc.HRegionInterface");
+      writeHBaseLong(buf, 24);  // 2nd param.
+      return buf;
+    }
+  };
+
+  /**
+   * Returns a new {@link GetProtocolVersionRequest} ready to go.
+   * The RPC returned already has the right callback set.
+   */
+  @SuppressWarnings("unchecked")
+  private GetProtocolVersionRequest getProtocolVersionRequest() {
+    final GetProtocolVersionRequest rpc = new GetProtocolVersionRequest();
+    final Deferred/*<Long>*/ version = rpc.getDeferred();
+    deferred_server_version = version;  // Volatile write.
+    version.addCallback(got_protocol_version);
+    return rpc;
+  }
+
   /**
    * Asks the server which RPC protocol version it's running.
    * @return a Deferred {@link Long}.
    */
+  @SuppressWarnings("unchecked")
   public Deferred<Long> getProtocolVersion() {
-    final HBaseRpc rpc = new HBaseRpc(Bytes.ISO88591("getProtocolVersion")) {
-      ChannelBuffer serialize() {
-        // num param + type 1 + string length + string + type 2 + long
-        final ChannelBuffer buf = newBuffer(4 + 1 + 1 + 44 + 1 + 8);
-        buf.writeInt(2);  // Number of parameters.
-        // 1st param.
-        writeHBaseString(buf, "org.apache.hadoop.hbase.ipc.HRegionInterface");
-        // 2nd param.
-        writeHBaseLong(buf, 24);
-        return buf;
-      }
-    };
+    Deferred<Long> version = deferred_server_version;  // Volatile read.
+    if (server_version != -1) {
+      return Deferred.fromResult((long) server_version);
+    }
+    // Non-atomic check-then-update is OK here.  In case of a race and a
+    // thread overwrites this reference by creating another lookup, we just
+    // pay for an unnecessary network round-trip, not a big deal.
+    if (version != null) {
+      return version;
+    }
 
-    final Deferred<Long> d = rpc.getDeferred()
-      .addCallback(got_protocol_version);
+    final GetProtocolVersionRequest rpc = getProtocolVersionRequest();
     sendRpc(rpc);
-    return d;
+    return (Deferred) rpc.getDeferred();
   }
 
   /** Singleton callback to handle responses of getProtocolVersion RPCs.  */
   private final Callback<Long, Object> got_protocol_version =
     new Callback<Long, Object>() {
       public Long call(final Object response) {
-        if (response instanceof Long) {
-          return (Long) response;
-        } else {
+        if (!(response instanceof Long)) {
           throw new InvalidResponseException(Long.class, response);
         }
+        final Long version = (Long) response;
+        final long v = version;
+        if (v < 0 || v > Byte.MAX_VALUE) {
+          throw new InvalidResponseException("getProtocolVersion returned a "
+            + (v < 0 ? "negative" : "too large") + " value", version);
+        }
+        final byte prev_version = server_version;
+        server_version = (byte) v;
+        deferred_server_version = null;  // Volatile write.
+        if (prev_version == -1) {   // We're 1st to get the version.
+          if (LOG.isDebugEnabled()) {
+            LOG.debug(chan + " uses RPC protocol version " + server_version);
+          }
+        } else if (prev_version != server_version) {
+          LOG.error("WTF?  We previously found that " + chan + " uses RPC"
+                    + " protocol version " + prev_version + " but now the "
+                    + " server claims to be using version " + server_version);
+        }
+        return (Long) response;
       }
       public String toString() {
         return "type getProtocolVersion response";
@@ -486,7 +552,7 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
       }
 
       @Override
-      ChannelBuffer serialize() {
+      ChannelBuffer serialize(final byte unused_server_version) {
         // region.length and row.length will use at most a 3-byte VLong.
         // This is because VLong wastes 1 byte of meta-data + 2 bytes of
         // payload.  HBase's own KeyValue code uses a short to store the row
@@ -877,6 +943,22 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
   // ------------------------------- //
 
   /**
+   * Callback that retries the given RPC and returns its argument unchanged.
+   */
+  final class RetryRpc<T> implements Callback<T, T> {
+    private final HBaseRpc rpc;
+
+    RetryRpc(final HBaseRpc rpc) {
+      this.rpc = rpc;
+    }
+
+    public T call(final T arg) {
+      sendRpc(rpc);
+      return arg;
+    }
+  }
+
+  /**
    * Encodes an RPC and sends it downstream (to the wire).
    * <p>
    * This method can be called from any thread so it needs to be thread-safe.
@@ -888,6 +970,10 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
     if (!rpc.hasDeferred()) {
       throw new AssertionError("Should never happen!  rpc=" + rpc);
     }
+    if (rpc.versionSensitive() && server_version == -1) {
+      getProtocolVersion().addBoth(new RetryRpc<Long>(rpc));
+      return null;
+    }
 
     // TODO(tsuna): Add rate-limiting here.  We don't want to send more than
     // N QPS to a given region server.
@@ -898,7 +984,7 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
     final int rpcid = this.rpcid.incrementAndGet();
     ChannelBuffer payload;
     try {
-      payload = rpc.serialize();
+      payload = rpc.serialize(server_version);
       // We assume that payload has enough bytes at the beginning for us to
       // "fill in the blanks" and put the RPC header.  This is accounted for
       // automatically by HBaseRpc#newBuffer.  If someone creates their own
@@ -1342,7 +1428,21 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
         final MessageEvent me = (MessageEvent) event;
         final ChannelBuffer payload = (ChannelBuffer) me.getMessage();
         final ChannelBuffer header = ChannelBuffers.wrappedBuffer(HELLO_HEADER);
-        final ChannelBuffer buf = ChannelBuffers.wrappedBuffer(header, payload);
+
+        // Piggyback a version request in the 1st packet, after the payload
+        // we were trying to send.  This way we'll have the version handy
+        // pretty quickly.  Since it's most likely going to fit in the same
+        // packet we send out, it adds ~zero overhead.  But don't piggyback
+        // a version request if the payload is already a version request.
+        ChannelBuffer buf;
+        if (!isVersionRequest(payload)) {
+          final RegionClient client = ctx.getPipeline().get(RegionClient.class);
+          final ChannelBuffer version =
+            client.encode(client.getProtocolVersionRequest());
+          buf = ChannelBuffers.wrappedBuffer(header, payload, version);
+        } else {
+          buf = ChannelBuffers.wrappedBuffer(header, payload);
+        }
         // We're going to send the header, so let's remove ourselves from the
         // pipeline.
         try {
@@ -1358,6 +1458,23 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
         }
       }
       ctx.sendDownstream(event);
+    }
+
+    /** Inspects the payload and returns true if it's a version RPC.  */
+    private static boolean isVersionRequest(final ChannelBuffer payload) {
+      final int length = GET_PROTOCOL_VERSION.length;
+      // Header = 4+4+2, followed by method name.
+      if (payload.readableBytes() < 4 + 4 + 2 + length) {
+        return false;  // Too short to be a version request.
+      }
+      for (int i = 0; i < length; i++) {
+        if (payload.getByte(4 + 4 + 2 + i) != GET_PROTOCOL_VERSION[i]) {
+          return false;
+        }
+      }
+      // No other RPC has a name that starts with "getProtocolVersion"
+      // so this must be a version request.
+      return true;
     }
 
   }

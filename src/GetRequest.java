@@ -141,6 +141,10 @@ public final class GetRequest extends HBaseRpc {
     return this;
   }
 
+  boolean versionSensitive() {
+    return true;  // Sad.  HBASE-3174 broke backwards compatibilty!@#$%^  :(
+  }
+
   /**
    * Predicts a lower bound on the serialized size of this RPC.
    * This is to avoid using a dynamic buffer, to avoid re-sizing the buffer.
@@ -148,7 +152,7 @@ public final class GetRequest extends HBaseRpc {
    * to be less than what we need, there will be an exception which will
    * prevent the RPC from being serialized.  That'd be a severe bug.
    */
-  private int predictSerializedSize() {
+  private int predictSerializedSize(final byte server_version) {
     int size = 0;
     size += 4;  // int:  Number of parameters.
     size += 1;  // byte: Type of the 1st parameter.
@@ -163,6 +167,9 @@ public final class GetRequest extends HBaseRpc {
     size += 8;  // long: Lock ID.
     size += 4;  // int:  Max number of versions to return.
     size += 1;  // byte: Whether or not to use a filter.
+    if (server_version >= 26) {  // New in 0.90 (because of HBASE-3174).
+      size += 1;  // byte: Whether or not to cache the blocks read.
+    }
     size += 8;  // long: Minimum timestamp.
     size += 8;  // long: Maximum timestamp.
     size += 1;  // byte: Boolean: "all time".
@@ -181,8 +188,8 @@ public final class GetRequest extends HBaseRpc {
   }
 
   /** Serializes this request.  */
-  ChannelBuffer serialize() {
-    final ChannelBuffer buf = newBuffer(predictSerializedSize());
+  ChannelBuffer serialize(final byte server_version) {
+    final ChannelBuffer buf = newBuffer(predictSerializedSize(server_version));
     buf.writeInt(2);  // Number of parameters.
 
     // 1st param: byte array containing region name
@@ -199,6 +206,10 @@ public final class GetRequest extends HBaseRpc {
     // If the previous boolean was true:
     //   writeByteArray(buf, filter name as byte array);
     //   write the filter itself
+
+    if (server_version >= 26) {  // New in 0.90 (because of HBASE-3174).
+      buf.writeByte(0x01);  // boolean (true): whether to cache the blocks.
+    }
 
     // TimeRange
     buf.writeLong(0);               // Minimum timestamp.

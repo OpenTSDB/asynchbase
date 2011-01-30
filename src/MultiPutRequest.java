@@ -200,7 +200,7 @@ final class MultiPutRequest extends HBaseRpc {
   }
 
   /** Serializes this request.  */
-  ChannelBuffer serialize() {
+  ChannelBuffer serialize(final byte unused_server_version) {
     // Due to the wire format expected by HBase, we need to group all the
     // edits by region, then by key, then by family.  HBase does this by
     // building a crazy map-of-map-of-map-of-list-of-edits, but this is

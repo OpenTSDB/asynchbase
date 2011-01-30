@@ -81,7 +81,7 @@ public final class RowLockRequest extends HBaseRpc {
   }
 
   /** Serializes this request.  */
-  ChannelBuffer serialize() {
+  ChannelBuffer serialize(final byte unused_server_version) {
     final ChannelBuffer buf = newBuffer(predictSerializedSize());
     buf.writeInt(2);  // Number of parameters.
 
@@ -116,7 +116,7 @@ public final class RowLockRequest extends HBaseRpc {
       this.lock = lock;
     }
 
-    ChannelBuffer serialize() {
+    ChannelBuffer serialize(final byte unused_server_version) {
       // num param + type 1 + region length + region + type 2 + long
       final ChannelBuffer buf = newBuffer(4 + 1 + 3 + region.name().length
                                           + 1 + 8);

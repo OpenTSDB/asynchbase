@@ -145,8 +145,15 @@ public abstract class HBaseRpc {
    *
    * Notice that this method is package-private, so only classes within this
    * package can use this as a base class.
+   *
+   * @param server_version The RPC protocol version of the server this RPC is
+   * going to.  If the version of the server is unknown, this will be -1.  If
+   * this RPC cares a lot about the version of the server (due to backwards
+   * incompatible changes in the RPC serialization), the concrete class should
+   * override {@link #versionSensitive} to make sure it doesn't get -1, as the
+   * version is lazily fetched.
    */
-  abstract ChannelBuffer serialize();
+  abstract ChannelBuffer serialize(byte server_version);
 
   /**
    * Name of the method to invoke on the server side.
@@ -303,6 +310,16 @@ public abstract class HBaseRpc {
   /** Checks whether or not this RPC has a Deferred without creating one.  */
   final boolean hasDeferred() {
     return deferred != null;
+  }
+
+  /**
+   * Is the encoding of this RPC sensitive to the RPC protocol version?.
+   * Override this method to return {@code true} in order to guarantee that
+   * the version of the remote server this RPC is going to will be known by
+   * the time this RPC gets serialized.
+   */
+  boolean versionSensitive() {
+    return false;
   }
 
   public String toString() {

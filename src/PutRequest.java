@@ -252,7 +252,7 @@ public final class PutRequest extends HBaseRpc {
   }
 
   /** Serializes this request.  */
-  ChannelBuffer serialize() {
+  ChannelBuffer serialize(final byte unused_server_version) {
     final ChannelBuffer buf = newBuffer(predictSerializedSize());
     buf.writeInt(2);  // Number of parameters.
 
