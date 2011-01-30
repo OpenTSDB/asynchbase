@@ -67,7 +67,11 @@ public abstract class HBaseRpc {
    *
    * When requests are written out to the wire, they're framed.  Meaning, a
    * 4 byte integer value is first written in order to specify how many bytes
-   * are in the request (excluding the first 4 bytes themselves).
+   * are in the request (excluding the first 4 bytes themselves).  The size -1
+   * is special.  The client uses it to send a "ping" to the server at regular
+   * intervals, and the server specifically ignores any RPC with this ID.  We
+   * don't do this in this client, because it's mostly useless, and we rely on
+   * TCP keepalive instead.
    *
    * Then the RPC ID is written (4 bytes).  BTW, all integer values are
    * encoded in big endian, as it's the default in Java world (Sun, SPARC...).
