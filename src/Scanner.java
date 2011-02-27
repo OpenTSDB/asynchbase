@@ -99,7 +99,7 @@ public final class Scanner {
    * is not part of the API and is subject to change without notice.
    * @see #setMaxNumRows
    */
-  public static final int DEFAULT_MAX_NUM_ROWS = 16;
+  public static final int DEFAULT_MAX_NUM_ROWS = 128;
 
   /** Special reference we use to indicate we're done scanning.  */
   private static final RegionInfo DONE =
@@ -348,17 +348,24 @@ public final class Scanner {
   }
 
   /**
-   * Sets the maximum number of rows to scan per RPC.
+   * Sets the maximum number of rows to scan per RPC (for better performance).
    * <p>
    * Every time {@link #nextRows()} is invoked, up to this number of rows may
-   * be returned.  The default value is {@link #DEFAULT_MAX_NUM_ROWS}.  Using
-   * a smaller value (such as 1) is not recommended as it will make your client
-   * send an RPC to the RegionServer frequently in order to get new data.
+   * be returned.  The default value is {@link #DEFAULT_MAX_NUM_ROWS}.
    * <p>
-   * If you know you're gonna be scanning lots of small rows (few cells, and
+   * <b>This knob has a high performance impact.</b>  If it's too low, you'll
+   * do too many network round-trips, if it's too high, you'll spend too much
+   * time and memory handling large amounts of data.  The right value depends
+   * on the size of the rows you're retrieving.
+   * <p>
+   * If you know you're going to be scanning lots of small rows (few cells, and
    * each cell doesn't store a lot of data), you can get better performance by
    * scanning more rows by RPC.  You probably always want to retrieve at least
    * a few dozen kilobytes per call.
+   * <p>
+   * If you want to err on the safe side, it's better to use a value that's a
+   * bit too high rather than a bit too low.  Avoid extreme values (such as 1
+   * or 1024) unless you know what you're doing.
    * <p>
    * Note that unlike many other methods, it's fine to change this value while
    * scanning.  Changing it will take affect all the subsequent RPCs issued.
