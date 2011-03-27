@@ -306,10 +306,16 @@ final class MultiPutRequest extends HBaseRpc {
     }  // Yay, we made it!
 
     // Monkey-patch everything for the last set of edits.
-    buf.setInt(nkeys_per_family_index, nkeys_per_family);
-    buf.setInt(nkeys_per_family_index + 4, nbytes_per_family);
-    buf.setInt(nfamilies_index, nfamilies);
-    buf.setInt(nkeys_index, nkeys);
+    if (nkeys_per_family_index >= 0) {
+    	buf.setInt(nkeys_per_family_index, nkeys_per_family);
+    	buf.setInt(nkeys_per_family_index + 4, nbytes_per_family);
+    }
+    if (nfamilies_index >= 0) {
+    	buf.setInt(nfamilies_index, nfamilies);
+    }
+    if (nkeys_index >= 0) {
+    	buf.setInt(nkeys_index, nkeys);
+    }
 
     // Monkey-patch the number of regions affected by this RPC.
     buf.setInt(4 + 4 + 2 + MULTI_PUT.length  // header length
