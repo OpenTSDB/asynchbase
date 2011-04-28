@@ -701,7 +701,7 @@ public final class HBaseClient {
   }
 
   /** Singleton callback to handle responses of "get" RPCs.  */
-  private static final Callback<ArrayList<KeyValue>, Object> got =
+   static final Callback<ArrayList<KeyValue>, Object> got =
     new Callback<ArrayList<KeyValue>, Object>() {
       public ArrayList<KeyValue> call(final Object response) {
         if (response instanceof ArrayList) {
@@ -2275,23 +2275,37 @@ public final class HBaseClient {
             connectZK();
             return;
           }
-          final String root = new String(data);
-          final int portsep = root.lastIndexOf(':');
+          if (data == null || data.length <= 0) {
+            LOG.error("ZK data for root region location was empty");
+            return; // TODO(tsuna): Add a watch to wait until the file changes.
+          }
+          String rootLocationStr = new String(data);
+          // The zk data can be formatted as <hostname> ':' <port>
+          // OR as <hostname> ',' <port> ',' <startcode>.  First look for ':'.
+          String host = null;
+          String portStr = null;
+          final int portsep = rootLocationStr.lastIndexOf(':');
           if (portsep < 0) {
-            LOG.error("Couldn't find the port of the -ROOT- region in \""
-                      + root + '"');
+            // Perhaps its in hbase 0.92 ServerName comma-delimited format?
+            String [] parts = rootLocationStr.split(",");
+            if (parts.length != 3) {
+              LOG.error("Failed parse of znode root region location data " + rootLocationStr);
+              return;
+            }
+            host = parts[0];
+            portStr = parts[1];
+          } else {
+            host = rootLocationStr.substring(0, portsep);
+            portStr = rootLocationStr.substring(portsep + 1); 
+          }
+          String ip = getIP(host);
+          if (ip == null) {
+            LOG.error("Couldn't resolve the IP of the -ROOT- region in \"" + host + '"');
             return;  // TODO(tsuna): Add a watch to wait until the file changes.
           }
-          final String host = getIP(root.substring(0, portsep));
-          if (host == null) {
-            LOG.error("Couldn't resolve the IP of the -ROOT- region in \""
-                      + root + '"');
-            return;  // TODO(tsuna): Add a watch to wait until the file changes.
-          }
-          final int port = parsePortNumber(root.substring(portsep + 1));
-          final String hostport = host + ':' + port;
-          LOG.info("Connecting to -ROOT- region @ " + hostport);
-          final RegionClient client = rootregion = newClient(host, port);
+          int port = parsePortNumber(portStr);
+          LOG.info("Connecting to -ROOT- region @ " + ip + ":" + port);
+          final RegionClient client = rootregion = newClient(ip, port);
           final ArrayList<Deferred<Object>> ds = atomicGetAndRemoveWaiters();
           if (ds != null) {
             for (final Deferred<Object> d : ds) {
