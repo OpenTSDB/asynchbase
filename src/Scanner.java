@@ -547,7 +547,8 @@ public final class Scanner {
           // as nothing guarantees that the client's configuration will be in
           // sync with the server's.  This unnecessarily increases deployment
           // complexity and it's brittle.
-          LOG.warn(old_region + " pretends to not know " + this + ".  I will"
+          final Scanner scnr = Scanner.this;
+          LOG.warn(old_region + " pretends to not know " + scnr + ".  I will"
             + " retry to open a scanner but this is typically because you've"
             + " been holding the scanner open and idle for too long (possibly"
             + " due to a long GC pause on your side or in the RegionServer)",
