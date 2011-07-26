@@ -2113,12 +2113,17 @@ public final class HBaseClient {
     public Deferred<Object> getDeferredRoot() {
       final Deferred<Object> d = new Deferred<Object>();
       synchronized (this) {
-        if (deferred_rootregion == null) {
-          LOG.info("Need to find the -ROOT- region");
-          deferred_rootregion = new ArrayList<Deferred<Object>>();
+        try {
+          connectZK();  // Kick off a connection if needed.
+          if (deferred_rootregion == null) {
+            LOG.info("Need to find the -ROOT- region");
+            deferred_rootregion = new ArrayList<Deferred<Object>>();
+          }
+          deferred_rootregion.add(d);
+        } catch (NonRecoverableException e) {
+          LOG.error(e.getMessage(), e.getCause());
+          d.callback(e);
         }
-        connectZK();  // Kick off a connection if needed.
-        deferred_rootregion.add(d);
       }
       return d;
     }
@@ -2192,6 +2197,9 @@ public final class HBaseClient {
 
     /**
      * Connects to ZooKeeper.
+     * @throws NonRecoverableException if something from which we can't
+     * recover happened -- e.g. us being unable to resolve the hostname
+     * of any of the zookeeper servers.
      */
     private void connectZK() {
       try {
@@ -2202,6 +2210,10 @@ public final class HBaseClient {
           }
           zk = new ZooKeeper(quorum_spec, 5000, this);
         }
+      } catch (UnknownHostException e) {
+        // No need to retry, we usually cannot recover from this.
+        throw new NonRecoverableException("Cannot connect to ZooKeeper,"
+          + " is the quorum specification valid? " + quorum_spec, e);
       } catch (IOException e) {
         LOG.error("Failed to connect to ZooKeeper", e);
         // XXX don't retry recursively, create a timer with an exponential
