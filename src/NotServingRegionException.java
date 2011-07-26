@@ -44,8 +44,19 @@ implements HasFailedRpcException {
    * @param failed_rpc The RPC that caused this exception, if known, or null.
    */
   NotServingRegionException(final String msg, final HBaseRpc failed_rpc) {
-    super(msg + "\nCaused by RPC: " + failed_rpc);
+    super(msg);
     this.failed_rpc = failed_rpc;
+  }
+
+  @Override
+  public String getMessage() {
+    // In many cases this exception never makes it to the outside world, thus
+    // its toString / getMessage methods are never called.  When it's called,
+    // it's typically called only once.  So it makes sense to lazily generate
+    // the message instead of always concatenating the toString representation
+    // of the RPC, which is easily large because it tends to contain long byte
+    // arrays.
+    return super.getMessage() + "\nCaused by RPC: " + failed_rpc;
   }
 
   public HBaseRpc getFailedRpc() {

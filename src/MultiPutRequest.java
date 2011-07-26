@@ -319,7 +319,37 @@ final class MultiPutRequest extends HBaseRpc {
   }
 
   public String toString() {
-    return "MultiPutRequest(edits=" + edits + ')';
+    // Originally this was simply putting all the edits in the toString
+    // representation, but that's way too expensive when we have lots of
+    // edits.  So instead we toString each edit until we hit some
+    // hard-coded upper bound on how much data we're willing to put into
+    // the toString.  If we have too many edits and hit that constant,
+    // we skip all the remaining ones until the last one, as it's often
+    // useful to see the last edit added when debugging.
+    final StringBuilder buf = new StringBuilder();
+    buf.append("MultiPutRequest(edits=[");
+    final int nedits = edits.size();
+    int i;
+    for (i = 0; i < nedits; i++) {
+      if (buf.length() >= 1024) {
+        break;
+      }
+      buf.append(edits.get(i)).append(", ");
+    }
+    if (i < nedits) {
+      if (i == nedits - 1) {
+        buf.append("... 1 edit not shown])");
+      } else {
+        buf.append("... ").append(nedits - 1 - i)
+          .append(" edits not shown ..., ")
+          .append(edits.get(nedits - 1))
+          .append("])");
+      }
+    } else {
+      buf.setLength(buf.length() - 2);  // Remove the last ", "
+      buf.append("])");
+    }
+    return buf.toString();
   }
 
   /**
