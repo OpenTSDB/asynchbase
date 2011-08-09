@@ -30,7 +30,7 @@ top_builddir = build
 package = org.hbase.async
 spec_title = Asynchronous HBase
 spec_vendor = StumbleUpon, Inc.
-spec_version = 1.0
+spec_version = 1.1
 hbaseasync_SOURCES = \
 	src/AtomicIncrementRequest.java	\
 	src/BrokenMetaException.java	\
