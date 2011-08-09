@@ -205,6 +205,10 @@ public final class DeleteRequest extends HBaseRpc
     return qualifiers;
   }
 
+  public String toString() {
+    return super.toStringWithQualifiers("DeleteRequest", family, qualifiers);
+  }
+
   // ---------------------- //
   // Package private stuff. //
   // ---------------------- //

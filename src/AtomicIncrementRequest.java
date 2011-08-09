@@ -166,6 +166,12 @@ public final class AtomicIncrementRequest extends HBaseRpc
     return qualifier;
   }
 
+  public String toString() {
+    return super.toStringWithQualifier("AtomicIncrementRequest",
+                                       family, qualifier,
+                                       ", amount=" + amount);
+  }
+
   // ---------------------- //
   // Package private stuff. //
   // ---------------------- //

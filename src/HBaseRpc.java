@@ -392,12 +392,105 @@ public abstract class HBaseRpc {
   }
 
   public String toString() {
-    return "HBaseRpc(method=" + Bytes.pretty(method)
-      + ", table=" + Bytes.pretty(table)
-      + ", key=" + Bytes.pretty(key)
-      + ", region=" + region
-      + ", attempt=" + attempt
-      + ')';
+    // Try to rightsize the buffer.
+    final StringBuilder buf = new StringBuilder(16 + method.length + 2
+      + 8 + (table == null ? 4 : table.length + 2)  // Assumption: ASCII => +2
+      + 6 + (key == null ? 4 : key.length * 2)      // Assumption: binary => *2
+      + 9 + (region == null ? 4 : region.stringSizeHint())
+      + 10 + 1 + 1);
+    final int c = buf.capacity();
+    buf.append("HBaseRpc(method=");
+    Bytes.pretty(buf, method);
+    buf.append(", table=");
+    Bytes.pretty(buf, table);
+    buf.append(", key=");
+    Bytes.pretty(buf, key);
+    buf.append(", region=");
+    if (region == null) {
+      buf.append("null");
+    } else {
+      region.toStringbuf(buf);
+    }
+    buf.append(", attempt=").append(attempt);
+    buf.append(')');
+    return buf.toString();
+  }
+
+  /**
+   * Helper for subclass's {@link #toString} implementations.
+   * <p>
+   * This is used by subclasses such as {@link DeleteRequest}
+   * or {@link GetRequest}, to avoid code duplication.
+   * @param classname The name of the class of the caller.
+   * @param family A possibly null family name.
+   * @param qualifiers A non-empty list of qualifiers or null.
+   */
+  final String toStringWithQualifiers(final String classname,
+                                      final byte[] family,
+                                      final byte[][] qualifiers) {
+    final StringBuilder buf = new StringBuilder(256);  // min=182
+    buf.append(classname).append("(table=");
+    Bytes.pretty(buf, table);
+    buf.append(", key=");
+    Bytes.pretty(buf, key);
+    buf.append(", family=");
+    Bytes.pretty(buf, family);
+    buf.append(", qualifiers=");
+    if (qualifiers == null) {
+      buf.append("null");
+    } else {
+      buf.append('[');
+      for (final byte[] qualifier : qualifiers) {
+        Bytes.pretty(buf, qualifier);
+        buf.append(", ");
+      }
+      buf.setLength(buf.length() - 2);  // Remove the last ", "
+      buf.append(']');
+    }
+    buf.append(", attempt=").append(attempt)
+      .append(", region=");
+    if (region == null) {
+      buf.append("null");
+    } else {
+      region.toStringbuf(buf);
+    }
+    buf.append(')');
+    return buf.toString();
+  }
+
+  /**
+   * Helper for subclass's {@link #toString} implementations.
+   * <p>
+   * This is used by subclasses such as {@link DeleteRequest}
+   * or {@link GetRequest}, to avoid code duplication.
+   * @param classname The name of the class of the caller.
+   * @param family A possibly null family name.
+   * @param qualifier A possibly null column qualifier.
+   * @param fields Additional fields to include in the output.
+   */
+  final String toStringWithQualifier(final String classname,
+                                     final byte[] family,
+                                     final byte[] qualifier,
+                                     final String fields) {
+    final StringBuilder buf = new StringBuilder(256);  // min=181
+    buf.append(classname).append("(table=");
+    Bytes.pretty(buf, table);
+    buf.append(", key=");
+    Bytes.pretty(buf, key);
+    buf.append(", family=");
+    Bytes.pretty(buf, family);
+    buf.append(", qualifier=");
+    Bytes.pretty(buf, qualifier);
+    buf.append(fields);
+    buf.append(", attempt=").append(attempt)
+      .append(", region=");
+    if (region == null) {
+      buf.append("null");
+    } else {
+      region.toStringbuf(buf);
+    }
+    buf.append(')');
+    return buf.toString();
   }
 
   // --------------------- //

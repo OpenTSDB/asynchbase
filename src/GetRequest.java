@@ -182,6 +182,11 @@ public final class GetRequest extends HBaseRpc
     return qualifiers;
   }
 
+  public String toString() {
+    final String klass = method() == GET ? "GetRequest" : "Exists";
+    return super.toStringWithQualifiers(klass, family, qualifiers);
+  }
+
   // ---------------------- //
   // Package private stuff. //
   // ---------------------- //

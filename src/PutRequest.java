@@ -202,6 +202,15 @@ public final class PutRequest extends HBaseRpc
     return value;
   }
 
+  public String toString() {
+    return super.toStringWithQualifier("PutRequest",
+                                       family, qualifier,
+                                       ", value=" + Bytes.pretty(value)
+                                       + ", lockid=" + lockid
+                                       + ", durable=" + durable
+                                       + ", bufferable=" + bufferable);
+  }
+
   // ---------------------- //
   // Package private stuff. //
   // ---------------------- //
@@ -328,17 +337,6 @@ public final class PutRequest extends HBaseRpc
     buf.writeLong(Long.MAX_VALUE);        // The timestamp (again!).
     buf.writeByte(0x04);                  // Type of edit (4 = Put).
     buf.writeBytes(value);                // Finally, the value.
-  }
-
-  public String toString() {
-    return "PutRequest(" + super.toString()
-      + ", family=" + Bytes.pretty(family)
-      + ", qualifier=" + Bytes.pretty(qualifier)
-      + ", value=" + Bytes.pretty(value)
-      + ", lockid=" + lockid
-      + ", durable=" + durable
-      + ", bufferable=" + bufferable
-      + ')';
   }
 
 }

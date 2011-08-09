@@ -180,11 +180,24 @@ final class RegionInfo implements Comparable<RegionInfo> {
       ^ Arrays.hashCode(stop_key);
   }
 
+  /** Returns a hint as to how many bytes are needed for {@link #toString}.  */
+  int stringSizeHint() {
+    return 48  // boilerplate
+      + table.length + 2
+      // region_name and stop_key are likely to contain non-ascii characters,
+      // so let's multiply its length by 2 to avoid re-allocations.
+      + region_name.length * 2
+      + stop_key.length * 2;
+  }
+
   public String toString() {
-    final StringBuilder buf = new StringBuilder(48  // boilerplate
-      // the stop_key is likely to contain non-ascii characters, so
-      // let's multiply its length by 2 to avoid re-allocations.
-      + region_name.length + stop_key.length * 2);
+    final StringBuilder buf = new StringBuilder(stringSizeHint());
+    toStringbuf(buf);
+    return buf.toString();
+  }
+
+  /** Like {@link #toString} but puts the output in the given buffer.  */
+  void toStringbuf(final StringBuilder buf) {
     buf.append("RegionInfo(table=");
     if (table == EMPTY_ARRAY) {
       buf.append("<NSRE marker>");
@@ -196,7 +209,6 @@ final class RegionInfo implements Comparable<RegionInfo> {
     buf.append(", stop_key=");
     Bytes.pretty(buf, stop_key);
     buf.append(')');
-    return buf.toString();
   }
 
   /** Singleton to compare region names.  */
