@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2010  StumbleUpon, Inc.  All rights reserved.
+ * Copyright (c) 2010, 2011  StumbleUpon, Inc.  All rights reserved.
  * This file is part of Async HBase.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -45,7 +45,7 @@ public final class DeleteRequest extends HBaseRpc {
   };
 
   private final byte[] family;     // TODO(tsuna): Handle multiple families?
-  private final byte[] qualifier;  // TODO(tsuna): Handle multiple qualifiers?
+  private final byte[][] qualifiers;
   private final long lockid;
 
   /**
@@ -70,7 +70,23 @@ public final class DeleteRequest extends HBaseRpc {
                        final byte[] key,
                        final byte[] family,
                        final byte[] qualifier) {
-    this(table, key, family, qualifier, RowLock.NO_LOCK);
+    this(table, key, family, new byte[][] { qualifier }, RowLock.NO_LOCK);
+  }
+
+  /**
+   * Constructor to delete a specific number of cells in a row.
+   * <strong>These byte arrays will NOT be copied.</strong>
+   * @param table The table to edit.
+   * @param key The key of the row to edit in that table.
+   * @param family The column family to edit in that table.
+   * @param qualifiers The column qualifiers to delete in that family.
+   * @since 1.1
+   */
+  public DeleteRequest(final byte[] table,
+                       final byte[] key,
+                       final byte[] family,
+                       final byte[][] qualifiers) {
+    this(table, key, family, qualifiers, RowLock.NO_LOCK);
   }
 
   /**
@@ -87,7 +103,25 @@ public final class DeleteRequest extends HBaseRpc {
                        final byte[] family,
                        final byte[] qualifier,
                        final RowLock lock) {
-    this(table, key, family, qualifier, lock.id());
+    this(table, key, family, new byte[][] { qualifier }, lock.id());
+  }
+
+  /**
+   * Constructor to delete a specific number of cells in a row.
+   * <strong>These byte arrays will NOT be copied.</strong>
+   * @param table The table to edit.
+   * @param key The key of the row to edit in that table.
+   * @param family The column family to edit in that table.
+   * @param qualifiers The column qualifiers to delete in that family.
+   * @param lock An explicit row lock to use with this request.
+   * @since 1.1
+   */
+  public DeleteRequest(final byte[] table,
+                       final byte[] key,
+                       final byte[] family,
+                       final byte[][] qualifiers,
+                       final RowLock lock) {
+    this(table, key, family, qualifiers, lock.id());
   }
 
   /**
@@ -111,7 +145,7 @@ public final class DeleteRequest extends HBaseRpc {
                        final String family,
                        final String qualifier) {
     this(table.getBytes(), key.getBytes(), family.getBytes(),
-         qualifier.getBytes(), RowLock.NO_LOCK);
+         new byte[][] { qualifier.getBytes() }, RowLock.NO_LOCK);
   }
 
   /**
@@ -128,40 +162,30 @@ public final class DeleteRequest extends HBaseRpc {
                        final String qualifier,
                        final RowLock lock) {
     this(table.getBytes(), key.getBytes(), family.getBytes(),
-         qualifier.getBytes(), lock.id());
+         new byte[][] { qualifier.getBytes() }, lock.id());
   }
 
   /** Private constructor.  */
   private DeleteRequest(final byte[] table,
                         final byte[] key,
                         final byte[] family,
-                        final byte[] qualifier,
+                        final byte[][] qualifiers,
                         final long lockid) {
     super(DELETE, table, key);
     if (family != null) {  // Right now family != null  =>  qualifier != null
       KeyValue.checkFamily(family);
-      KeyValue.checkQualifier(qualifier);
+      for (final byte[] qualifier : qualifiers) {
+        KeyValue.checkQualifier(qualifier);
+      }
     }
     this.family = family;
-    this.qualifier = qualifier;
+    this.qualifiers = qualifiers;
     this.lockid = lockid;
   }
 
   // ---------------------- //
   // Package private stuff. //
   // ---------------------- //
-
-  byte[] family() {
-    return family;
-  }
-
-  byte[] qualifier() {
-    return qualifier;
-  }
-
-  long lockid() {
-    return lockid;
-  }
 
   /**
    * Predicts a lower bound on the serialized size of this RPC.
@@ -191,6 +215,12 @@ public final class DeleteRequest extends HBaseRpc {
     }
     size += family.length;  // The column family.
     size += 4;  // int:  Number of KeyValues for this family.
+    return size + sizeOfKeyValues();
+  }
+
+  /** Returns the serialized size of all the {@link KeyValue}s in this RPC.  */
+  private int sizeOfKeyValues() {
+    int size = 0;
     size += 4;  // int:  Total length of the whole KeyValue.
     size += 4;  // int:  Total length of the key part of the KeyValue.
     size += 4;  // int:  Length of the value part of the KeyValue.
@@ -198,9 +228,12 @@ public final class DeleteRequest extends HBaseRpc {
     size += key.length;  // The row key (again!).
     size += 1;  // byte: Family length (again!).
     size += family.length;  // The column family (again!).
-    size += qualifier.length;  // The column qualifier.
     size += 8;  // long: The timestamp (again!).
     size += 1;  // byte: The type of KeyValue.
+    size *= qualifiers.length;
+    for (final byte[] qualifier : qualifiers) {
+      size += qualifier.length;  // The column qualifier.
+    }
     return size;
   }
 
@@ -229,22 +262,24 @@ public final class DeleteRequest extends HBaseRpc {
 
     // Each family is then written like so:
     writeByteArray(buf, family);  // Column family name.
-    buf.writeInt(1);              // How many KeyValues for this family?
+    buf.writeInt(qualifiers.length);  // How many KeyValues for this family?
 
-    // Write the KeyValue
-    final int total_rowkey_length = 2 + key.length + 1 + family.length
-      + qualifier.length + 8 + 1;
-    buf.writeInt(total_rowkey_length + 8);  // Total length of the KeyValue.
-    buf.writeInt(total_rowkey_length);      // Total length of the row key.
-    buf.writeInt(0);                        // Length of the (empty) value.
-    buf.writeShort(key.length);
-    buf.writeBytes(key);      // Duplicate key...
-    buf.writeByte(family.length);
-    buf.writeBytes(family);   // Duplicate column family...
-    buf.writeBytes(qualifier);
-    buf.writeLong(Long.MAX_VALUE);   // Timestamp (we set it to the max value).
-    buf.writeByte(KeyValue.DELETE);  // Type of the KeyValue.
-    // No `value' part of the KeyValue to write.
+    // Write the KeyValues
+    for (final byte[] qualifier : qualifiers) {
+      final int total_rowkey_length = 2 + key.length + 1 + family.length
+        + qualifier.length + 8 + 1;
+      buf.writeInt(total_rowkey_length + 8);  // Total length of the KeyValue.
+      buf.writeInt(total_rowkey_length);      // Total length of the row key.
+      buf.writeInt(0);                        // Length of the (empty) value.
+      buf.writeShort(key.length);
+      buf.writeBytes(key);      // Duplicate key...
+      buf.writeByte(family.length);
+      buf.writeBytes(family);   // Duplicate column family...
+      buf.writeBytes(qualifier);
+      buf.writeLong(Long.MAX_VALUE);   // Timestamp (we set it to the max value).
+      buf.writeByte(KeyValue.DELETE);  // Type of the KeyValue.
+      // No `value' part of the KeyValue to write.
+    }
     return buf;
   }
 

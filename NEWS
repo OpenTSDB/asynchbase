@@ -10,6 +10,10 @@ Noteworthy changes:
   - Fix a dumb mistake in the `memcmp()' version that uses an offset and a
     length.  This function wasn't called either by asynchbase or by OpenTSDB.
 
+New public APIs:
+  - DeleteRequest now has constructors for deleting multiple qualifiers per
+    row at once.
+
 
 * Version 1.0 (2010-11-08) [dafc645]
 
