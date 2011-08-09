@@ -13,6 +13,8 @@ Noteworthy changes:
 New public APIs:
   - DeleteRequest now has constructors for deleting multiple qualifiers per
     row at once.
+  - New `qualifiers' method in GetRequest for getting multiple qualifiers per
+    row at once.
 
 
 * Version 1.0 (2010-11-08) [dafc645]

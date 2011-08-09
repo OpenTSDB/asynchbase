@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2010  StumbleUpon, Inc.  All rights reserved.
+ * Copyright (c) 2010, 2011  StumbleUpon, Inc.  All rights reserved.
  * This file is part of Async HBase.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -44,7 +44,7 @@ public final class GetRequest extends HBaseRpc {
     new byte[] { 'e', 'x', 'i', 's', 't', 's' };
 
   private byte[] family;     // TODO(tsuna): Handle multiple families?
-  private byte[] qualifier;  // TODO(tsuna): Handle multiple qualifiers?
+  private byte[][] qualifiers;
   private long lockid = RowLock.NO_LOCK;
 
   /**
@@ -126,7 +126,26 @@ public final class GetRequest extends HBaseRpc {
     if (qualifier == null) {
       throw new NullPointerException("qualifier");
     }
-    this.qualifier = qualifier;
+    KeyValue.checkQualifier(qualifier);
+    this.qualifiers = new byte[][] { qualifier };
+    return this;
+  }
+
+  /**
+   * Specifies a particular set of column qualifiers to get.
+   * @param qualifiers The column qualifiers.
+   * <strong>This byte array will NOT be copied.</strong>
+   * @return {@code this}, always.
+   * @since 1.1
+   */
+  public GetRequest qualifiers(final byte[][] qualifiers) {
+    if (qualifiers == null) {
+      throw new NullPointerException("qualifiers");
+    }
+    for (final byte[] qualifier : qualifiers) {
+      KeyValue.checkQualifier(qualifier);
+    }
+    this.qualifiers = qualifiers;
     return this;
   }
 
@@ -178,10 +197,12 @@ public final class GetRequest extends HBaseRpc {
       size += 1;  // vint: Family length (guaranteed on 1 byte).
       size += family.length;  // The family.
       size += 1;  // byte: Boolean: do we want specific qualifiers?
-      if (qualifier != null) {
+      if (qualifiers != null) {
         size += 4;  // int:  How many qualifiers follow?
-        size += 3;  // vint: Qualifier length.
-        size += qualifier.length;  // The qualifier.
+        for (final byte[] qualifier : qualifiers) {
+          size += 3;  // vint: Qualifier length.
+          size += qualifier.length;  // The qualifier.
+        }
       }
     }
     return size;
@@ -224,11 +245,14 @@ public final class GetRequest extends HBaseRpc {
     if (family != null) {
       // Each family is then written like so:
       writeByteArray(buf, family);  // Column family name.
-      // Boolean: do we want specific qualifiers?
-      buf.writeByte(qualifier == null ? 0x00 : 0x01);
-      if (qualifier != null) {
-        buf.writeInt(1);                 // How many qualifiers do we want?
-        writeByteArray(buf, qualifier);  // Column qualifier name.
+      if (qualifiers != null) {
+        buf.writeByte(0x01);  // Boolean: We want specific qualifiers.
+        buf.writeInt(qualifiers.length);   // How many qualifiers do we want?
+        for (final byte[] qualifier : qualifiers) {
+          writeByteArray(buf, qualifier);  // Column qualifier name.
+        }
+      } else {
+        buf.writeByte(0x00);  // Boolean: we don't want specific qualifiers.
       }
     }
     return buf;

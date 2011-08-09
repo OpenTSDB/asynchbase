@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2010  StumbleUpon, Inc.  All rights reserved.
+ * Copyright (c) 2010, 2011  StumbleUpon, Inc.  All rights reserved.
  * This file is part of Async HBase.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -76,13 +76,13 @@ final class Test {
     System.err.println("Usage: " + Test.class.getSimpleName()
                        + " <zk quorum> <cmd> <table> [args]\n"
                        + "Available commands:\n"
-                       + "  get <table> <key> [family] [qualifier]\n"
+                       + "  get <table> <key> [family] [qualifiers ...]\n"
                        + "  icv <table> <key> <family> <qualifier> [amount]\n"
                        + "  put <table> <key> <family> <qualifier> <value>\n"
                        + "  delete <table> <key> [<family> <qualifier>]\n"
                        + "  scan <table> [start] [family] [qualifier] [stop] [regexp]\n"
                        + "Variants that acquire an explicit row-lock:\n"
-                       + "  lget <table> <key> [family] [qualifier]\n"
+                       + "  lget <table> <key> [family] [qualifiers ...]\n"
                        + "  lput <table> <key> <family> <qualifier> <value>\n"
                        + "  ldelete <table> <key> <family> <qualifier>\n"
                       );
@@ -132,13 +132,21 @@ final class Test {
 
   private static final class get implements Cmd {
     public void execute(final HBaseClient client, String[] args) throws Exception {
-      ensureArguments(args, 4, 6);
+      ensureArguments(args, 4, 64);
       final GetRequest get = new GetRequest(args[2], args[3]);
       if (args.length > 4) {
         get.family(args[4]);
       }
       if (args.length > 5) {
-        get.qualifier(args[5]);
+        if (args.length == 6) {
+          get.qualifier(args[5]);
+        } else {
+          final byte[][] qualifiers = new byte[args.length - 5][];
+          for (int i = 5; i < args.length; i++) {
+            qualifiers[i - 5] = args[i].getBytes();
+          }
+          get.qualifiers(qualifiers);
+        }
       }
       RowLock lock = null;
       if (args[1].charAt(0) == 'l') {  // locked version of the command
