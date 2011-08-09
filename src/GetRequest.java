@@ -37,7 +37,9 @@ import org.jboss.netty.buffer.ChannelBuffer;
  * <h1>A note on passing {@code String}s in argument</h1>
  * All strings are assumed to use the platform's default charset.
  */
-public final class GetRequest extends HBaseRpc {
+public final class GetRequest extends HBaseRpc
+  implements HBaseRpc.HasTable, HBaseRpc.HasKey,
+             HBaseRpc.HasFamily, HBaseRpc.HasQualifiers {
 
   private static final byte[] GET = new byte[] { 'g', 'e', 't' };
   private static final byte[] EXISTS =
@@ -159,6 +161,30 @@ public final class GetRequest extends HBaseRpc {
     lockid = lock.id();
     return this;
   }
+
+  @Override
+  public byte[] table() {
+    return table;
+  }
+
+  @Override
+  public byte[] key() {
+    return key;
+  }
+
+  @Override
+  public byte[] family() {
+    return family;
+  }
+
+  @Override
+  public byte[][] qualifiers() {
+    return qualifiers;
+  }
+
+  // ---------------------- //
+  // Package private stuff. //
+  // ---------------------- //
 
   boolean versionSensitive() {
     return true;  // Sad.  HBASE-3174 broke backwards compatibilty!@#$%^  :(

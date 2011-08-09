@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2010  StumbleUpon, Inc.  All rights reserved.
+ * Copyright (c) 2010, 2011  StumbleUpon, Inc.  All rights reserved.
  * This file is part of Async HBase.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -48,6 +48,85 @@ import com.stumbleupon.async.Deferred;
  * holding a reference to) the byte array, which is frequently the case.
  */
 public abstract class HBaseRpc {
+
+  /**
+   * An RPC from which you can get a table name.
+   * @since 1.1
+   */
+  public interface HasTable {
+    /**
+     * Returns the name of the table this RPC is for.
+     * <p>
+     * <strong>DO NOT MODIFY THE CONTENTS OF THE ARRAY RETURNED.</strong>
+     */
+    public byte[] table();
+  }
+
+  /**
+   * An RPC from which you can get a row key name.
+   * @since 1.1
+   */
+  public interface HasKey {
+    /**
+     * Returns the row key this RPC is for.
+     * <p>
+     * <strong>DO NOT MODIFY THE CONTENTS OF THE ARRAY RETURNED.</strong>
+     */
+    public byte[] key();
+  }
+
+  /**
+   * An RPC from which you can get a family name.
+   * @since 1.1
+   */
+  public interface HasFamily {
+    /**
+     * Returns the family this RPC is for.
+     * <p>
+     * <strong>DO NOT MODIFY THE CONTENTS OF THE ARRAY RETURNED.</strong>
+     */
+    public byte[] family();
+  }
+
+  /**
+   * An RPC from which you can get a column qualifier name.
+   * @since 1.1
+   */
+  public interface HasQualifier {
+    /**
+     * Returns the column qualifier this RPC is for.
+     * <p>
+     * <strong>DO NOT MODIFY THE CONTENTS OF THE ARRAY RETURNED.</strong>
+     */
+    public byte[] qualifier();
+  }
+
+  /**
+   * An RPC from which you can get multiple column qualifier names.
+   * @since 1.1
+   */
+  public interface HasQualifiers {
+    /**
+     * Returns the column qualifiers this RPC is for.
+     * <p>
+     * <strong>DO NOT MODIFY THE CONTENTS OF THE ARRAY RETURNED.</strong>
+     */
+    public byte[][] qualifiers();
+  }
+
+  /**
+   * An RPC from which you can get a value.
+   * @since 1.1
+   */
+  public interface HasValue {
+    /**
+     * Returns the value contained in this RPC.
+     * <p>
+     * <strong>DO NOT MODIFY THE CONTENTS OF THE ARRAY RETURNED.</strong>
+     */
+    public byte[] value();
+  }
+
   /*
    * This class, although it's part of the public API, is mostly here to make
    * it easier for this library to manipulate the HBase RPC protocol.
@@ -241,16 +320,6 @@ public abstract class HBaseRpc {
   // ---------------------- //
   // Package private stuff. //
   // ---------------------- //
-
-  /** Package private way of getting the table this RPC is for (if any).  */
-  final byte[] table() {
-    return table;
-  }
-
-  /** Package private way of getting the row key this RPC is for (if any).  */
-  final byte[] key() {
-    return key;
-  }
 
   /** Package private way of getting the name of the RPC method.  */
   final byte[] method() {

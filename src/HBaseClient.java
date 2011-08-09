@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2010  StumbleUpon, Inc.  All rights reserved.
+ * Copyright (c) 2010, 2011  StumbleUpon, Inc.  All rights reserved.
  * This file is part of Async HBase.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -967,8 +967,8 @@ public final class HBaseClient {
       return tooManyAttempts(request, null);
     }
     request.attempt++;
-    final byte[] table = request.table();
-    final byte[] key = request.key();
+    final byte[] table = request.table;
+    final byte[] key = request.key;
     final RegionInfo region = getRegion(table, key);
 
     final class RetryRpc implements Callback<Deferred<Object>, Object> {

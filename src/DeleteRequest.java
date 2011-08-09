@@ -38,7 +38,9 @@ import org.jboss.netty.buffer.ChannelBuffer;
  * <h1>A note on passing {@code String}s in argument</h1>
  * All strings are assumed to use the platform's default charset.
  */
-public final class DeleteRequest extends HBaseRpc {
+public final class DeleteRequest extends HBaseRpc
+  implements HBaseRpc.HasTable, HBaseRpc.HasKey,
+             HBaseRpc.HasFamily, HBaseRpc.HasQualifiers {
 
   private static final byte[] DELETE = new byte[] {
     'd', 'e', 'l', 'e', 't', 'e'
@@ -181,6 +183,26 @@ public final class DeleteRequest extends HBaseRpc {
     this.family = family;
     this.qualifiers = qualifiers;
     this.lockid = lockid;
+  }
+
+  @Override
+  public byte[] table() {
+    return table;
+  }
+
+  @Override
+  public byte[] key() {
+    return key;
+  }
+
+  @Override
+  public byte[] family() {
+    return family;
+  }
+
+  @Override
+  public byte[][] qualifiers() {
+    return qualifiers;
   }
 
   // ---------------------- //

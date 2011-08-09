@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2010  StumbleUpon, Inc.  All rights reserved.
+ * Copyright (c) 2010, 2011  StumbleUpon, Inc.  All rights reserved.
  * This file is part of Async HBase.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -38,7 +38,9 @@ import org.jboss.netty.buffer.ChannelBuffer;
  * <h1>A note on passing {@code String}s in argument</h1>
  * All strings are assumed to use the platform's default charset.
  */
-public final class AtomicIncrementRequest extends HBaseRpc {
+public final class AtomicIncrementRequest extends HBaseRpc
+  implements HBaseRpc.HasTable, HBaseRpc.HasKey,
+             HBaseRpc.HasFamily, HBaseRpc.HasQualifier {
 
   private static final byte[] INCREMENT_COLUMN_VALUE = new byte[] {
     'i', 'n', 'c', 'r', 'e', 'm', 'e', 'n', 't',
@@ -142,6 +144,26 @@ public final class AtomicIncrementRequest extends HBaseRpc {
    */
   public void setAmount(final long amount) {
     this.amount = amount;
+  }
+
+  @Override
+  public byte[] table() {
+    return table;
+  }
+
+  @Override
+  public byte[] key() {
+    return key;
+  }
+
+  @Override
+  public byte[] family() {
+    return family;
+  }
+
+  @Override
+  public byte[] qualifier() {
+    return qualifier;
   }
 
   // ---------------------- //
