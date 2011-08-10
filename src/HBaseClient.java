@@ -40,6 +40,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentSkipListMap;
 import java.util.concurrent.Executor;
 import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicLong;
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
 
 import org.apache.zookeeper.AsyncCallback;
@@ -261,6 +262,9 @@ public final class HBaseClient {
   /** Watcher to keep track of the -ROOT- region in ZooKeeper.  */
   private final ZKClient zkclient;
 
+  /** How many {@code -ROOT-} lookups were made.  */
+  private final AtomicLong root_lookups = new AtomicLong();
+
   /**
    * The client currently connected to the -ROOT- region.
    * If this is {@code null} then we currently don't know where the -ROOT-
@@ -310,6 +314,12 @@ public final class HBaseClient {
    */
   private final ConcurrentHashMap<RegionInfo, RegionClient> region2client =
     new ConcurrentHashMap<RegionInfo, RegionClient>();
+
+  /** How many {@code .META.} lookups were made (with a permit).  */
+  private final AtomicLong meta_lookups_with_permit = new AtomicLong();
+
+  /** How many {@code .META.} lookups were made (without a permit).  */
+  private final AtomicLong meta_lookups_wo_permit = new AtomicLong();
 
   /**
    * Maps a client connected to a RegionServer to the list of regions we know
@@ -1006,6 +1016,51 @@ public final class HBaseClient {
   }
 
   /**
+   * Returns how many lookups in {@code -ROOT-} were performed.
+   * <p>
+   * This number should remain low.  It will be 1 after the first access to
+   * HBase, and will increase by 1 each time the {@code .META.} region moves
+   * to another server, which should seldom happen.
+   * <p>
+   * This isn't to be confused with the number of times we looked up where
+   * the {@code -ROOT-} region itself is located.  This happens even more
+   * rarely and a message is logged at the INFO whenever it does.
+   * @since 1.1
+   */
+  public long rootLookupCount() {
+    return root_lookups.get();
+  }
+
+  /**
+   * Returns how many lookups in {@code .META.} were performed (uncontended).
+   * <p>
+   * This number indicates how many times we had to lookup in {@code .META.}
+   * where a key was located.  This only counts "uncontended" lookups, where
+   * the thread was able to acquire a "permit" to do a {@code .META.} lookup.
+   * The majority of the {@code .META.} lookups should fall in this category.
+   * @since 1.1
+   */
+  public long uncontendedMetaLookupCount() {
+    return meta_lookups_with_permit.get();
+  }
+
+  /**
+   * Returns how many lookups in {@code .META.} were performed (contended).
+   * <p>
+   * This number indicates how many times we had to lookup in {@code .META.}
+   * where a key was located.  This only counts "contended" lookups, where the
+   * thread was unable to acquire a "permit" to do a {@code .META.} lookup,
+   * because there were already too many {@code .META.} lookups in flight.
+   * In this case, the thread was delayed a bit in order to apply a bit of
+   * back-pressure on the caller, to avoid creating {@code .META.} storms.
+   * The minority of the {@code .META.} lookups should fall in this category.
+   * @since 1.1
+   */
+  public long contendedMetaLookupCount() {
+    return meta_lookups_wo_permit.get();
+  }
+
+  /**
    * Checks whether or not an RPC can be retried once more.
    * @param rpc The RPC we're going to attempt to execute.
    * @return {@code true} if this RPC already had too many attempts,
@@ -1089,6 +1144,9 @@ public final class HBaseClient {
             }
           };
           d.addBoth(new ReleaseMetaLookupPermit());
+          meta_lookups_with_permit.incrementAndGet();
+        } else {
+          meta_lookups_wo_permit.incrementAndGet();
         }
         // This errback needs to run *after* the callback above.
         return d.addErrback(newLocateRegionErrback(table, key));
@@ -1108,6 +1166,7 @@ public final class HBaseClient {
     final byte[] root_key = createRegionSearchKey(META, meta_key);
     final RegionInfo root_region = new RegionInfo(ROOT, ROOT_REGION,
                                                   EMPTY_ARRAY);
+    root_lookups.incrementAndGet();
     return rootregion.getClosestRowBefore(root_region, ROOT, root_key, INFO)
       .addCallback(root_lookup_done)
       // This errback needs to run *after* the callback above.
