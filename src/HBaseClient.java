@@ -2314,6 +2314,21 @@ public final class HBaseClient {
       }
     }
 
+    /** Schedule a timer to retry {@link #getRootRegion} after some time.  */
+    private void retryGetRootRegionLater(final AsyncCallback.DataCallback cb) {
+      timer.newTimeout(new TimerTask() {
+          public void run(final Timeout timeout) {
+            if (zk != null) {
+              LOG.debug("Retrying to find the -ROOT- region in ZooKeeper");
+              zk.getData(base_path + "/root-region-server",
+                         ZKClient.this, cb, null);
+            } else {
+              connectZK();
+            }
+          }
+        }, 1000, MILLISECONDS);
+    }
+
     /**
      * Puts a watch in ZooKeeper to monitor the file of the -ROOT- region.
      * This method just registers an asynchronous callback.
@@ -2325,19 +2340,7 @@ public final class HBaseClient {
                                   final Stat stat) {
           if (rc == Code.NONODE.intValue()) {
             LOG.error("The znode for the -ROOT- region doesn't exist!");
-            final DataCallback dcb = this;
-            timer.newTimeout(new TimerTask() {
-                public void run(final Timeout timeout) {
-                  final ZooKeeper zk = ZKClient.this.zk;
-                  if (zk != null) {
-                    LOG.debug("Retrying to find the -ROOT- region in ZooKeeper");
-                    zk.getData(base_path + "/root-region-server",
-                               ZKClient.this, dcb, null);
-                  } else {
-                    connectZK();
-                  }
-                }
-              }, 1000, MILLISECONDS);
+            retryGetRootRegionLater(this);
             return;
           } else if (rc != Code.OK.intValue()) {
             LOG.error("Looks like our ZK session expired or is broken, rc="
@@ -2349,14 +2352,16 @@ public final class HBaseClient {
           final String root = new String(data);
           final int portsep = root.lastIndexOf(':');
           if (portsep < 0) {
-            LOG.error("Couldn't find the port of the -ROOT- region in \""
-                      + root + '"');
+            LOG.error("Couldn't find the port of the -ROOT- region in "
+                      + Bytes.pretty(data));
+            retryGetRootRegionLater(this);
             return;  // TODO(tsuna): Add a watch to wait until the file changes.
           }
           final String host = getIP(root.substring(0, portsep));
           if (host == null) {
-            LOG.error("Couldn't resolve the IP of the -ROOT- region in \""
-                      + root + '"');
+            LOG.error("Couldn't resolve the IP of the -ROOT- region from "
+                      + host + " in \"" + Bytes.pretty(data) + '"');
+            retryGetRootRegionLater(this);
             return;  // TODO(tsuna): Add a watch to wait until the file changes.
           }
           final int port = parsePortNumber(root.substring(portsep + 1));
