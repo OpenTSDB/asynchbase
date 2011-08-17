@@ -1344,18 +1344,27 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
     /** The header to send.  */
     private static final byte[] HELLO_HEADER;
     static {
+      final String prop;
+      // 0.91 includes a non-backwards compatible change to the RPC layer that
+      // was made to accommodate for coprocessors.  Unfortunately the change
+      // has been done carelessly in such a way that clients don't get a chance
+      // of detecting how to greet the server properly.
+      if ((prop = System.getProperty("org.hbase.async.091")) != null
+          && !"false".equals(prop)) {
+        HELLO_HEADER = new byte[4 + 1 + 4 + 1 + 44];
+        header091();
       // CDH3 b3 includes a temporary patch that is non-backwards compatible
       // and results in clients getting disconnected as soon as they send the
       // header, because the HBase RPC protocol provides no mechanism to send
       // an error message back to the client during the initial "hello" stage
       // of a connection.
-      if (System.getProperty("org.hbase.async.cdh3b3") != null) {
+      } else if (System.getProperty("org.hbase.async.cdh3b3") != null) {
         final byte[] user = Bytes.UTF8(System.getProperty("user.name", "asynchbase"));
         HELLO_HEADER = new byte[4 + 1 + 4 + 4 + user.length];
         headerCDH3b3(user);
       } else {
         HELLO_HEADER = new byte[4 + 1 + 4 + 2 + 29 + 2 + 48 + 2 + 47];
-        normalHeader();
+        header090();
       }
     }
 
@@ -1371,8 +1380,25 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
       return buf;
     }
 
-    /** Hello header for HBase 0.90.0 and earlier.  */
-    private static void normalHeader() {
+    /** Hello header for HBase 0.91 and later.  */
+    private static void header091() {
+      final ChannelBuffer buf = commonHeader();
+
+      // Serialized ipc.ConnectionHeader
+      // We skip 4 bytes now and will set it to the actual size at the end.
+      buf.writerIndex(buf.writerIndex() + 4);  // 4
+      final String klass = "org.apache.hadoop.hbase.ipc.HRegionInterface";
+      buf.writeByte(klass.length());           // 1
+      buf.writeBytes(Bytes.ISO88591(klass));   // 44
+
+      // Now set the length of the whole damn thing.
+      // -4 because the length itself isn't part of the payload.
+      // -5 because the "hrpc" + version isn't part of the payload.
+      buf.setInt(5, buf.writerIndex() - 4 - 5);
+    }
+
+    /** Hello header for HBase 0.90 and earlier.  */
+    private static void header090() {
       final ChannelBuffer buf = commonHeader();
 
       // Serialized UserGroupInformation to say who we are.
