@@ -2131,6 +2131,12 @@ public final class HBaseClient {
    */
   private final class ZKClient implements Watcher {
 
+    /**
+     * HBASE-3065 (r1151751) prepends meta-data in ZooKeeper files.
+     * The meta-data always starts with this magic byte.
+     */
+    private static final byte MAGIC = (byte) 0xFF;
+
     /** The specification of the quorum, e.g. "host1,host2,host3"  */
     private final String quorum_spec;
 
@@ -2334,6 +2340,7 @@ public final class HBaseClient {
      */
     private void getRootRegion() {
       final AsyncCallback.DataCallback cb = new AsyncCallback.DataCallback() {
+        @SuppressWarnings("fallthrough")
         public void processResult(final int rc, final String path,
                                   final Object ctx, final byte[] data,
                                   final Stat stat) {
@@ -2348,25 +2355,81 @@ public final class HBaseClient {
             connectZK();
             return;
           }
-          final String root = new String(data);
-          final int portsep = root.lastIndexOf(':');
-          if (portsep < 0) {
-            LOG.error("Couldn't find the port of the -ROOT- region in "
-                      + Bytes.pretty(data));
+          if (data == null || data.length == 0 || data.length > Short.MAX_VALUE) {
+            LOG.error("The location of the -ROOT- region in ZooKeeper is "
+                      + (data == null || data.length == 0 ? "empty"
+                         : "too large (" + data.length + " bytes!)"));
             retryGetRootRegionLater(this);
             return;  // TODO(tsuna): Add a watch to wait until the file changes.
           }
-          final String host = getIP(root.substring(0, portsep));
-          if (host == null) {
+          // There are 3 cases.  Older versions of HBase encode the location
+          // of the root region as "host:port", 0.91 uses "host,port,startcode"
+          // and newer versions of 0.91 use "<metadata>host,port,startcode"
+          // where the <metadata> starts with MAGIC, then a 4 byte integer,
+          // then that many bytes of meta data.
+          boolean newstyle;     // True if we expect a 0.91 style location.
+          final short offset;   // Bytes to skip at the beginning of data.
+          short firstsep = -1;  // Index of the first separator (':' or ',').
+          if (data[0] == MAGIC) {
+            newstyle = true;
+            final int metadata_length = Bytes.getInt(data, 1);
+            if (metadata_length < 1 || metadata_length > 65000) {
+              LOG.error("Malformed meta-data in " + Bytes.pretty(data)
+                        + ", invalid metadata length=" + metadata_length);
+              retryGetRootRegionLater(this);
+              return;  // TODO(tsuna): Add a watch to wait until the file changes.
+            }
+            offset = (short) (1 + 4 + metadata_length);
+          } else {
+            newstyle = false;  // Maybe true, the loop below will tell us.
+            offset = 0;
+          }
+          final short n = (short) data.length;
+          // Look for the first separator.  Skip the offset, and skip the
+          // first byte, because we know the separate can only come after
+          // at least one byte.
+          loop: for (short i = (short) (offset + 1); i < n; i++) {
+             switch (data[i]) {
+              case ',':
+                newstyle = true;
+                /* fall through */
+              case ':':
+                firstsep = i;
+                break loop;
+            }
+          }
+          if (firstsep == -1) {
+            LOG.error("-ROOT- location doesn't contain a separator"
+                      + " (':' or ','): " + Bytes.pretty(data));
+            retryGetRootRegionLater(this);
+            return;  // TODO(tsuna): Add a watch to wait until the file changes.
+          }
+          final String host;
+          final short portend;  // Index past where the port number ends.
+          if (newstyle) {
+            host = new String(data, offset, firstsep - offset);
+            short i;
+            for (i = (short) (firstsep + 2); i < n; i++) {
+              if (data[i] == ',') {
+                break;
+              }
+            }
+            portend = i;  // Port ends on the comma.
+          } else {
+            host = new String(data, 0, firstsep);
+            portend = n;  // Port ends at the end of the array.
+          }
+          final int port = parsePortNumber(new String(data, firstsep + 1,
+                                                      portend - firstsep - 1));
+          final String ip = getIP(host);
+          if (ip == null) {
             LOG.error("Couldn't resolve the IP of the -ROOT- region from "
                       + host + " in \"" + Bytes.pretty(data) + '"');
             retryGetRootRegionLater(this);
             return;  // TODO(tsuna): Add a watch to wait until the file changes.
           }
-          final int port = parsePortNumber(root.substring(portsep + 1));
-          final String hostport = host + ':' + port;
-          LOG.info("Connecting to -ROOT- region @ " + hostport);
-          final RegionClient client = rootregion = newClient(host, port);
+          LOG.info("Connecting to -ROOT- region @ " + ip + ':' + port);
+          final RegionClient client = rootregion = newClient(ip, port);
           final ArrayList<Deferred<Object>> ds = atomicGetAndRemoveWaiters();
           if (ds != null) {
             for (final Deferred<Object> d : ds) {
