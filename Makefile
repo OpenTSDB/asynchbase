@@ -1,4 +1,4 @@
-# Copyright (c) 2010  StumbleUpon, Inc.  All rights reserved.
+# Copyright (c) 2010, 2011  StumbleUpon, Inc.  All rights reserved.
 # This file is part of Async HBase.
 # 
 # Redistribution and use in source and binary forms, with or without
@@ -26,11 +26,14 @@
 all: jar $(TESTS)
 # TODO(tsuna): Use automake to avoid relying on GNU make extensions.
 
+include third_party/include.mk
+
 top_builddir = build
 package = org.hbase.async
 spec_title = Asynchronous HBase
 spec_vendor = StumbleUpon, Inc.
 spec_version = 1.1
+jar := $(top_builddir)/hbaseasync-$(spec_version).jar
 hbaseasync_SOURCES = \
 	src/AtomicIncrementRequest.java	\
 	src/BrokenMetaException.java	\
@@ -64,18 +67,18 @@ hbaseasync_SOURCES = \
 	src/UnknownRowLockException.java	\
 	src/UnknownScannerException.java	\
 
-hbaseasync_LIBADD = \
-	third_party/netty-3.2.2.Final.jar	\
-	third_party/slf4j-api-1.6.1.jar	\
-	third_party/zookeeper-3.3.1.jar	\
-	third_party/suasync-1.0.jar	\
+hbaseasync_LIBADD := \
+	$(NETTY)	\
+	$(SLF4J_API)	\
+	$(ZOOKEEPER)	\
+	$(SUASYNC)	\
 
 test_SOURCES = src/Test.java
-test_LIBADD = \
+test_LIBADD := \
 	$(hbaseasync_LIBADD) \
-	third_party/log4j-over-slf4j-1.6.1.jar	\
-	third_party/logback-classic-0.9.24.jar	\
-	third_party/logback-core-0.9.24.jar	\
+	$(LOG4J_OVER_SLF4J)	\
+	$(LOGBACK_CLASSIC)	\
+	$(LOGBACK_CORE)	\
         $(jar)
 
 TESTS = $(top_builddir)/Test.class
@@ -83,7 +86,6 @@ AM_JAVACFLAGS = -Xlint
 JVM_ARGS =
 package_dir = $(subst .,/,$(package))
 classes=$(hbaseasync_SOURCES:src/%.java=$(top_builddir)/$(package_dir)/%.class)
-jar = $(top_builddir)/hbaseasync-$(spec_version).jar
 test_classes=$(test_SOURCES:src/%.java=$(top_builddir)/%.class)
 
 jar: $(jar)
