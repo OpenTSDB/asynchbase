@@ -1,6 +1,6 @@
 # Copyright (c) 2011  StumbleUpon, Inc.  All rights reserved.
 # This file is part of Async HBase.
-#
+# 
 # Redistribution and use in source and binary forms, with or without
 # modification, are permitted provided that the following conditions are met:
 #   - Redistributions of source code must retain the above copyright notice,
@@ -23,16 +23,11 @@
 # ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 # POSSIBILITY OF SUCH DAMAGE.
 
-ASYNCHBASE_THIRD_PARTY_BASE_URL := http://opentsdb.googlecode.com/files
-FETCH_DEPENDENCY := ./build-aux/fetchdep.sh "$$@"
-THIRD_PARTY =
+MOCKITO_VERSION := 1.8.5
+MOCKITO := third_party/mockito/mockito-$(MOCKITO_VERSION).jar
+MOCKITO_BASE_URL := $(ASYNCHBASE_THIRD_PARTY_BASE_URL)
 
-include third_party/javassist/include.mk
-include third_party/junit/include.mk
-include third_party/logback/include.mk
-include third_party/mockito/include.mk
-include third_party/netty/include.mk
-include third_party/powermock/include.mk
-include third_party/slf4j/include.mk
-include third_party/suasync/include.mk
-include third_party/zookeeper/include.mk
+$(MOCKITO): $(MOCKITO).md5
+	set dummy "$(MOCKITO_BASE_URL)" "$(MOCKITO)"; shift; $(FETCH_DEPENDENCY)
+
+THIRD_PARTY += $(MOCKITO)
