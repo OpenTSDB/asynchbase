@@ -23,10 +23,13 @@
 # ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 # POSSIBILITY OF SUCH DAMAGE.
 
-all: jar $(TESTS)
+all: jar $(UNITTESTS)
 # TODO(tsuna): Use automake to avoid relying on GNU make extensions.
 
 include third_party/include.mk
+
+JAVA := java
+PACKAGE_BUGREPORT := opentsdb@googlegroups.com
 
 top_builddir = build
 package = org.hbase.async
@@ -74,19 +77,26 @@ hbaseasync_LIBADD := \
 	$(SUASYNC)	\
 
 test_SOURCES = src/Test.java
+unittest_SRC = \
+	src/TestNSREs.java
+
 test_LIBADD := \
-	$(hbaseasync_LIBADD) \
+	$(hbaseasync_LIBADD)	\
 	$(LOG4J_OVER_SLF4J)	\
 	$(LOGBACK_CLASSIC)	\
 	$(LOGBACK_CORE)	\
+	$(JAVASSIST)	\
+	$(JUNIT)	\
+	$(MOCKITO)	\
+	$(POWERMOCK_MOCKITO)	\
         $(jar)
 
-TESTS = $(top_builddir)/Test.class
+package_dir := $(subst .,/,$(package))
 AM_JAVACFLAGS = -Xlint
 JVM_ARGS =
-package_dir = $(subst .,/,$(package))
-classes=$(hbaseasync_SOURCES:src/%.java=$(top_builddir)/$(package_dir)/%.class)
-test_classes=$(test_SOURCES:src/%.java=$(top_builddir)/%.class)
+classes := $(hbaseasync_SOURCES:src/%.java=$(top_builddir)/$(package_dir)/%.class)
+test_classes := $(test_SOURCES:src/%.java=$(top_builddir)/%.class)
+UNITTESTS := $(unittest_SRC:src/%.java=$(package_dir)/%.class)
 
 jar: $(jar)
 
@@ -101,15 +111,31 @@ get_runtime_dep_classpath = `echo $(test_LIBADD) | tr ' ' ':'`
 $(test_classes): $(jar) $(test_SOURCES) $(test_LIBADD)
 	javac $(AM_JAVACFLAGS) -cp $(get_runtime_dep_classpath) \
 	  -d $(top_builddir) $(test_SOURCES)
+$(UNITTESTS): $(jar) $(unittest_SRC) $(test_LIBADD)
+	javac $(AM_JAVACFLAGS) -cp $(get_runtime_dep_classpath) \
+	  -d $(top_builddir) $(unittest_SRC)
 
-classes_with_nested_classes = $(classes:$(top_builddir)/%.class=%*.class)
-test_classes_with_nested_classes = $(test_classes:$(top_builddir)/%.class=%*.class)
+classes_with_nested_classes := $(classes:$(top_builddir)/%.class=%*.class)
+test_classes_with_nested_classes := $(UNITTESTS:.class=*.class)
 
-check: $(TESTS)
-	for i in $(top_builddir)/$(test_classes_with_nested_classes); do \
+# Little set script to make a pretty-ish banner.
+BANNER := sed 's/^.*/  &  /;h;s/./=/g;p;x;p;x'
+check: $(UNITTESTS)
+	classes=`cd $(top_builddir) && echo $(test_classes_with_nested_classes)` \
+        && tests=0 && failures=0 \
+        && cp="$(get_runtime_dep_classpath):$(top_builddir)" && \
+        for i in $$classes; do \
           case $$i in (*[$$]*) continue;; esac; \
-	  java $(JVM_ARGS) -cp $(get_runtime_dep_classpath):$(top_builddir) `basename $${i%.class}` $(ARGS); \
-        done
+          tests=$$((tests + 1)); \
+          echo "Running tests for `basename $$i .class`" | $(BANNER); \
+          $(JAVA) -ea -esa $(JVM_ARGS) -cp "$$cp" org.junit.runner.JUnitCore `echo $${i%.class} | tr / .` $(ARGS) \
+          || failures=$$((failures + 1)); \
+        done; \
+        if test "$$failures" -eq 0; then \
+          echo "All $$tests tests passed" | $(BANNER); \
+        else \
+          echo "$$failures out of $$tests failed, please send a report to $(PACKAGE_BUGREPORT)" | $(BANNER); \
+        fi
 
 pkg_version = \
   `git show-ref --head --hash=8 HEAD || echo unknown`
