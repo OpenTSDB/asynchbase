@@ -26,18 +26,31 @@
  */
 package org.hbase.async;
 
+import java.util.ArrayList;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentSkipListMap;
+
 import com.stumbleupon.async.Deferred;
 
 import org.junit.Before;
+import org.junit.Test;
 import org.junit.runner.RunWith;
+import static org.junit.Assert.assertSame;
 
 import org.mockito.invocation.InvocationOnMock;
 import org.mockito.stubbing.Answer;
 import static org.mockito.Mockito.any;
+import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 import org.powermock.core.classloader.annotations.PowerMockIgnore;
 import org.powermock.core.classloader.annotations.PrepareForTest;
 import org.powermock.modules.junit4.PowerMockRunner;
+import org.powermock.reflect.Whitebox;
+import static org.powermock.api.mockito.PowerMockito.mock;
 
 @RunWith(PowerMockRunner.class)
 // "Classloader hell"...  It's real.  Tell PowerMock to ignore these classes
@@ -54,15 +67,66 @@ final class TestNSREs {
   private static final byte[] QUALIFIER = { 'q', 'u', 'a', 'l' };
   private static final byte[] VALUE = { 'v', 'a', 'l', 'u', 'e' };
   private static final KeyValue KV = new KeyValue(KEY, FAMILY, QUALIFIER, VALUE);
+  private static final RegionInfo meta = mkregion(".META.", ".META.,,1234567890");
+  private static final RegionInfo region = mkregion("table", "table,,1234567890");
   private HBaseClient client = new HBaseClient("test-quorum-spec");
+  /** Extracted from {@link #client}.  */
+  private ConcurrentSkipListMap<byte[], RegionInfo> regions_cache;
+  /** Extracted from {@link #client}.  */
+  private ConcurrentHashMap<RegionInfo, RegionClient> region2client;
+  /** Fake client supposedly connected to -ROOT-.  */
+  private RegionClient rootclient = mock(RegionClient.class);
+  /** Fake client supposedly connected to .META..  */
+  private RegionClient metaclient = mock(RegionClient.class);
+  /** Fake client supposedly connected to our fake test table.  */
+  private RegionClient regionclient = mock(RegionClient.class);
 
   @Before
   public void before() throws Exception {
+    Whitebox.setInternalState(client, "rootregion", rootclient);
+    regions_cache = Whitebox.getInternalState(client, "regions_cache");
+    region2client = Whitebox.getInternalState(client, "region2client");
+    injectRegionInCache(meta, metaclient);
+    injectRegionInCache(region, regionclient);
+  }
+
+  /**
+   * Injects an entry in the local META cache of the client.
+   */
+  private void injectRegionInCache(final RegionInfo region,
+                                   final RegionClient client) {
+    regions_cache.put(region.name(), region);
+    region2client.put(region, client);
+    // We don't care about client2regions in these tests.
+  }
+
+  @Test
+  public void simpleGet() throws Exception {
+    // Just a simple test, no tricks, no problems, to verify we can
+    // successfully mock out a complete get.
+    final GetRequest get = new GetRequest(TABLE, KEY);
+    final ArrayList<KeyValue> row = new ArrayList<KeyValue>(1);
+    row.add(KV);
+
+    when(regionclient.isAlive()).thenReturn(true);
+    doAnswer(new Answer() {
+      public Object answer(final InvocationOnMock invocation) {
+        get.getDeferred().callback(row);
+        return null;
+      }
+    }).when(regionclient).sendRpc(get);
+
+    assertSame(row, client.get(get).joinUninterruptibly());
   }
 
   // ----------------- //
   // Helper functions. //
   // ----------------- //
+
+  private static RegionInfo mkregion(final String table, final String name) {
+    return new RegionInfo(table.getBytes(), name.getBytes(),
+                          HBaseClient.EMPTY_ARRAY);
+  }
 
   private static byte[] anyBytes() {
     return any(byte[].class);
