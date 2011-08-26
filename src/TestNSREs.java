@@ -67,6 +67,11 @@ import static org.powermock.api.mockito.PowerMockito.mock;
 @PrepareForTest({ HBaseClient.class, RegionClient.class })
 final class TestNSREs {
 
+  private static final byte[] COMMA = { ',' };
+  private static final byte[] TIMESTAMP = "1234567890".getBytes();
+  private static final byte[] INFO = getStatic("INFO");
+  private static final byte[] REGIONINFO = getStatic("REGIONINFO");
+  private static final byte[] SERVER = getStatic("SERVER");
   private static final byte[] TABLE = { 't', 'a', 'b', 'l', 'e' };
   private static final byte[] KEY = { 'k', 'e', 'y' };
   private static final byte[] FAMILY = { 'f' };
@@ -131,6 +136,50 @@ final class TestNSREs {
   // Helper functions. //
   // ----------------- //
 
+  private static <T> T getStatic(final String fieldname) {
+    return Whitebox.getInternalState(HBaseClient.class, fieldname);
+  }
+
+  /**
+   * Creates a fake {@code .META.} row.
+   * The row contains a single entry for all keys of {@link #TABLE}.
+   */
+  private static ArrayList<KeyValue> metaRow() {
+    return metaRow(HBaseClient.EMPTY_ARRAY, HBaseClient.EMPTY_ARRAY);
+  }
+
+
+  /**
+   * Creates a fake {@code .META.} row.
+   * The row contains a single entry for {@link #TABLE}.
+   * @param start_key The start key of the region in this entry.
+   * @param stop_key The stop key of the region in this entry.
+   */
+  private static ArrayList<KeyValue> metaRow(final byte[] start_key,
+                                             final byte[] stop_key) {
+    final ArrayList<KeyValue> row = new ArrayList<KeyValue>(2);
+    final byte[] name = concat(TABLE, COMMA, start_key, COMMA, TIMESTAMP);
+    final byte[] regioninfo = concat(
+      new byte[] {
+        0,                        // version
+        (byte) stop_key.length,   // vint: stop key length
+      },
+      stop_key,
+      new byte[] { 0 },           // boolean: not offline
+      Bytes.fromLong(name.hashCode()),     // long: region ID (make it random)
+      new byte[] { (byte) name.length },  // vint: region name length
+      name,                       // region name
+      new byte[] {
+        0,                        // boolean: not splitting
+        (byte) start_key.length,  // vint: start key length
+      },
+      start_key
+    );
+    row.add(new KeyValue(region.name(), INFO, REGIONINFO, regioninfo));
+    row.add(new KeyValue(region.name(), INFO, SERVER, "localhost:54321".getBytes()));
+    return row;
+  }
+
   private static RegionInfo mkregion(final String table, final String name) {
     return new RegionInfo(table.getBytes(), name.getBytes(),
                           HBaseClient.EMPTY_ARRAY);
@@ -138,6 +187,21 @@ final class TestNSREs {
 
   private static byte[] anyBytes() {
     return any(byte[].class);
+  }
+
+  /** Concatenates byte arrays together.  */
+  private static byte[] concat(final byte[]... arrays) {
+    int len = 0;
+    for (final byte[] array : arrays) {
+      len += array.length;
+    }
+    final byte[] result = new byte[len];
+    len = 0;
+    for (final byte[] array : arrays) {
+      System.arraycopy(array, 0, result, len, array.length);
+      len += array.length;
+    }
+    return result;
   }
 
   /** Creates a new Deferred that's already called back.  */
