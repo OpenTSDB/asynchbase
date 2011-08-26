@@ -183,6 +183,71 @@ final class TestNSREs {
     assertSame(row, client.get(get).joinUninterruptibly());
   }
 
+  @Test
+  public void doubleNSRE() throws Exception {
+    // Attempt to get a row, get an NSRE back, do a META lookup,
+    // find the new location, get another NSRE that directs us to another
+    // region, do another META lookup, try again, succeed.
+    final GetRequest get = new GetRequest(TABLE, KEY);
+    final ArrayList<KeyValue> row = new ArrayList<KeyValue>(1);
+    row.add(KV);
+
+    when(regionclient.isAlive()).thenReturn(true);
+    // First access triggers an NSRE.
+    doAnswer(new Answer() {
+      public Object answer(final InvocationOnMock invocation) {
+        // We completely stub out the RegionClient, which normally does this.
+        client.handleNSRE(get, get.getRegion().name(),
+                          new NotServingRegionException("test 1", get));
+        return null;
+      }
+    }).when(regionclient).sendRpc(get);
+    // So now we do a meta lookup.
+    when(metaclient.isAlive()).thenReturn(true);  // [1]
+    // The lookup tells us that now this key is in another daughter region.
+    when(metaclient.getClosestRowBefore(eq(meta), anyBytes(), anyBytes(), anyBytes()))
+      .thenAnswer(newDeferred(metaRow(KEY, HBaseClient.EMPTY_ARRAY)));  // [2]
+    // This is the client of the daughter region.
+    final RegionClient newregionclient = mock(RegionClient.class);
+    final Method newClient = MemberMatcher.method(HBaseClient.class, "newClient");
+    MemberModifier.stub(newClient).toReturn(newregionclient);
+    when(newregionclient.isAlive()).thenReturn(true);
+    // Make the exist probe fail with another NSRE.
+    doAnswer(new Answer() {
+      private byte attempt = 0;
+      @SuppressWarnings("fallthrough")
+      public Object answer(final InvocationOnMock invocation) {
+        Object[] args = invocation.getArguments();
+        final GetRequest exist = (GetRequest) args[0];
+        switch (attempt++) {
+          case 0:  // We stub out the RegionClient, which normally does this.
+            client.handleNSRE(exist, exist.getRegion().name(),
+                              new NotServingRegionException("test 2", exist));
+            break;
+          case 1:  // Second attempt succeeds.
+          case 2:  // First probe succeeds.
+            exist.getDeferred().callback(true);
+            break;
+          default:
+            throw new AssertionError("Shouldn't be here");
+        }
+        return null;
+      }
+    }).when(newregionclient).sendRpc(any(GetRequest.class));
+    // Do a second meta lookup (behavior already set at [1]).
+    // The second lookup returns the same daughter region (re-use [2]).
+
+    // Answer our actual get request.
+    doAnswer(new Answer() {
+      public Object answer(final InvocationOnMock invocation) {
+        get.getDeferred().callback(row);
+        return null;
+      }
+    }).when(newregionclient).sendRpc(get);
+
+    assertSame(row, client.get(get).joinUninterruptibly());
+  }
+
   // ----------------- //
   // Helper functions. //
   // ----------------- //
