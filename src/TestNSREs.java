@@ -26,6 +26,7 @@
  */
 package org.hbase.async;
 
+import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
@@ -47,11 +48,14 @@ import org.mockito.invocation.InvocationOnMock;
 import org.mockito.stubbing.Answer;
 import static org.mockito.Mockito.any;
 import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import org.powermock.api.support.membermodification.MemberMatcher;
+import org.powermock.api.support.membermodification.MemberModifier;
 import org.powermock.core.classloader.annotations.PowerMockIgnore;
 import org.powermock.core.classloader.annotations.PrepareForTest;
 import org.powermock.modules.junit4.PowerMockRunner;
@@ -128,6 +132,53 @@ final class TestNSREs {
         return null;
       }
     }).when(regionclient).sendRpc(get);
+
+    assertSame(row, client.get(get).joinUninterruptibly());
+  }
+
+  @Test
+  public void simpleNSRE() throws Exception {
+    // Attempt to get a row, get an NSRE back, do a META lookup,
+    // find the new location, try again, succeed.
+    final GetRequest get = new GetRequest(TABLE, KEY);
+    final ArrayList<KeyValue> row = new ArrayList<KeyValue>(1);
+    row.add(KV);
+
+    when(regionclient.isAlive()).thenReturn(true);
+    // First access triggers an NSRE.
+    doAnswer(new Answer() {
+      public Object answer(final InvocationOnMock invocation) {
+        // We completely stub out the RegionClient, which normally does this.
+        client.handleNSRE(get, get.getRegion().name(),
+                          new NotServingRegionException("test", get));
+        return null;
+      }
+    }).when(regionclient).sendRpc(get);
+    // So now we do a meta lookup.
+    when(metaclient.isAlive()).thenReturn(true);
+    when(metaclient.getClosestRowBefore(eq(meta), anyBytes(), anyBytes(), anyBytes()))
+      .thenAnswer(newDeferred(metaRow()));
+    // This is the client where the region moved to after the NSRE.
+    final RegionClient newregionclient = mock(RegionClient.class);
+    final Method newClient = MemberMatcher.method(HBaseClient.class, "newClient");
+    MemberModifier.stub(newClient).toReturn(newregionclient);
+    when(newregionclient.isAlive()).thenReturn(true);
+    // Answer the "exists" probe we use to check if the NSRE is still there.
+    doAnswer(new Answer() {
+      public Object answer(final InvocationOnMock invocation) {
+        Object[] args = invocation.getArguments();
+        final GetRequest exist = (GetRequest) args[0];
+        exist.getDeferred().callback(true);
+        return null;
+      }
+    }).when(newregionclient).sendRpc(any(GetRequest.class));
+    // Answer our actual get request.
+    doAnswer(new Answer() {
+      public Object answer(final InvocationOnMock invocation) {
+        get.getDeferred().callback(row);
+        return null;
+      }
+    }).when(newregionclient).sendRpc(get);
 
     assertSame(row, client.get(get).joinUninterruptibly());
   }
