@@ -27,8 +27,14 @@
 package org.hbase.async;
 
 import java.util.ArrayList;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentSkipListMap;
+import java.util.concurrent.TimeUnit;
+
+import org.jboss.netty.util.Timeout;
+import org.jboss.netty.util.Timer;
+import org.jboss.netty.util.TimerTask;
 
 import com.stumbleupon.async.Deferred;
 
@@ -84,6 +90,8 @@ final class TestNSREs {
   @Before
   public void before() throws Exception {
     Whitebox.setInternalState(client, "rootregion", rootclient);
+    // Inject a timer that always fires away immediately.
+    Whitebox.setInternalState(client, "timer", new FakeTimer());
     regions_cache = Whitebox.getInternalState(client, "regions_cache");
     region2client = Whitebox.getInternalState(client, "region2client");
     injectRegionInCache(meta, metaclient);
@@ -139,6 +147,31 @@ final class TestNSREs {
         return Deferred.fromResult(result);
       }
     };
+  }
+
+  /**
+   * A fake {@link Timer} implementation that fires up tasks immediately.
+   * Tasks are called immediately from the current thread.
+   */
+  static final class FakeTimer implements Timer {
+    @Override
+    public Timeout newTimeout(final TimerTask task,
+                              final long delay,
+                              final TimeUnit unit) {
+      try {
+        task.run(null);  // Argument never used in this code base.
+        return null;     // Return value never used in this code base.
+      } catch (RuntimeException e) {
+        throw e;
+      } catch (Exception e) {
+        throw new RuntimeException("Timer task failed: " + task, e);
+      }
+    }
+
+    @Override
+    public Set<Timeout> stop() {
+      return null;  // Never called during tests.
+    }
   }
 
 }
