@@ -35,7 +35,8 @@ top_builddir = build
 package = org.hbase.async
 spec_title = Asynchronous HBase
 spec_vendor = StumbleUpon, Inc.
-spec_version = 1.1
+# Semantic Versioning (see http://semver.org/).
+spec_version = 1.1.0
 jar := $(top_builddir)/hbaseasync-$(spec_version).jar
 hbaseasync_SOURCES = \
 	src/AtomicIncrementRequest.java	\
