@@ -139,7 +139,7 @@ check: $(UNITTESTS)
         fi
 
 pkg_version = \
-  `git show-ref --head --hash=8 HEAD || echo unknown`
+  `git rev-list --pretty=format:%h HEAD --max-count=1 | sed 1d || echo unknown`
 $(top_builddir)/manifest: $(top_builddir)/.javac-stamp .git/HEAD
 	{ echo "Specification-Title: $(spec_title)"; \
           echo "Specification-Version: $(spec_version)"; \
