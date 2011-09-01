@@ -1,6 +1,6 @@
 HBase Async - User visible changes.
 
-* Version 1.1 (2011-??-??) [???????]
+* Version 1.1.0 (2011-??-??) [???????]
 
 Noteworthy changes:
   - Add support for CDH3b3's non-standard authentication code.  This support
@@ -9,6 +9,10 @@ Noteworthy changes:
     compatible way for the `get' RPC.
   - Fix a dumb mistake in the `memcmp()' version that uses an offset and a
     length.  This function wasn't called either by asynchbase or by OpenTSDB.
+  - Bytes.pretty() no longer renders control characters like `^X' (which is
+    similar to what `cat -t' does).  Instead they're now rendered like other
+    non-ASCII characters, using the hex notation `\xXX'.  This makes the output
+    non-ambiguous and pastable into a Python shell.
 
 New public APIs:
   - DeleteRequest now has constructors for deleting multiple qualifiers per
