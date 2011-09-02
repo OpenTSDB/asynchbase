@@ -870,6 +870,22 @@ public final class Scanner {
       return buf;
     }
 
+    public String toString() {
+      final StringBuilder buf = new StringBuilder(12 + start_key.length + 2
+                                                  + 11 + stop_key.length + 2
+                                                  + 14 + 4
+                                                  + 22 + 5);
+      buf.append(", start_key=");
+      Bytes.pretty(buf, start_key);
+      buf.append(", stop_key=");
+      Bytes.pretty(buf, stop_key);
+      buf.append(", max_num_kvs=").append(max_num_kvs)
+        .append(", populate_blockcache=").append(populate_blockcache);
+      return super.toStringWithQualifier("OpenScannerRequest",
+                                         family, qualifier,
+                                         buf.toString());
+    }
+
   }
 
   private static final byte[] NEXT = new byte[] { 'n', 'e', 'x', 't' };
@@ -890,6 +906,13 @@ public final class Scanner {
       writeHBaseLong(buf, scanner_id);
       writeHBaseInt(buf, max_num_rows);
       return buf;
+    }
+
+    public String toString() {
+      return "GetNextRowsRequest(scanner_id=" + scanner_id
+        + ", max_num_rows=" + max_num_rows
+        + ", region=" + region
+        + ", attempt=" + attempt + ')';
     }
 
   }
@@ -914,6 +937,11 @@ public final class Scanner {
       buf.writeInt(1);  // Number of parameters.
       writeHBaseLong(buf, scanner_id);
       return buf;
+    }
+
+    public String toString() {
+      return "CloseScannerRequest(scanner_id=" + scanner_id
+        + ", attempt=" + attempt + ')';
     }
 
   }
