@@ -472,7 +472,8 @@ public abstract class HBaseRpc {
                                      final byte[] family,
                                      final byte[] qualifier,
                                      final String fields) {
-    final StringBuilder buf = new StringBuilder(256);  // min=181
+    final StringBuilder buf = new StringBuilder(256  // min=181
+                                                + fields.length());
     buf.append(classname).append("(table=");
     Bytes.pretty(buf, table);
     buf.append(", key=");
