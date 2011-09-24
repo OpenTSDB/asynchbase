@@ -602,6 +602,7 @@ public final class HBaseClient {
             LOG.error("Some clients are left in the client cache and haven't"
                       + " been cleaned up: " + logme);
             logme = null;
+            return disconnectEverything();  // Try again.
           }
           zkclient.disconnectZK();
           return arg;
