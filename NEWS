@@ -13,6 +13,8 @@ Noteworthy changes:
     similar to what `cat -t' does).  Instead they're now rendered like other
     non-ASCII characters, using the hex notation `\xXX'.  This makes the output
     non-ambiguous and pastable into a Python shell.
+  - HBaseClient.shutdown() could callback too early, while the shutdown
+    sequence was still running.
 
 New public APIs:
   - DeleteRequest now has constructors for deleting multiple qualifiers per

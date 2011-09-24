@@ -542,8 +542,7 @@ public final class HBaseClient {
     if (d != null) {
       final class RetryShutdown implements Callback<Object, Object> {
         public Object call(final Object arg) {
-          shutdown();
-          return arg;
+          return shutdown();
         }
         public String toString() {
           return "retry shutdown";
