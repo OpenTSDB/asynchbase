@@ -15,6 +15,8 @@ Noteworthy changes:
     non-ambiguous and pastable into a Python shell.
   - HBaseClient.shutdown() could callback too early, while the shutdown
     sequence was still running.
+  - After doing a full-table scan, calling Scanner.close() would trigger an
+    error as the scanner would attempt to close itself again.
 
 New public APIs:
   - DeleteRequest now has constructors for deleting multiple qualifiers per

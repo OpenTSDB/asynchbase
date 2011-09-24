@@ -573,7 +573,7 @@ public final class Scanner {
    * The {@link Object} has not special meaning and can be {@code null}.
    */
   public Deferred<Object> close() {
-    if (region == null) {
+    if (region == null || region == DONE) {
       return Deferred.fromResult(null);
     }
     return client.closeScanner(this).addBoth(closedCallback());
