@@ -119,6 +119,9 @@ $(UNITTESTS): $(jar) $(unittest_SRC) $(test_LIBADD)
 classes_with_nested_classes := $(classes:$(top_builddir)/%.class=%*.class)
 test_classes_with_nested_classes := $(UNITTESTS:.class=*.class)
 
+cli: $(test_classes)
+	$(JAVA) -ea -esa $(JVM_ARGS) -cp "$(get_runtime_dep_classpath):$(top_builddir)" Test $(ARGS)
+
 # Little set script to make a pretty-ish banner.
 BANNER := sed 's/^.*/  &  /;h;s/./=/g;p;x;p;x'
 check: $(UNITTESTS)
@@ -181,4 +184,4 @@ distclean: clean
 	rm -rf $(top_builddir)/api
 	test ! -d $(top_builddir) || rmdir $(top_builddir)
 
-.PHONY: all jar clean distclean doc check
+.PHONY: all jar clean cli distclean doc check
