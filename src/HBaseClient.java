@@ -40,6 +40,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentSkipListMap;
 import java.util.concurrent.Executor;
 import java.util.concurrent.Executors;
+import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.atomic.AtomicLong;
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
 
@@ -238,8 +239,16 @@ public final class HBaseClient {
   /**
    * Executor with which we create all our threads.
    * TODO(tsuna): Get it through the ctor to share it with others.
+   * NOTE(avh): create daemon threads to work around incomplete netty shutdown
    */
-  private final Executor executor = Executors.newCachedThreadPool();
+  private final Executor executor = Executors.newCachedThreadPool(new ThreadFactory() {
+            public Thread newThread(Runnable r)
+            {
+                Thread t = new Thread(r);
+                t.setDaemon(true);
+                return t;
+            }
+        });
 
   /**
    * Timer we use to handle all our timeouts.
