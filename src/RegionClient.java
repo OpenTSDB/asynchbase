@@ -51,7 +51,6 @@ import org.jboss.netty.channel.DownstreamMessageEvent;
 import org.jboss.netty.channel.ExceptionEvent;
 import org.jboss.netty.channel.MessageEvent;
 import org.jboss.netty.handler.codec.replay.ReplayingDecoder;
-import org.jboss.netty.handler.codec.replay.VoidEnum;
 import org.jboss.netty.util.Timeout;
 import org.jboss.netty.util.TimerTask;
 import static org.jboss.netty.channel.ChannelHandler.Sharable;
@@ -84,7 +83,7 @@ import com.stumbleupon.async.Deferred;
  * accepting write requests as well as buffering requests if the underlying
  * channel isn't connected.
  */
-final class RegionClient extends ReplayingDecoder<VoidEnum> {
+final class RegionClient extends ReplayingDecoder<RegionClient.StateEnum> {
 
   private static final Logger LOG = LoggerFactory.getLogger(RegionClient.class);
 
@@ -101,6 +100,9 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
     REMOTE_EXCEPTION_TYPES.put(UnknownRowLockException.REMOTE_CLASS,
                                new UnknownRowLockException(null, null));
   }
+
+  enum StateEnum { ready, parsing_keyvalues};
+
 
   /** The HBase client we belong to.  */
   private final HBaseClient hbase_client;
@@ -192,6 +194,7 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
    */
   public RegionClient(final HBaseClient hbase_client) {
     this.hbase_client = hbase_client;
+    checkpoint(StateEnum.ready);
   }
 
   /**
@@ -1027,6 +1030,17 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
     return payload;
   }
 
+  //
+  // Decoding of KeyValues in an object.
+  //
+
+  private ArrayList<KeyValue> current;            // null unless we're processing an object now
+  private int obj_length = -1;                    // total expected bytes
+  private int obj_offset = 0;                     // bytes read so far
+  private int obj_rpcid;
+
+
+
   /**
    * Decodes the response of an RPC and triggers its {@link Deferred}.
    * <p>
@@ -1044,51 +1058,76 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
   protected Object decode(final ChannelHandlerContext ctx,
                           final Channel chan,
                           final ChannelBuffer buf,
-                          final VoidEnum unused) {
+                          final StateEnum state) {
+
+    // we may already be decoding an object's KeyValues
     final int rdx = buf.readerIndex();
     final long start = System.nanoTime();
-    LOG.debug("------------------>> ENTERING DECODE >>------------------");
-    final int rpcid = buf.readInt();
-    final Object decoded = deserialize(buf, rpcid);
-    final HBaseRpc rpc = rpcs_inflight.remove(rpcid);
     if (LOG.isDebugEnabled()) {
-      LOG.debug("rpcid=" + rpcid
-                + ", response size=" + (buf.readerIndex() - rdx) + " bytes"
-                + ", " + actualReadableBytes() + " readable bytes left"
-                + ", rpc=" + rpc);
+      LOG.debug("------------------>> ENTERING DECODEEEEEEEEEEEEEE >>------------------");
+      LOG.debug("     STATE = " + state);
     }
 
-    if (rpc == null) {
-      final String msg = "Invalid rpcid: " + rpcid + " found in "
-        + buf + '=' + Bytes.pretty(buf);
-      LOG.error(msg);
-      // The problem here is that we don't know which Deferred corresponds to
-      // this RPC, since we don't have a valid ID.  So we're hopeless, we'll
-      // never be able to recover because responses are not framed, we don't
-      // know where the next response will start...  We have to give up here
-      // and throw this outside of our Netty handler, so Netty will call our
-      // exception handler where we'll close this channel, which will cause
-      // all RPCs in flight to be failed.
-      throw new NonRecoverableException(msg);
-    } else if (decoded instanceof NotServingRegionException
-               && rpc.getRegion() != null) {
-      // We only handle NSREs for RPCs targeted at a specific region, because
-      // if we don't know which region caused the NSRE (e.g. during multiPut)
-      // we can't do anything about it.
-      hbase_client.handleNSRE(rpc, rpc.getRegion().name(),
-                              (NotServingRegionException) decoded);
-      return null;
+    final Object decoded;
+    final int rpcid;
+    switch (state) {
+     case ready:
+      obj_rpcid = rpcid = buf.readInt();
+      decoded = deserialize(buf, rpcid);
+      break;
+     case parsing_keyvalues:
+      rpcid = obj_rpcid;
+      decoded = parseResult(buf);
+      break;
+     default:
+      throw new NonRecoverableException("unknown state: " + state);
     }
 
-    try {
-      rpc.callback(decoded);
-    } catch (Exception e) {
-      LOG.error("Unexpected exception while handling RPC #" + rpcid
-                + ", rpc=" + rpc + ", buf=" + Bytes.pretty(buf), e);
-    }
-    if (LOG.isDebugEnabled()) {
-      LOG.debug("------------------<< LEAVING  DECODE <<------------------"
-                + " time elapsed: " + ((System.nanoTime() - start) / 1000) + "us");
+    if (decoded != null) {
+      // ready for another object after this
+      checkpoint(StateEnum.ready);
+
+      final HBaseRpc rpc = rpcs_inflight.remove(rpcid);
+
+      if (LOG.isDebugEnabled()) {
+        LOG.debug("rpcid=" + rpcid
+                  + ", response size=" + (buf.readerIndex() - rdx) + " bytes"
+                  + ", " + actualReadableBytes() + " readable bytes left"
+                  + ", rpc=" + rpc);
+      }
+
+      if (rpc == null) {
+        final String msg = "Invalid rpcid: " + rpcid + " found in "
+          + buf + '=' + Bytes.pretty(buf);
+        LOG.error(msg);
+        // The problem here is that we don't know which Deferred corresponds to
+        // this RPC, since we don't have a valid ID.  So we're hopeless, we'll
+        // never be able to recover because responses are not framed, we don't
+        // know where the next response will start...  We have to give up here
+        // and throw this outside of our Netty handler, so Netty will call our
+        // exception handler where we'll close this channel, which will cause
+        // all RPCs in flight to be failed.
+        throw new NonRecoverableException(msg);
+      } else if (decoded instanceof NotServingRegionException
+                 && rpc.getRegion() != null) {
+        // We only handle NSREs for RPCs targeted at a specific region, because
+        // if we don't know which region caused the NSRE (e.g. during multiPut)
+        // we can't do anything about it.
+        hbase_client.handleNSRE(rpc, rpc.getRegion().name(),
+                                (NotServingRegionException) decoded);
+        return null;
+      }
+
+      try {
+        rpc.callback(decoded);
+      } catch (Exception e) {
+        LOG.error("Unexpected exception while handling RPC #" + rpcid
+                  + ", rpc=" + rpc + ", buf=" + Bytes.pretty(buf), e);
+      }
+      if (LOG.isDebugEnabled()) {
+        LOG.debug("------------------<< LEAVING  DECODE <<------------------"
+                  + " time elapsed: " + ((System.nanoTime() - start) / 1000) + "us");
+      }
     }
     return null;  // Stop processing here.  The Deferred does everything else.
   }
@@ -1128,8 +1167,9 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
    * {@code HbaseObjectWritable#writeObject}.
    * @return The de-serialized object (which can be {@code null}).
    */
-  private static Object deserializeObject(final ChannelBuffer buf) {
-    switch (buf.readByte()) {  // Read the type of the response.
+  private Object deserializeObject(final ChannelBuffer buf) {
+    int b = buf.readByte();
+    switch (b) {  // Read the type of the response.
       case  1:  // Boolean
         return buf.readByte() != 0x00;
       case  6:  // Long
@@ -1157,35 +1197,37 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
    * @param buf The buffer that contains a serialized {@code Result}.
    * @return The result parsed into a list of {@link KeyValue} objects.
    */
-  private static ArrayList<KeyValue> parseResult(final ChannelBuffer buf) {
-    final int length = buf.readInt();
-    HBaseRpc.checkArrayLength(buf, length);
-    // Immediately try to "fault" if `length' bytes aren't available.
-    buf.markReaderIndex();
-    buf.skipBytes(length);
-    buf.resetReaderIndex();
-    //LOG.debug("total Result response length={}", length);
+  private ArrayList<KeyValue> parseResult(final ChannelBuffer buf) {
+    if (current == null) {
+      obj_length = buf.readInt();
+      obj_offset = 4;
+      HBaseRpc.checkArrayLength(buf, obj_length);
 
-    // Pre-compute how many KVs we have so the array below will be rightsized.
-    int num_kv = 0;
-    {
-      int bytes_read = 0;
-      while (bytes_read < length) {
-        final int kv_length = buf.readInt();
-        HBaseRpc.checkArrayLength(buf, kv_length);
-        num_kv++;
-        bytes_read += kv_length + 4;
-        buf.skipBytes(kv_length);
+      // signals we're parsing an object
+      current = new ArrayList<KeyValue>(10);
+      if (LOG.isDebugEnabled()) {
+        LOG.debug("starting KeyValue parse: " + obj_length + " total bytes");
       }
-      buf.resetReaderIndex();
+      checkpoint(StateEnum.parsing_keyvalues);
     }
 
-    final ArrayList<KeyValue> results = new ArrayList<KeyValue>(num_kv);
-    KeyValue kv = null;
-    for (int i = 0; i < num_kv; i++) {
-      final int kv_length = buf.readInt();  // Previous loop checked it's >0.
-      // Now read a KeyValue that spans over kv_length bytes.
+    // here we're always positioned at the beginning of a key/value
+    KeyValue kv = current.size() > 0 ? current.get(current.size() - 1) : null;
+
+    while (obj_offset < obj_length) {
+      // 4 + 2 + <key_length_bytes> + 1 + <family_length> + <qual_length> + <long> + 1 + <value_length>
+
+      final int kv_length = buf.readInt();
+      HBaseRpc.checkArrayLength(buf, kv_length);
+
+      // check if we can read the whole key/value now
+      buf.markReaderIndex();
+      buf.skipBytes(kv_length);
+      buf.resetReaderIndex();
+
+      // apparently we can
       kv = KeyValue.fromBuffer(buf, kv);
+
       final int key_length = (2 + kv.key().length + 1 + kv.family().length
                               + kv.qualifier().length + 8 + 1);   // XXX DEBUG
       if (key_length + kv.value().length + 4 + 4 != kv_length) {
@@ -1194,9 +1236,19 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
                     + key_length + " + " + kv.value().length + ") in " + buf
                     + '=' + Bytes.pretty(buf));
       }
-      results.add(kv);
+      obj_offset += 4 + kv_length;
+      current.add(kv);
+
+      // every successful key/value needs to be checkpointed
+      checkpoint(StateEnum.parsing_keyvalues);
     }
-    return results;
+
+    try {
+      return current;
+    } finally {
+      current = null;
+      checkpoint(StateEnum.ready);
+    }
   }
 
   /**
@@ -1205,8 +1257,7 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
    * @return The results parsed into a list of rows, where each row itself is
    * a list of {@link KeyValue} objects.
    */
-  private static
-    ArrayList<ArrayList<KeyValue>> parseResults(final ChannelBuffer buf) {
+  private ArrayList<ArrayList<KeyValue>> parseResults(final ChannelBuffer buf) {
     final byte version = buf.readByte();
     if (version != 0x01) {
       LOG.warn("Received unsupported Result[] version: " + version);
@@ -1263,8 +1314,14 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
   }
 
   /** Throws an exception with the given error message.  */
-  private static void badResponse(final String errmsg) {
+  private void badResponse(final String errmsg) {
     LOG.error(errmsg);
+
+    // reset the current object
+    current = null;
+    obj_length = -1;
+    obj_offset = 0;
+
     throw new InvalidResponseException(errmsg, null);
   }
 
@@ -1283,7 +1340,7 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
   protected Object decodeLast(final ChannelHandlerContext ctx,
                               final Channel chan,
                               final ChannelBuffer buf,
-                              final VoidEnum unused) {
+                              final StateEnum state) {
     // When we disconnect, decodeLast is called instead of decode.
     // We simply check whether there's any data left in the buffer, in which
     // case we attempt to process it.  But if there's no data left, then we
@@ -1291,7 +1348,7 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
     // doesn't contain enough data, which unnecessarily pollutes the logs.
     if (buf.readable()) {
       try {
-        return decode(ctx, chan, buf, unused);
+        return decode(ctx, chan, buf, state);
       } finally {
         if (buf.readable()) {
           LOG.error("After decoding the last message on " + chan
