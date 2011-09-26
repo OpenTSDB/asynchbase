@@ -591,7 +591,6 @@ public final class HBaseClient {
             if (!ip2client.isEmpty()) {
               logme = new HashMap<String, RegionClient>(ip2client);
             }
-            ip2client.clear();
           }
           if (logme != null) {
             // Putting this logging statement inside the synchronized block
