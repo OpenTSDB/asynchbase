@@ -79,9 +79,12 @@ hbaseasync_LIBADD := \
 	$(SUASYNC)	\
 	$(HADOOP)	\
 
-test_SOURCES = src/Test.java
+test_SOURCES = \
+	src/Test.java \
+	src/Examples.java \
+
 unittest_SRC = \
-	src/TestNSREs.java
+	src/TestNSREs.java \
 
 test_LIBADD := \
 	$(hbaseasync_LIBADD)	\
@@ -121,8 +124,13 @@ $(UNITTESTS): $(jar) $(unittest_SRC) $(test_LIBADD)
 classes_with_nested_classes := $(classes:$(top_builddir)/%.class=%*.class)
 test_classes_with_nested_classes := $(UNITTESTS:.class=*.class)
 
-cli: $(test_classes)
+test: $(test_classes)
+
+cli: test
 	$(JAVA) -ea -esa $(JVM_ARGS) -cp "$(get_runtime_dep_classpath):$(top_builddir)" Test $(ARGS)
+
+examples: test
+	$(JAVA) -ea -esa $(JVM_ARGS) -cp "$(get_runtime_dep_classpath):$(top_builddir)" Examples $(ARGS)
 
 # Little set script to make a pretty-ish banner.
 BANNER := sed 's/^.*/  &  /;h;s/./=/g;p;x;p;x'
