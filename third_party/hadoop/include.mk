@@ -23,17 +23,11 @@
 # ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 # POSSIBILITY OF SUCH DAMAGE.
 
-ASYNCHBASE_THIRD_PARTY_BASE_URL := http://opentsdb.googlecode.com/files
-FETCH_DEPENDENCY := ./build-aux/fetchdep.sh "$$@"
-THIRD_PARTY =
+HADOOP_VERSION := 0.20.2
+HADOOP := third_party/hadoop/hadoop-core-$(HADOOP_VERSION).jar
+HADOOP_BASE_URL := http://hadoop-via-maven.googlecode.com/svn-history/r3/trunk/repo/org/apache/hadoop/hadoop-core/0.20.2/
 
-include third_party/javassist/include.mk
-include third_party/junit/include.mk
-include third_party/logback/include.mk
-include third_party/mockito/include.mk
-include third_party/netty/include.mk
-include third_party/powermock/include.mk
-include third_party/slf4j/include.mk
-include third_party/suasync/include.mk
-include third_party/zookeeper/include.mk
-include third_party/hadoop/include.mk
+$(HADOOP): $(HADOOP).md5
+	set dummy "$(HADOOP_BASE_URL)" "$(HADOOP)"; shift; $(FETCH_DEPENDENCY)
+
+THIRD_PARTY += $(HADOOP)

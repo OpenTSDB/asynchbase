@@ -70,12 +70,14 @@ hbaseasync_SOURCES = \
 	src/TableNotFoundException.java	\
 	src/UnknownRowLockException.java	\
 	src/UnknownScannerException.java	\
+	src/TableInputFormat.java	\
 
 hbaseasync_LIBADD := \
 	$(NETTY)	\
 	$(SLF4J_API)	\
 	$(ZOOKEEPER)	\
 	$(SUASYNC)	\
+	$(HADOOP)	\
 
 test_SOURCES = src/Test.java
 unittest_SRC = \
