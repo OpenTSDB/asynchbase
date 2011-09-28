@@ -42,6 +42,7 @@ import org.apache.hadoop.mapreduce.JobContext;
 import org.apache.hadoop.mapreduce.RecordReader;
 import org.apache.hadoop.mapreduce.TaskAttemptContext;
 
+import com.stumbleupon.async.Callback;
 import com.stumbleupon.async.Deferred;
 
 // REMIND: need faster scanner, using large streaming reads and callbacks
@@ -52,7 +53,7 @@ import com.stumbleupon.async.Deferred;
  * Input format for map reduce jobs.
  *
  * <ul>
- * <li><b>hbase.async.cluster</b> - quorum spec for the cluster
+ * <li><b>hbase.async.quorum</b> - quorum spec for the cluster
  * <li><b>hbase.mapreduce.inputtable</b> - the name of the input table
  * <li><b>hbase.mapreduce.scan.families</b> - column families to scan, seperated by spaces or commas
  * <li><b>hbase.mapreduce.scan.columns</b> - column to scan, prefixed by family, seperated by spaces or commas
@@ -77,11 +78,12 @@ public class TableInputFormat extends InputFormat<BytesWritable,List<KeyValue>> 
     {
         List<InputSplit> list = new ArrayList<InputSplit>();
         byte[] table = Bytes.UTF8(conf.get("hbase.mapreduce.inputtable"));
-        HBaseClient client = new HBaseClient(conf.get("hbase.async.cluster"));
+        HBaseClient client = new HBaseClient(conf.get("hbase.async.quorum"));
         try {
             TableSplit prev = null;
             final Scanner scanner = client.newScanner(META);
             try {
+                scanner.setMaxNumRows(1000);
                 scanner.setStartKey(table);
                 scanner.setFamily(INFO);
                 scanner.setQualifier(SERVER);
@@ -90,8 +92,7 @@ public class TableInputFormat extends InputFormat<BytesWritable,List<KeyValue>> 
 
                 try {
                     for (int b = 0 ; ; b++) {
-                        Deferred<ArrayList<ArrayList<KeyValue>>> rows = scanner.nextRows(1000);
-                        ArrayList<ArrayList<KeyValue>> results = rows.join();
+                        ArrayList<ArrayList<KeyValue>> results = scanner.nextRows().join();
                         if (results == null || results.size() == 0) {
                             break;
                         }
@@ -123,7 +124,12 @@ public class TableInputFormat extends InputFormat<BytesWritable,List<KeyValue>> 
                 } catch (Exception e) {
                     throw new IOException(e);
                 }
-            
+                if (true) {
+                    System.out.printf("-- %s --\n", conf.get("hbase.mapreduce.inputtable"));
+                    for (InputSplit split : list) {
+                        System.out.printf("%s\n", split);
+                    }
+                }
             } finally {
                 try {
                     scanner.close().join();
@@ -131,7 +137,6 @@ public class TableInputFormat extends InputFormat<BytesWritable,List<KeyValue>> 
                     throw new IOException(e);
                 }
             }
-
         } finally {
             client.shutdown();
         }
@@ -220,17 +225,37 @@ public class TableInputFormat extends InputFormat<BytesWritable,List<KeyValue>> 
         int chunkSize;
         BytesWritable key;
         int index;
-        ArrayList<ArrayList<KeyValue>> values;
+        boolean done, more;
         ArrayList<KeyValue> current;
+        ArrayList<KeyValue> next;
 
         TableRecordReader(Configuration conf, TableSplit split) throws IOException
         {
-            this.client = new HBaseClient(conf.get("hbase.async.cluster"));
-            this.chunkSize = Integer.valueOf(conf.get("hbase.async.chunk.size", "1000"));
+            this.client = new HBaseClient(conf.get("hbase.async.quorum"));
             this.table = Bytes.UTF8(conf.get("hbase.mapreduce.inputtable"));
             this.split = split;
-            this.scanner = client.newScanner(table);
             this.key = new BytesWritable();
+            this.current = new ArrayList<KeyValue>();
+            this.next = new ArrayList<KeyValue>();
+
+            // create a scanner, use the filter to collect KeyValue pairs
+            this.scanner = client.newScanner(table, new Callback<KeyValue,KeyValue>() {
+                    public KeyValue call(KeyValue kv) throws Exception
+                    {
+                        synchronized (TableRecordReader.this) {
+                            if (next.size() > 0 && !Bytes.equals(kv.key(), next.get(0).key())) {
+                                more = true;
+                                TableRecordReader.this.notify();
+                                for (; more ; TableRecordReader.this.wait());
+                            }
+                            next.add(kv);
+                        }
+                        return null;
+                    }
+                });
+            scanner.setMaxNumKeyValues(-1);
+            scanner.setMaxNumRows(1024);
+
             // REMIND: set additional constraints
             if (conf.get("hbase.mapreduce.scan.family") != null) {
                 for (String fam : conf.get("hbase.mapreduce.scan.families").split("[ ,]")) {
@@ -244,6 +269,29 @@ public class TableInputFormat extends InputFormat<BytesWritable,List<KeyValue>> 
                     scanner.setQualifier(col.substring(col.indexOf(':')+1));
                 }
             }
+
+            scanner.nextRows().addCallback(new Callback<ArrayList<ArrayList<KeyValue>>, ArrayList<ArrayList<KeyValue>>>() {
+                public ArrayList<ArrayList<KeyValue>> call(ArrayList<ArrayList<KeyValue>> result)  throws Exception
+                {
+                    if (result != null) {
+                        System.out.printf("scanner next chunk\n");
+                        scanner.nextRows().addCallback(this);
+                        return null;
+                    }
+
+                    System.out.printf("scanner is done\n");
+                    synchronized (TableRecordReader.this) {
+                        if (next.size() > 0) {
+                            more = true;
+                            TableRecordReader.this.notify();
+                            for (; more ; TableRecordReader.this.wait());
+                        }
+                        done = true;
+                        TableRecordReader.this.notify();
+                    }
+                    return result;
+                }
+            });
         }
         public @Override void initialize(InputSplit inputsplit, TaskAttemptContext context) throws IOException, InterruptedException 
         {
@@ -258,18 +306,17 @@ public class TableInputFormat extends InputFormat<BytesWritable,List<KeyValue>> 
         }
         public @Override boolean nextKeyValue() throws IOException, InterruptedException 
         {
-            if (values == null || index == values.size()) {
-                try {
-                    index = 0;
-                    values = scanner.nextRows(chunkSize).join();
-                } catch (Exception e) {
-                    throw new IOException(e);
+            synchronized (this) {
+                for (; !done && !more ; wait());
+                if (more) {
+                    ArrayList<KeyValue> prev = current;
+                    current = next;
+                    next = prev;
+                    next.clear();
+                    more = false;
+                    notify();
+                    return true;
                 }
-            }
-            if (values != null && index < values.size()) {
-                current = values.get(index++);
-                key = new BytesWritable(current.get(0).key());
-                return true;
             }
             return false;
         }
