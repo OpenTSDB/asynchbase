@@ -31,6 +31,7 @@ import java.io.DataOutput;
 import java.io.IOException;
 import java.util.List;
 import java.util.ArrayList;
+import java.util.LinkedList;
 
 import org.apache.hadoop.io.Writable;
 import org.apache.hadoop.io.BytesWritable;
@@ -45,7 +46,6 @@ import org.apache.hadoop.mapreduce.TaskAttemptContext;
 import com.stumbleupon.async.Callback;
 import com.stumbleupon.async.Deferred;
 
-// REMIND: need faster scanner, using large streaming reads and callbacks
 // REMIND: support scanning multiple column families
 // REMIND: support scanning time ranges
 
@@ -63,6 +63,7 @@ import com.stumbleupon.async.Deferred;
  */
 public class TableInputFormat extends InputFormat<BytesWritable,List<KeyValue>> implements Configurable 
 {
+    private final static byte[] NONE = new byte[0];
     private final static byte[] META = ".META.".getBytes();
     private final static byte[] INFO = "info".getBytes();
     private final static byte[] SERVER = "server".getBytes();
@@ -113,7 +114,7 @@ public class TableInputFormat extends InputFormat<BytesWritable,List<KeyValue>> 
                                         System.arraycopy(key, i, next.start, 0, next.start.length);
                                     }
                                     if (prev != null) {
-                                        prev.end = next.start;
+                                        prev.stop = next.start;
                                     }
                                     list.add(next);
                                     prev = next;
@@ -158,8 +159,8 @@ public class TableInputFormat extends InputFormat<BytesWritable,List<KeyValue>> 
     public static class TableSplit extends InputSplit implements Writable, Comparable<TableSplit>
     {
         public byte[] table;
-        public byte[] start;
-        public byte[] end;
+        public byte[] start = NONE;
+        public byte[] stop = NONE;
         public String host;
 
         public @Override String[] getLocations() 
@@ -180,7 +181,7 @@ public class TableInputFormat extends InputFormat<BytesWritable,List<KeyValue>> 
         {
             table = readByteArray(in);
             start = readByteArray(in);
-            end = readByteArray(in);
+            stop = readByteArray(in);
             host = new String(readByteArray(in));
         }
         private void writeByteArray(DataOutput out, byte[] data) throws IOException
@@ -192,12 +193,12 @@ public class TableInputFormat extends InputFormat<BytesWritable,List<KeyValue>> 
         {
             writeByteArray(out, table);
             writeByteArray(out, start);
-            writeByteArray(out, end);
+            writeByteArray(out, stop);
             writeByteArray(out, Bytes.UTF8(host));
         }
         public @Override String toString() 
         {
-            return String.format("TableSplit[%s,%s,%s,%s]", new String(table), new String(start), new String(end), host);
+            return String.format("TableSplit[%s,%s,%s,%s]", new String(table), new String(start), new String(stop), host);
         }
         public @Override int compareTo(TableSplit split) 
         {
@@ -207,9 +208,26 @@ public class TableInputFormat extends InputFormat<BytesWritable,List<KeyValue>> 
         {
             if (other instanceof TableSplit) {
                 TableSplit o = (TableSplit)other;
-                return Bytes.equals(table, o.table) && Bytes.equals(start, o.start) && Bytes.equals(end, o.end) && host.equals(o.host);
+                return Bytes.equals(table, o.table) && Bytes.equals(start, o.start) && Bytes.equals(stop, o.stop) && host.equals(o.host);
             }
             return false;
+        }
+    }
+
+    //
+    // Record
+    //
+    @SuppressWarnings("serial")
+    public static class Record extends ArrayList<KeyValue>
+    {
+        byte[] key;
+        int bytes;
+
+        public @Override boolean add(KeyValue kv)
+        {
+            key = kv.key();
+            bytes += kv.value().length;
+            return super.add(kv);
         }
     }
     
@@ -225,9 +243,20 @@ public class TableInputFormat extends InputFormat<BytesWritable,List<KeyValue>> 
         int chunkSize;
         BytesWritable key;
         int index;
-        boolean done, more;
-        ArrayList<KeyValue> current;
-        ArrayList<KeyValue> next;
+        boolean done;
+        Record current;
+        LinkedList<Record> pending;
+        int pendingBytes;
+        Record incomplete;
+
+        int chunkCount;
+        int chunkRows;
+        int chunkValues;
+        long chunkTime;
+        long chunkBytes;
+        
+        int maxNumRows;
+        int maxPendingBytes;
 
         TableRecordReader(Configuration conf, TableSplit split) throws IOException
         {
@@ -235,26 +264,41 @@ public class TableInputFormat extends InputFormat<BytesWritable,List<KeyValue>> 
             this.table = Bytes.UTF8(conf.get("hbase.mapreduce.inputtable"));
             this.split = split;
             this.key = new BytesWritable();
-            this.current = new ArrayList<KeyValue>();
-            this.next = new ArrayList<KeyValue>();
+            this.current = null;
+            this.pending = new LinkedList<Record>();
+            this.incomplete = new Record();
 
             // create a scanner, use the filter to collect KeyValue pairs
             this.scanner = client.newScanner(table, new Callback<KeyValue,KeyValue>() {
                     public KeyValue call(KeyValue kv) throws Exception
                     {
-                        synchronized (TableRecordReader.this) {
-                            if (next.size() > 0 && !Bytes.equals(kv.key(), next.get(0).key())) {
-                                more = true;
-                                TableRecordReader.this.notify();
-                                for (; more ; TableRecordReader.this.wait());
+                        if (incomplete.key != null && !Bytes.equals(kv.key(), incomplete.key)) {
+                            synchronized (pending) {
+                                chunkRows += 1;
+                                chunkValues += incomplete.size();
+                                chunkBytes += incomplete.bytes;
+                                pendingBytes += incomplete.bytes;
+                                pending.add(incomplete);
+                                pending.notify();
+                                for (; pendingBytes > maxPendingBytes ; pending.wait());
                             }
-                            next.add(kv);
+                            incomplete = new Record();
                         }
+                        incomplete.add(kv);
                         return null;
                     }
                 });
+
+            maxPendingBytes = Integer.valueOf(conf.get("hbase.async.maxPendingBytes", "104857600"));
+            maxNumRows = Integer.valueOf(conf.get("hbase.async.maxNumRows", "1024"));
             scanner.setMaxNumKeyValues(-1);
-            scanner.setMaxNumRows(1024);
+
+            if (split.start.length > 0) {
+                scanner.setStartKey(split.start);
+            }
+            if (split.stop.length > 0) {
+                scanner.setStopKey(split.stop);
+            }
 
             // REMIND: set additional constraints
             if (conf.get("hbase.mapreduce.scan.family") != null) {
@@ -270,26 +314,51 @@ public class TableInputFormat extends InputFormat<BytesWritable,List<KeyValue>> 
                 }
             }
 
-            scanner.nextRows().addCallback(new Callback<ArrayList<ArrayList<KeyValue>>, ArrayList<ArrayList<KeyValue>>>() {
+            chunkTime = System.currentTimeMillis();
+            chunkBytes = 0;
+            scanner.nextRows(maxNumRows).addCallback(new Callback<ArrayList<ArrayList<KeyValue>>, ArrayList<ArrayList<KeyValue>>>() {
                 public ArrayList<ArrayList<KeyValue>> call(ArrayList<ArrayList<KeyValue>> result)  throws Exception
                 {
+                    if (incomplete.key != null) {
+                        synchronized (pending) {
+                            chunkRows += 1;
+                            chunkBytes += incomplete.bytes;
+                            chunkValues += incomplete.size();
+                            pendingBytes += incomplete.bytes;
+                            pending.add(incomplete);
+                            pending.notify();
+                            for (; pendingBytes > maxPendingBytes ; pending.wait());
+                        }
+                        incomplete = new Record();
+                    }
+                    int pBytes, pCount;
+                    synchronized (pending) {
+                        pCount = pending.size();
+                        pBytes = pendingBytes;
+                    }
+                    long now = System.currentTimeMillis();
+                    chunkTime = now - chunkTime;
+                    chunkCount++;
+
+                    System.out.printf("%6d: chunk %,d rows, %,d values, %,d bytes, %,d kbps, %,dms, pending %,d records, %,d bytes\n", chunkCount, chunkRows, chunkValues, chunkBytes, chunkTime, (chunkBytes*1000) / (chunkTime*1024), pCount, pBytes);
+                        
+                    chunkTime = now;
+                    chunkRows = 0;
+                    chunkValues = 0;
+                    chunkBytes = 0;
+                    
                     if (result != null) {
-                        System.out.printf("scanner next chunk\n");
-                        scanner.nextRows().addCallback(this);
-                        return null;
+                        maxNumRows *= 2;
+                        scanner.nextRows(maxNumRows).addCallback(this);
+                        return result;
                     }
 
                     System.out.printf("scanner is done\n");
-                    synchronized (TableRecordReader.this) {
-                        if (next.size() > 0) {
-                            more = true;
-                            TableRecordReader.this.notify();
-                            for (; more ; TableRecordReader.this.wait());
-                        }
+                    synchronized (pending) {
                         done = true;
-                        TableRecordReader.this.notify();
+                        pending.notify();
                     }
-                    return result;
+                    return null;
                 }
             });
         }
@@ -306,19 +375,16 @@ public class TableInputFormat extends InputFormat<BytesWritable,List<KeyValue>> 
         }
         public @Override boolean nextKeyValue() throws IOException, InterruptedException 
         {
-            synchronized (this) {
-                for (; !done && !more ; wait());
-                if (more) {
-                    ArrayList<KeyValue> prev = current;
-                    current = next;
-                    next = prev;
-                    next.clear();
-                    more = false;
-                    notify();
+            synchronized (pending) {
+                for (; pending.isEmpty() && !done ; pending.wait());
+                if (!pending.isEmpty()) {
+                    current = pending.pop();
+                    pendingBytes -= current.bytes;
+                    pending.notify();
                     return true;
                 }
+                return false;
             }
-            return false;
         }
         public @Override float getProgress() 
         {
