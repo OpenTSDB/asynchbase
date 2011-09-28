@@ -1367,57 +1367,49 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
       decoded = deserialize(buf, rpcid);
     }
 
-    if (decoded != null || (current != null && current.done())) {
-      // Decoded is not null when we have something to return. However, sometimes we parse zero
-      // results, which come back as null, so we consult the current parser to see if it is in fact
-      // done.
-      final HBaseRpc rpc = rpcs_inflight.remove(rpcid);
+    final HBaseRpc rpc = rpcs_inflight.remove(rpcid);
 
-      // finished with the current parser, if one was involved
-      if (decoded == null) {
-        LOG.debug(" PARSER RETURNED NULL and it's DONE");
-      }
-      current = null;
+    // finished with the current parser, if one was involved
+    current = null;
 
-      if (LOG.isDebugEnabled()) {
-        LOG.debug("rpcid=" + rpcid
-                  + ", response size=" + (buf.readerIndex() - rdx) + " bytes"
-                  + ", " + actualReadableBytes() + " readable bytes left"
-                  + ", rpc=" + rpc);
-      }
+    if (LOG.isDebugEnabled()) {
+      LOG.debug("rpcid=" + rpcid
+                + ", response size=" + (buf.readerIndex() - rdx) + " bytes"
+                + ", " + actualReadableBytes() + " readable bytes left"
+                + ", rpc=" + rpc);
+    }
 
-      if (rpc == null) {
-        final String msg = "Invalid rpcid: " + rpcid + " found in "
-          + buf + '=' + Bytes.pretty(buf, MAX_PRETTY_BYTES);
-        LOG.error(msg);
-        // The problem here is that we don't know which Deferred corresponds to
-        // this RPC, since we don't have a valid ID.  So we're hopeless, we'll
-        // never be able to recover because responses are not framed, we don't
-        // know where the next response will start...  We have to give up here
-        // and throw this outside of our Netty handler, so Netty will call our
-        // exception handler where we'll close this channel, which will cause
-        // all RPCs in flight to be failed.
-        throw new NonRecoverableException(msg);
-      } else if (decoded instanceof NotServingRegionException
-                 && rpc.getRegion() != null) {
-        // We only handle NSREs for RPCs targeted at a specific region, because
-        // if we don't know which region caused the NSRE (e.g. during multiPut)
-        // we can't do anything about it.
-        hbase_client.handleNSRE(rpc, rpc.getRegion().name(),
-                                (NotServingRegionException) decoded);
-        return null;
-      }
+    if (rpc == null) {
+      final String msg = "Invalid rpcid: " + rpcid + " found in "
+        + buf + '=' + Bytes.pretty(buf, MAX_PRETTY_BYTES);
+      LOG.error(msg);
+      // The problem here is that we don't know which Deferred corresponds to
+      // this RPC, since we don't have a valid ID.  So we're hopeless, we'll
+      // never be able to recover because responses are not framed, we don't
+      // know where the next response will start...  We have to give up here
+      // and throw this outside of our Netty handler, so Netty will call our
+      // exception handler where we'll close this channel, which will cause
+      // all RPCs in flight to be failed.
+      throw new NonRecoverableException(msg);
+    } else if (decoded instanceof NotServingRegionException
+               && rpc.getRegion() != null) {
+      // We only handle NSREs for RPCs targeted at a specific region, because
+      // if we don't know which region caused the NSRE (e.g. during multiPut)
+      // we can't do anything about it.
+      hbase_client.handleNSRE(rpc, rpc.getRegion().name(),
+                              (NotServingRegionException) decoded);
+      return null;
+    }
 
-      try {
-        rpc.callback(decoded);
-      } catch (Exception e) {
-        LOG.error("Unexpected exception while handling RPC #" + rpcid
-                  + ", rpc=" + rpc + ", buf=" + Bytes.pretty(buf, MAX_PRETTY_BYTES), e);
-      }
-      if (LOG.isDebugEnabled()) {
-        LOG.debug("------------------<< LEAVING  DECODE <<------------------"
-                  + " time elapsed: " + ((System.nanoTime() - start) / 1000) + "us");
-      }
+    try {
+      rpc.callback(decoded);
+    } catch (Exception e) {
+      LOG.error("Unexpected exception while handling RPC #" + rpcid
+                + ", rpc=" + rpc + ", buf=" + Bytes.pretty(buf, MAX_PRETTY_BYTES), e);
+    }
+    if (LOG.isDebugEnabled()) {
+      LOG.debug("------------------<< LEAVING  DECODE <<------------------"
+                + " time elapsed: " + ((System.nanoTime() - start) / 1000) + "us");
     }
     return null;  // Stop processing here.  The Deferred does everything else.
   }
