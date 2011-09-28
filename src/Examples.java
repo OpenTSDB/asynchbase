@@ -44,13 +44,14 @@ import com.stumbleupon.async.Callback;
 public class Examples
 {
     final static String TABLE = "hbase_async_test";
+    static int SCAN_ROWS = 5;
 
     public static void usage()
     {
         System.err.println("usage:");
         System.err.println("  Examples <quorum> -put <count>");
         System.err.println("  Examples <quorum> -get <row> [-filter [keep]]");
-        System.err.println("  Examples <quorum> -scan [-filter [keep]]");
+        System.err.println("  Examples <quorum> -scan [-filter [keep]] [-scanrows N]");
     }
 
     public static void main(String[] argv) throws Exception
@@ -66,23 +67,30 @@ public class Examples
         HBaseClient client = new HBaseClient(quorum);
 
         // create filter if specified
-        SimpleFilter filter = null;
+        SimpleFilter simpleFilter = null;
+        boolean filter = false, keep = false;
         for (int i = 0; i < argv.length; i++) {
             String a = argv[i];
             if (a.equals("-filter")) {
-                boolean keep = (++i < argv.length && argv[i].equals("keep"));
-                filter = new SimpleFilter(keep);
-                break;
+                filter = true;
+            } else if (a.equals("-keep")) {
+                keep = true;
+            } else if (a.equals("-scanrows")) {
+                SCAN_ROWS = Integer.parseInt(argv[++i]);
             }
+        }
+
+        if (filter) {
+            simpleFilter = new SimpleFilter(keep);
         }
 
         try {
             if (argv[1].equals("-put")) {
                 result = put(client, argv);
             } else if (argv[1].equals("-get")) {
-                result = get(client, argv, filter);
+                result = get(client, argv, simpleFilter);
             } else if (argv[1].equals("-scan")) {
-                result = scan(client, argv, filter);
+                result = scan(client, argv, simpleFilter);
             } else {
                 System.err.printf("error: invalid arguments\n");
                 usage();
@@ -155,9 +163,10 @@ public class Examples
     {
         int count = 0;
         Scanner scanner = client.newScanner(TABLE, filter);
+        System.out.format("Scanning %d rows at once\n", SCAN_ROWS);
         try {
             for (;;) {
-                ArrayList<ArrayList<KeyValue>> results = scanner.nextRows(5).join();
+                ArrayList<ArrayList<KeyValue>> results = scanner.nextRows(SCAN_ROWS).join();
                 if (results == null) {
                     break;
                 }
