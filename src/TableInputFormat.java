@@ -83,6 +83,7 @@ public class TableInputFormat extends InputFormat<BytesWritable,List<KeyValue>> 
             TableSplit prev = null;
             final Scanner scanner = client.newScanner(META);
             try {
+                scanner.setMaxNumRows(1000);
                 scanner.setStartKey(table);
                 scanner.setFamily(INFO);
                 scanner.setQualifier(SERVER);
@@ -91,8 +92,7 @@ public class TableInputFormat extends InputFormat<BytesWritable,List<KeyValue>> 
 
                 try {
                     for (int b = 0 ; ; b++) {
-                        Deferred<ArrayList<ArrayList<KeyValue>>> rows = scanner.nextRows(1000);
-                        ArrayList<ArrayList<KeyValue>> results = rows.join();
+                        ArrayList<ArrayList<KeyValue>> results = scanner.nextRows().join();
                         if (results == null || results.size() == 0) {
                             break;
                         }
@@ -124,7 +124,12 @@ public class TableInputFormat extends InputFormat<BytesWritable,List<KeyValue>> 
                 } catch (Exception e) {
                     throw new IOException(e);
                 }
-            
+                if (true) {
+                    System.out.printf("-- %s --\n", conf.get("hbase.mapreduce.inputtable"));
+                    for (InputSplit split : list) {
+                        System.out.printf("%s\n", split);
+                    }
+                }
             } finally {
                 try {
                     scanner.close().join();
@@ -132,7 +137,6 @@ public class TableInputFormat extends InputFormat<BytesWritable,List<KeyValue>> 
                     throw new IOException(e);
                 }
             }
-
         } finally {
             client.shutdown();
         }
@@ -249,6 +253,8 @@ public class TableInputFormat extends InputFormat<BytesWritable,List<KeyValue>> 
                         return null;
                     }
                 });
+            scanner.setMaxNumKeyValues(-1);
+            scanner.setMaxNumRows(1024);
 
             // REMIND: set additional constraints
             if (conf.get("hbase.mapreduce.scan.family") != null) {
@@ -264,24 +270,28 @@ public class TableInputFormat extends InputFormat<BytesWritable,List<KeyValue>> 
                 }
             }
 
-            // start scanner, use callback to output the last row and terminate the scan
-            scanner.nextRows(Integer.MAX_VALUE).addCallback(new Callback<ArrayList<ArrayList<KeyValue>>, ArrayList<ArrayList<KeyValue>>>() {
-                    public ArrayList<ArrayList<KeyValue>> call(ArrayList<ArrayList<KeyValue>> result)  throws Exception
-                    {
-                        System.out.printf("scanner is done\n");
-
-                        synchronized (TableRecordReader.this) {
-                            if (next.size() > 0) {
-                                more = true;
-                                TableRecordReader.this.notify();
-                                for (; more ; TableRecordReader.this.wait());
-                            }
-                            done = true;
-                            TableRecordReader.this.notify();
-                        }
-                        return result;
+            scanner.nextRows().addCallback(new Callback<ArrayList<ArrayList<KeyValue>>, ArrayList<ArrayList<KeyValue>>>() {
+                public ArrayList<ArrayList<KeyValue>> call(ArrayList<ArrayList<KeyValue>> result)  throws Exception
+                {
+                    if (result != null) {
+                        System.out.printf("scanner next chunk\n");
+                        scanner.nextRows().addCallback(this);
+                        return null;
                     }
-                });
+
+                    System.out.printf("scanner is done\n");
+                    synchronized (TableRecordReader.this) {
+                        if (next.size() > 0) {
+                            more = true;
+                            TableRecordReader.this.notify();
+                            for (; more ; TableRecordReader.this.wait());
+                        }
+                        done = true;
+                        TableRecordReader.this.notify();
+                    }
+                    return result;
+                }
+            });
         }
         public @Override void initialize(InputSplit inputsplit, TaskAttemptContext context) throws IOException, InterruptedException 
         {
