@@ -1207,7 +1207,6 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
         if (values == null) {
           values = new ArrayList<ArrayList<KeyValue>>(10);
         }
-        System.out.println("Starting new row: " + values.size() + " with room for " + num_kvs + " keys");
         values.add(new ArrayList<KeyValue>(num_kvs));
         rowPending = false;
       }
