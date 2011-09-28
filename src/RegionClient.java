@@ -87,6 +87,7 @@ import com.stumbleupon.async.Deferred;
 final class RegionClient extends ReplayingDecoder<VoidEnum> {
 
   private static final Logger LOG = LoggerFactory.getLogger(RegionClient.class);
+  private static int MAX_PRETTY_BYTES = 10 * 1024;
 
   /** Maps remote exception types to our corresponding types.  */
   private static final HashMap<String, HBaseException> REMOTE_EXCEPTION_TYPES;
@@ -1046,6 +1047,7 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
     protected ResultParser(int rpcid) {
       this.rpc = rpcs_inflight.get(rpcid);
       this.rpcid = rpcid;
+      checkpoint();
      }
 
     /**
@@ -1088,7 +1090,7 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
           badResponse("kv_length=" + kv_length
                       + " doesn't match key_length + value_length ("
                       + key_length + " + " + kv.value().length + ") in " + buf
-                      + '=' + Bytes.pretty(buf));
+                      + '=' + Bytes.pretty(buf, MAX_PRETTY_BYTES));
         }
 
         // adjust our offset
@@ -1256,7 +1258,7 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
         num_rows = buf.readInt();
         if (rows < 0) {
           badResponse("Negative number of results=" + num_rows + " found in "
-                      + buf + '=' + Bytes.pretty(buf));
+                      + buf + '=' + Bytes.pretty(buf, MAX_PRETTY_BYTES));
         } else if (num_rows == 0) {
           length = offset = 0;                    // indicates we're done
           return completed();
@@ -1301,7 +1303,7 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
       if (length != offset) {
         badResponse("Result[" + num_rows + "] was supposed to be " + length
                     + " bytes, but we only read " + offset + " bytes from "
-                    + buf + '=' + Bytes.pretty(buf));
+                    + buf + '=' + Bytes.pretty(buf, MAX_PRETTY_BYTES));
       }
 
       return completed();
@@ -1368,7 +1370,7 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
 
       if (rpc == null) {
         final String msg = "Invalid rpcid: " + rpcid + " found in "
-          + buf + '=' + Bytes.pretty(buf);
+          + buf + '=' + Bytes.pretty(buf, MAX_PRETTY_BYTES);
         LOG.error(msg);
         // The problem here is that we don't know which Deferred corresponds to
         // this RPC, since we don't have a valid ID.  So we're hopeless, we'll
@@ -1392,7 +1394,7 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
         rpc.callback(decoded);
       } catch (Exception e) {
         LOG.error("Unexpected exception while handling RPC #" + rpcid
-                  + ", rpc=" + rpc + ", buf=" + Bytes.pretty(buf), e);
+                  + ", rpc=" + rpc + ", buf=" + Bytes.pretty(buf, MAX_PRETTY_BYTES), e);
       }
       if (LOG.isDebugEnabled()) {
         LOG.debug("------------------<< LEAVING  DECODE <<------------------"
@@ -1461,7 +1463,7 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
         return MultiPutResponse.fromBuffer(buf);
     }
     throw new NonRecoverableException("Couldn't de-serialize "
-                                      + Bytes.pretty(buf));
+                                      + Bytes.pretty(buf, MAX_PRETTY_BYTES));
   }
 
   /** Throws an exception with the given error message.  */
@@ -1503,7 +1505,7 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
           LOG.error("After decoding the last message on " + chan
                     + ", there was still some undecoded bytes in the channel's"
                     + " buffer (which are going to be lost): "
-                    + buf + '=' + Bytes.pretty(buf));
+                    + buf + '=' + Bytes.pretty(buf, MAX_PRETTY_BYTES));
         }
       }
     } else {

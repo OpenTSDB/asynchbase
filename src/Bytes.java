@@ -298,6 +298,16 @@ public final class Bytes {
    * @param array The array to pretty-print.
    */
   public static void pretty(final StringBuilder outbuf, final byte[] array) {
+    pretty(outbuf, array, Integer.MAX_VALUE);
+  }
+
+  /**
+   * Pretty-prints a byte array into a human-readable output buffer.
+   * @param outbuf The (possibly {@code null}) buffer where to write the output.
+   * @param array The array to pretty-print.
+   * @param limit The maximum number of bytes to print.
+   */
+  public static void pretty(final StringBuilder outbuf, final byte[] array, int limit) {
     if (array == null) {
       outbuf.append("null");
       return;
@@ -319,6 +329,10 @@ public final class Bytes {
           .append((char) HEX[(b >>> 4) & 0x0F])
           .append((char) HEX[b & 0x0F]);
       }
+      if (--limit < 0) {
+        outbuf.append("<trunc>");
+        break;
+      }
     }
     if (ascii < array.length / 2) {
       outbuf.setLength(start_length);
@@ -333,12 +347,23 @@ public final class Bytes {
    * @param array The (possibly {@code null}) array to pretty-print.
    * @return The array in a pretty-printed string.
    */
-  public static String pretty(final byte[] array) {
+  public static String pretty(final byte[] array)
+  {
+    return pretty(array, Integer.MAX_VALUE);
+  }
+
+  /**
+   * Pretty-prints a byte array into a human-readable string.
+   * @param array The (possibly {@code null}) array to pretty-print.
+   * @param limit The maximum number of bytes to print.
+   * @return The array in a pretty-printed string.
+   */
+  public static String pretty(final byte[] array, int limit) {
     if (array == null) {
       return "null";
     }
     final StringBuilder buf = new StringBuilder(1 + array.length + 1);
-    pretty(buf, array);
+    pretty(buf, array, limit);
     return buf.toString();
   }
 
@@ -392,6 +417,15 @@ public final class Bytes {
    * @return The buffer in a pretty-printed string.
    */
   public static String pretty(final ChannelBuffer buf) {
+    return pretty(buf, Integer.MAX_VALUE);
+  }
+  /**
+   * Pretty-prints all the bytes of a buffer into a human-readable string.
+   * @param buf The (possibly {@code null}) buffer to pretty-print.
+   * @param limit The maximum number of bytes to print.
+   * @return The buffer in a pretty-printed string.
+   */
+  public static String pretty(final ChannelBuffer buf, int limit) {
     if (buf == null) {
       return "null";
     }
@@ -408,7 +442,7 @@ public final class Bytes {
         throw new AssertionError("Should not happen: " + e);
       }
     }
-    return pretty(array);
+    return pretty(array, limit);
   }
 
   // ---------------------- //
