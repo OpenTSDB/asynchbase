@@ -1189,6 +1189,12 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
       startRow();
     }
 
+    public String toString()
+    {
+      return String.format("num_rows %d, rows %d, num_kvs %d, kvs %d, length %d, offset %d",
+                           num_rows, rows, num_kvs, kvs, length, offset);
+    }
+
     /**
      * Handles a new KeyValue by adding it to the current row.
      */
@@ -1224,6 +1230,19 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
     }
 
     protected Object completed() {
+      if (values == null) {
+        if (num_rows == 0) {
+          // tells the caller that we're reached the end of this region
+          return null;
+        } else {
+          // append a fake row with the last item in it so scanning can continue from the last key
+          // of this scan
+          values = new ArrayList<ArrayList<KeyValue>>(1);
+          values.add(new ArrayList<KeyValue>(1));
+          values.get(0).add(prev);
+        }
+      }
+
       return values;
     }
 
