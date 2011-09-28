@@ -168,6 +168,13 @@ public final class Scanner {
   private GetNextRowsRequest get_next_rows_request;
 
   /**
+   * A filtering Callback instance. If it is non-null it will be invoked
+   * for each KeyValue encountered during a scan. If the filter returns
+   * its argument, the KeyValue will be included in the results.
+   */
+  Callback<KeyValue,KeyValue> filteringCallback;
+
+  /**
    * Constructor.
    * <strong>This byte array will NOT be copied.</strong>
    * @param table The non-empty name of the table to use.
@@ -897,6 +904,7 @@ public final class Scanner {
 
     public GetNextRowsRequest() {
       super(NEXT);  // "next"...  Great method name!
+      this.filteringCallback = Scanner.this.filteringCallback;
     }
 
     /** Serializes this request.  */

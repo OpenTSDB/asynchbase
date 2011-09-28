@@ -26,6 +26,7 @@
  */
 // no package
 
+import java.util.List;
 import java.util.ArrayList;
 
 import org.hbase.async.HBaseClient;
@@ -33,6 +34,8 @@ import org.hbase.async.PutRequest;
 import org.hbase.async.GetRequest;
 import org.hbase.async.KeyValue;
 import org.hbase.async.Scanner;
+
+import com.stumbleupon.async.Callback;
 
 //
 // create 'hbase_async_test', {NAME => 'fam1'}, {NAME => 'fam2'}
@@ -44,10 +47,10 @@ public class Examples
 
     public static void usage()
     {
-        System.err.printf("usage:\n");
-        System.err.printf("  Examples <quorum> [-put <count>]\n");
-        System.err.printf("  Examples <quorum> [-get <row>]\n");
-        System.err.printf("  Examples <quorum> [-scan]\n");
+        System.err.println("usage:");
+        System.err.println("  Examples <quorum> -put <count>");
+        System.err.println("  Examples <quorum> -get <row> [-filter [keep]]");
+        System.err.println("  Examples <quorum> -scan [-filter [keep]]");
     }
 
     public static void main(String[] argv) throws Exception
@@ -61,13 +64,25 @@ public class Examples
 
         int result = 1;
         HBaseClient client = new HBaseClient(quorum);
+
+        // create filter if specified
+        SimpleFilter filter = null;
+        for (int i = 0; i < argv.length; i++) {
+            String a = argv[i];
+            if (a.equals("-filter")) {
+                boolean keep = (++i < argv.length && argv[i].equals("keep"));
+                filter = new SimpleFilter(keep);
+                break;
+            }
+        }
+
         try {
             if (argv[1].equals("-put")) {
                 result = put(client, argv);
             } else if (argv[1].equals("-get")) {
-                result = get(client, argv);
+                result = get(client, argv, filter);
             } else if (argv[1].equals("-scan")) {
-                result = scan(client, argv);
+                result = scan(client, argv, filter);
             } else {
                 System.err.printf("error: invalid arguments\n");
                 usage();
@@ -93,7 +108,7 @@ public class Examples
             client.put(new PutRequest(TABLE, "key" + i, "fam2", "col2", "value4"));
         }
         System.out.printf("put %,d values\n", n);
-        
+
         if (true) {
             // REMIND: this should not be needed, but we need it because of a race condition in shutdown
             Thread.sleep(5000);
@@ -102,20 +117,44 @@ public class Examples
         return 0;
     }
 
-    public static int get(HBaseClient client, String[] argv) throws Exception
-    {
-        int count = 0;
-        for (KeyValue val : client.get(new GetRequest(TABLE, argv[2])).join()) {
-            print(count++, val);
+    //
+    // Simple filter class which processes each KeyValue but does not include it in the results.
+    //
+    static class SimpleFilter implements Callback<KeyValue,KeyValue> {
+        int count;
+        boolean keep;
+        SimpleFilter(boolean keep) {
+            this.keep = keep;
         }
-        System.out.printf("got %,d values\n", count);
-        return count > 0 ? 0 : 1;
+
+        public KeyValue call(KeyValue kv) {
+            print(true, count++, kv);
+            return keep ? kv : null;
+        }
     }
 
-    public static int scan(HBaseClient client, String[] argv) throws Exception
+    public static int get(HBaseClient client, String[] argv, SimpleFilter filter) throws Exception
+    {
+        List<KeyValue> values = client.get(new GetRequest(TABLE, argv[2]), filter).join();
+        int count = 0;
+        for (KeyValue val : values) {
+            if (filter == null) {
+                print(false, count++, val);
+            } else {
+                // the filter prints them
+            }
+        }
+        System.out.printf("got back %,d values\n", values.size());
+        if (filter != null) {
+            System.out.printf("filter processed %,d values\n", filter.count);
+        }
+        return values.size() > 0 ? 0 : 1;
+    }
+
+    public static int scan(HBaseClient client, String[] argv, SimpleFilter filter) throws Exception
     {
         int count = 0;
-        Scanner scanner = client.newScanner(TABLE);
+        Scanner scanner = client.newScanner(TABLE, filter);
         try {
             for (;;) {
                 ArrayList<ArrayList<KeyValue>> results = scanner.nextRows(5).join();
@@ -124,19 +163,19 @@ public class Examples
                 }
                 for (ArrayList<KeyValue> values : results) {
                     for (KeyValue val : values) {
-                        print(count++, val);
+                        print(false, count++, val);
                     }
                 }
             }
+            System.out.printf("found %,d values\n", count);
         } finally {
             scanner.close();
         }
-        System.out.printf("found %,d values\n", count);
         return count > 0 ? 0 : 1;
     }
 
-    static void print(int count, KeyValue val)
+    static void print(boolean fromFilter, int count, KeyValue val)
     {
-        System.out.printf("%4d: %s, %s, %s, %s, %s\n", count, TABLE, new String(val.key()), new String(val.family()), new String(val.qualifier()), new String(val.value()));
+        System.out.printf("%4d: %s%s, %s, %s, %s, %s\n", count, fromFilter ? "[filter] " : "", TABLE, new String(val.key()), new String(val.family()), new String(val.qualifier()), new String(val.value()));
     }
 }

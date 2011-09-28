@@ -718,6 +718,19 @@ public final class HBaseClient {
     return sendRpcToRegion(request).addCallbacks(got, Callback.PASSTHROUGH);
   }
 
+  /**
+   * Retrieves data from HBase and invokes a filter callback for each KeyValue
+   * as they are processed. If the filter returns the KeyValue it will
+   * be included in the final result otherwise it is dropped. This is also a
+   * way to process items as they come in and free up the memory as you go.
+   * @param request The {@code get} request.
+   * @param filter The {@code Callback} to invoke, null is OK.
+   */
+  public Deferred<ArrayList<KeyValue>> get(final GetRequest request, Callback<KeyValue,KeyValue> filter) {
+    request.filteringCallback = filter;
+    return sendRpcToRegion(request).addCallbacks(got, Callback.PASSTHROUGH);
+  }
+
   /** Singleton callback to handle responses of "get" RPCs.  */
   private static final Callback<ArrayList<KeyValue>, Object> got =
     new Callback<ArrayList<KeyValue>, Object>() {
@@ -745,13 +758,38 @@ public final class HBaseClient {
   }
 
   /**
+   * Creates a new {@link Scanner} for a particular table with the specified
+   * filtering {@link Callback}.
+   * @param table The name of the table you intend to scan.
+   * @param filter The filtering Callback, null is OK.
+   * @return A new scanner for this table.
+   */
+  public Scanner newScanner(final byte[] table, Callback<KeyValue,KeyValue> filter) {
+    Scanner s = new Scanner(this, table);
+    s.filteringCallback = filter;
+    return s;
+  }
+
+  /**
    * Creates a new {@link Scanner} for a particular table.
    * @param table The name of the table you intend to scan.
    * The string is assumed to use the platform's default charset.
    * @return A new scanner for this table.
    */
   public Scanner newScanner(final String table) {
-    return new Scanner(this, table.getBytes());
+    return newScanner(table.getBytes(), null);
+  }
+
+  /**
+   * Creates a new {@link Scanner} for a particular table with the specified
+   * filtering {@link Callback}.
+   * @param table The name of the table you intend to scan.
+   * The string is assumed to use the platform's default charset.
+   * @param filter The filtering Callback, null is OK.
+   * @return A new scanner for this table.
+   */
+  public Scanner newScanner(final String table, Callback<KeyValue,KeyValue> filter) {
+    return newScanner(table.getBytes(), filter);
   }
 
   /**

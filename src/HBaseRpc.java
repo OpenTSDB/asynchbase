@@ -30,6 +30,7 @@ import org.jboss.netty.buffer.ChannelBuffer;
 import org.jboss.netty.buffer.ChannelBuffers;
 import org.jboss.netty.util.CharsetUtil;
 
+import com.stumbleupon.async.Callback;
 import com.stumbleupon.async.Deferred;
 
 /**
@@ -294,6 +295,13 @@ public abstract class HBaseRpc {
   byte attempt;  // package-private for RegionClient and HBaseClient only.
 
   /**
+   * A filtering Callback instance. If it is non-null it will be invoked for
+   * each KeyValue encountered during a scan or get. If the filter returns
+   * its argument, the KeyValue will be included in the results.
+   */
+  Callback<KeyValue,KeyValue> filteringCallback;
+
+  /**
    * Package private constructor for RPCs that aren't for any region.
    * @param method The name of the method to invoke on the RegionServer.
    */
@@ -389,6 +397,18 @@ public abstract class HBaseRpc {
    */
   boolean versionSensitive() {
     return false;
+  }
+
+  /**
+   * Invokes the KeyValue filter, if present, to decide whether to keep the KeyValue
+   * and add it to the collection.
+   * @see RegionClient
+   */
+  KeyValue invokeFilter(KeyValue kv) throws Exception {
+    if (filteringCallback != null) {
+      return filteringCallback.call(kv);
+    }
+    return kv;
   }
 
   public String toString() {
