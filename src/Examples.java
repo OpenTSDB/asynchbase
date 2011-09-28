@@ -44,7 +44,7 @@ import com.stumbleupon.async.Callback;
 public class Examples
 {
     final static String TABLE = "hbase_async_test";
-    static int SCAN_ROWS = 5;
+    static int scan_rows = 5;
 
     public static void usage()
     {
@@ -76,7 +76,7 @@ public class Examples
             } else if (a.equals("-keep")) {
                 keep = true;
             } else if (a.equals("-scanrows")) {
-                SCAN_ROWS = Integer.parseInt(argv[++i]);
+                scan_rows = Integer.parseInt(argv[++i]);
             }
         }
 
@@ -163,10 +163,10 @@ public class Examples
     {
         int count = 0;
         Scanner scanner = client.newScanner(TABLE, filter);
-        System.out.format("Scanning %d rows at once\n", SCAN_ROWS);
+        System.out.format("Scanning %d rows at once\n", scan_rows);
         try {
             for (;;) {
-                ArrayList<ArrayList<KeyValue>> results = scanner.nextRows(SCAN_ROWS).join();
+                ArrayList<ArrayList<KeyValue>> results = scanner.nextRows(scan_rows).join();
                 if (results == null) {
                     break;
                 }
