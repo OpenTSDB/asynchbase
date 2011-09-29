@@ -63,7 +63,7 @@ import com.stumbleupon.async.Deferred;
  */
 public class TableInputFormat extends InputFormat<BytesWritable,List<KeyValue>> implements Configurable 
 {
-    private final static byte[] NONE = new byte[0];
+    private final static byte[] NONE = HBaseClient.EMPTY_ARRAY;
     private final static byte[] META = ".META.".getBytes();
     private final static byte[] INFO = "info".getBytes();
     private final static byte[] SERVER = "server".getBytes();
@@ -94,7 +94,7 @@ public class TableInputFormat extends InputFormat<BytesWritable,List<KeyValue>> 
                 try {
                     for (int b = 0 ; ; b++) {
                         ArrayList<ArrayList<KeyValue>> results = scanner.nextRows().join();
-                        if (results == null || results.size() == 0) {
+                        if (results == null) {
                             break;
                         }
                         for (ArrayList<KeyValue> v : results) {
@@ -139,7 +139,11 @@ public class TableInputFormat extends InputFormat<BytesWritable,List<KeyValue>> 
                 }
             }
         } finally {
-            client.shutdown();
+            try {
+                client.shutdown().join();
+            } catch (Exception e) {
+                throw new IOException("exception: " + e);
+            }
         }
         return list;
     }
@@ -156,7 +160,7 @@ public class TableInputFormat extends InputFormat<BytesWritable,List<KeyValue>> 
     //
     // Table split
     //
-    public static class TableSplit extends InputSplit implements Writable, Comparable<TableSplit>
+    public final static class TableSplit extends InputSplit implements Writable, Comparable<TableSplit>
     {
         public byte[] table;
         public byte[] start = NONE;
@@ -234,7 +238,7 @@ public class TableInputFormat extends InputFormat<BytesWritable,List<KeyValue>> 
     //
     // Record Reader
     //
-    public static class TableRecordReader extends RecordReader<BytesWritable,List<KeyValue>> 
+    public final static class TableRecordReader extends RecordReader<BytesWritable,List<KeyValue>> 
     {
         HBaseClient client;
         byte[] table;
