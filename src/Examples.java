@@ -96,7 +96,7 @@ public class Examples
                 usage();
             }
         } finally {
-            client.shutdown();
+            client.shutdown().join();
         }
 
         if (result != 0) {
