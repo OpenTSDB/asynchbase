@@ -282,6 +282,8 @@ public final class HBaseClient {
    */
   private volatile RegionClient rootregion;
 
+  byte server_version = -1;
+
   /**
    * Maps {@code (table, start_key)} pairs to the {@link RegionInfo} that
    * serves this key range for this table.
@@ -1913,6 +1915,21 @@ public final class HBaseClient {
     config.setTcpNoDelay(true);
     config.setKeepAlive(true);  // TODO(tsuna): Is this really needed?
     chan.connect(new InetSocketAddress(host, port));  // Won't block.
+
+    if (server_version < 0) {
+      synchronized (this) {
+        System.err.println("REQUESTING SERVER VERSION INSIDE LOCK!!!!!!!!!!!!");
+        try {
+          client.getProtocolVersion().join();
+        } catch (Exception e) {
+          e.printStackTrace();
+        }
+        System.out.println("Got protocol version: " + server_version);
+      }
+    } else {
+      client.setProtocolVersion(server_version);
+    }
+
     return client;
   }
 

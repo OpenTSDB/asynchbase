@@ -331,6 +331,7 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
       }
       final int size = inflight.size();
       if (size > 0) {
+        System.err.println(this + ": inflight: " + inflight);
         return Deferred.group(inflight)
           .addCallbackDeferring(new RetryShutdown<ArrayList<Object>>(size));
       }
@@ -386,15 +387,16 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
         public void operationComplete(final ChannelFuture future) {
           if (future.isSuccess()) {
             d.callback(null);
-          }
-          final Throwable t = future.getCause();
-          if (t instanceof Exception) {
-            d.callback(t);
           } else {
-            // Wrap the Throwable because Deferred doesn't handle Throwables,
-            // it only uses Exception.
-            d.callback(new NonRecoverableException("Failed to shutdown: "
-                                                   + RegionClient.this, t));
+            final Throwable t = future.getCause();
+            if (t instanceof Exception) {
+              d.callback(t);
+            } else {
+              // Wrap the Throwable because Deferred doesn't handle Throwables,
+              // it only uses Exception.
+              d.callback(new NonRecoverableException("Failed to shutdown: "
+                                                     + RegionClient.this, t));
+            }
           }
         }
       });
@@ -461,6 +463,11 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
     return (Deferred) rpc.getDeferred();
   }
 
+  void setProtocolVersion(byte server_version)
+  {
+    this.server_version = server_version;
+  }
+
   /** Singleton callback to handle responses of getProtocolVersion RPCs.  */
   private final Callback<Long, Object> got_protocol_version =
     new Callback<Long, Object>() {
@@ -475,7 +482,7 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
             + (v < 0 ? "negative" : "too large") + " value", version);
         }
         final byte prev_version = server_version;
-        server_version = (byte) v;
+        hbase_client.server_version = server_version = (byte) v;
         deferred_server_version = null;  // Volatile write.
         if (prev_version == -1) {   // We're 1st to get the version.
           if (LOG.isDebugEnabled()) {
@@ -877,6 +884,9 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
   private void cleanup(final Channel chan) {
     final ConnectionResetException exception =
       new ConnectionResetException(chan);
+    if (rpcs_inflight.size() > 0) {
+      System.err.println(this + ": RETRYING " + rpcs_inflight.size() + " RPCs in cleanup!!!!");
+    }
     failOrRetryRpcs(rpcs_inflight.values(), exception);
     rpcs_inflight.clear();
 
@@ -977,10 +987,12 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
     if (!rpc.hasDeferred()) {
       throw new AssertionError("Should never happen!  rpc=" + rpc);
     }
+
     if (rpc.versionSensitive() && server_version == -1) {
       getProtocolVersion().addBoth(new RetryRpc<Long>(rpc));
       return null;
     }
+    // System.err.println("Encode request: " + rpc);
 
     // TODO(tsuna): Add rate-limiting here.  We don't want to send more than
     // N QPS to a given region server.
@@ -1653,7 +1665,7 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
         // packet we send out, it adds ~zero overhead.  But don't piggyback
         // a version request if the payload is already a version request.
         ChannelBuffer buf;
-        if (!isVersionRequest(payload)) {
+        if (false && !isVersionRequest(payload)) {
           final RegionClient client = ctx.getPipeline().get(RegionClient.class);
           final ChannelBuffer version =
             client.encode(client.getProtocolVersionRequest());
