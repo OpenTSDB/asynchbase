@@ -175,6 +175,16 @@ public final class Scanner {
   Callback<KeyValue,KeyValue> filteringCallback;
 
   /**
+   * The minimum timestamp for this scan.
+   */
+  long min_timestamp;
+
+  /**
+   * The minimum timestamp for this scan.
+   */
+  long max_timestamp = Long.MAX_VALUE;
+
+  /**
    * Constructor.
    * <strong>This byte array will NOT be copied.</strong>
    * @param table The non-empty name of the table to use.
@@ -237,6 +247,21 @@ public final class Scanner {
   public void setStopKey(final String stop_key) {
     setStopKey(stop_key.getBytes());
   }
+
+  /**
+   * Specifies a time range for which to scan.
+   * @throws IllegalArgumentException if the argument is zero or negative.
+   * @throws IllegalStateException if scanning already started.
+   */
+  public void setTimeRange(long min_timestamp, long max_timestamp) {
+    if (min_timestamp < 0 || max_timestamp < 0 || min_timestamp > max_timestamp) {
+        throw new IllegalArgumentException("invalid time range");
+    }
+    checkScanningNotStarted();
+    this.min_timestamp = min_timestamp;
+    this.max_timestamp = max_timestamp;
+  }
+
 
   /**
    * Specifies a particular column family to scan.
@@ -853,9 +878,9 @@ public final class Scanner {
       }
 
       // TimeRange
-      buf.writeLong(0);               // Minimum timestamp.
-      buf.writeLong(Long.MAX_VALUE);  // Maximum timestamp.
-      buf.writeByte(0x01);            // Boolean: "all time".
+      buf.writeLong(min_timestamp);   // Minimum timestamp.
+      buf.writeLong(max_timestamp);   // Maximum timestamp.
+      buf.writeByte(min_timestamp != 0 || max_timestamp != Long.MAX_VALUE ? 0x00 : 0x01);            // Boolean: "all time".
       // The "all time" boolean indicates whether or not this time range covers
       // all possible times.  Not sure why it's part of the serialized RPC...
 
@@ -888,6 +913,12 @@ public final class Scanner {
       Bytes.pretty(buf, stop_key);
       buf.append(", max_num_kvs=").append(max_num_kvs)
         .append(", populate_blockcache=").append(populate_blockcache);
+      if (min_timestamp != 0) {
+        buf.append(", min_timestamp=").append(min_timestamp);
+      }
+      if (max_timestamp != Long.MAX_VALUE) {
+        buf.append(", max_timestamp=").append(max_timestamp);
+      }
       return super.toStringWithQualifier("OpenScannerRequest",
                                          family, qualifier,
                                          buf.toString());
