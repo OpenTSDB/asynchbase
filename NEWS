@@ -17,6 +17,9 @@ Noteworthy changes:
     sequence was still running.
   - After doing a full-table scan, calling Scanner.close() would trigger an
     error as the scanner would attempt to close itself again.
+  - When disconnecting from a RegionServer, if the socket wasn't getting
+    closed immediately, a Deferred could get called back twice, which would
+    trigger an AssertionError.
 
 New public APIs:
   - DeleteRequest now has constructors for deleting multiple qualifiers per

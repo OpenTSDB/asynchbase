@@ -379,6 +379,7 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
         public void operationComplete(final ChannelFuture future) {
           if (future.isSuccess()) {
             d.callback(null);
+            return;
           }
           final Throwable t = future.getCause();
           if (t instanceof Exception) {
