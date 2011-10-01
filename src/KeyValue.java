@@ -64,6 +64,8 @@ public final class KeyValue implements Comparable<KeyValue> {
   //   -  4  0b00000100  Put
   //   -  8  0b00001000  Delete
   static final byte DELETE = 8;
+  static final byte DELETE_COLUMN = 12;
+  static final byte DELETE_FAMILY = 14;
   //   - 12  0b00001100  DeleteColumn  (??)
   //   - 14  0b01110010  DeleteFamily  (delete all cells within a family)
   // (Not sure how those have been assigned...  Randomly maybe?)

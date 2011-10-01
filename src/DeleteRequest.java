@@ -61,6 +61,19 @@ public final class DeleteRequest extends HBaseRpc
   }
 
   /**
+   * Constructor to delete a specific family.
+   * <strong>These byte arrays will NOT be copied.</strong>
+   * @param table The table to edit.
+   * @param key The key of the row to edit in that table.
+   * @param family The column family to edit in that table.
+   */
+  public DeleteRequest(final byte[] table,
+                       final byte[] key,
+                       final byte[] family) {
+    this(table, key, family, null, RowLock.NO_LOCK);
+  }
+
+  /**
    * Constructor to delete a specific cell.
    * <strong>These byte arrays will NOT be copied.</strong>
    * @param table The table to edit.
@@ -174,10 +187,12 @@ public final class DeleteRequest extends HBaseRpc
                         final byte[][] qualifiers,
                         final long lockid) {
     super(DELETE, table, key);
-    if (family != null) {  // Right now family != null  =>  qualifier != null
+    if (family != null) {
       KeyValue.checkFamily(family);
-      for (final byte[] qualifier : qualifiers) {
-        KeyValue.checkQualifier(qualifier);
+      if (qualifiers != null) {
+        for (final byte[] qualifier : qualifiers) {
+          KeyValue.checkQualifier(qualifier);
+        }
       }
     }
     this.family = family;
@@ -256,9 +271,11 @@ public final class DeleteRequest extends HBaseRpc
     size += family.length;  // The column family (again!).
     size += 8;  // long: The timestamp (again!).
     size += 1;  // byte: The type of KeyValue.
-    size *= qualifiers.length;
-    for (final byte[] qualifier : qualifiers) {
-      size += qualifier.length;  // The column qualifier.
+    if (qualifiers != null) {
+      size *= qualifiers.length;
+      for (final byte[] qualifier : qualifiers) {
+        size += qualifier.length;  // The column qualifier.
+      }
     }
     return size;
   }
@@ -288,12 +305,10 @@ public final class DeleteRequest extends HBaseRpc
 
     // Each family is then written like so:
     writeByteArray(buf, family);  // Column family name.
-    buf.writeInt(qualifiers.length);  // How many KeyValues for this family?
 
-    // Write the KeyValues
-    for (final byte[] qualifier : qualifiers) {
-      final int total_rowkey_length = 2 + key.length + 1 + family.length
-        + qualifier.length + 8 + 1;
+    if (qualifiers == null) {
+      buf.writeInt(1); 
+      final int total_rowkey_length = 2 + key.length + 1 + family.length + 8 + 1;
       buf.writeInt(total_rowkey_length + 8);  // Total length of the KeyValue.
       buf.writeInt(total_rowkey_length);      // Total length of the row key.
       buf.writeInt(0);                        // Length of the (empty) value.
@@ -301,10 +316,28 @@ public final class DeleteRequest extends HBaseRpc
       buf.writeBytes(key);      // Duplicate key...
       buf.writeByte(family.length);
       buf.writeBytes(family);   // Duplicate column family...
-      buf.writeBytes(qualifier);
+      // no qualifier
       buf.writeLong(Long.MAX_VALUE);   // Timestamp (we set it to the max value).
-      buf.writeByte(KeyValue.DELETE);  // Type of the KeyValue.
-      // No `value' part of the KeyValue to write.
+      buf.writeByte(KeyValue.DELETE_FAMILY);  // Type of the KeyValue.
+    } else {
+      buf.writeInt(qualifiers.length);  // How many KeyValues for this family?
+
+      // Write the KeyValues
+      for (final byte[] qualifier : qualifiers) {
+        final int total_rowkey_length = 2 + key.length + 1 + family.length
+            + qualifier.length + 8 + 1;
+        buf.writeInt(total_rowkey_length + 8);  // Total length of the KeyValue.
+        buf.writeInt(total_rowkey_length);      // Total length of the row key.
+        buf.writeInt(0);                        // Length of the (empty) value.
+        buf.writeShort(key.length);
+        buf.writeBytes(key);      // Duplicate key...
+        buf.writeByte(family.length);
+        buf.writeBytes(family);   // Duplicate column family...
+        buf.writeBytes(qualifier);
+        buf.writeLong(Long.MAX_VALUE);   // Timestamp (we set it to the max value).
+        buf.writeByte(KeyValue.DELETE_COLUMN);  // Type of the KeyValue.
+        // No `value' part of the KeyValue to write.
+      }
     }
     return buf;
   }

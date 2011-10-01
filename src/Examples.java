@@ -169,11 +169,11 @@ public class Examples
         byte[] table = Bytes.UTF8(TABLE);
         byte[] key = Bytes.UTF8(argv[2]);
         byte[] family = argv.length <= 3 ? null : Bytes.UTF8(argv[3]);
-        byte[][] qualifier = family == null ? null : argv.length <= 4 ? new byte[0][] : new byte[][] {Bytes.UTF8(argv[4])};
+        byte[][] qualifier = family == null ? null : argv.length <= 4 ? null: new byte[][] {Bytes.UTF8(argv[4])};
 
         client.delete(new DeleteRequest(table, key, family, qualifier)).join();
 
-        return 1;
+        return 0;
     }
 
     public static int scan(HBaseClient client, String[] argv, SimpleFilter filter) throws Exception
