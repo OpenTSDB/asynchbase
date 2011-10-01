@@ -32,8 +32,10 @@ import java.util.ArrayList;
 import org.hbase.async.HBaseClient;
 import org.hbase.async.PutRequest;
 import org.hbase.async.GetRequest;
+import org.hbase.async.DeleteRequest;
 import org.hbase.async.KeyValue;
 import org.hbase.async.Scanner;
+import org.hbase.async.Bytes;
 
 import com.stumbleupon.async.Callback;
 
@@ -51,6 +53,7 @@ public class Examples
         System.err.println("usage:");
         System.err.println("  Examples <quorum> -put <count>");
         System.err.println("  Examples <quorum> -get <row> [-filter [keep]]");
+        System.err.println("  Examples <quorum> -delete <row> [<family> [<qualifier>]]");
         System.err.println("  Examples <quorum> -scan [-filter [keep]] [-scanrows N]");
     }
 
@@ -89,6 +92,8 @@ public class Examples
                 result = put(client, argv);
             } else if (argv[1].equals("-get")) {
                 result = get(client, argv, simpleFilter);
+            } else if (argv[1].equals("-delete")) {
+                result = delete(client, argv);
             } else if (argv[1].equals("-scan")) {
                 result = scan(client, argv, simpleFilter);
             } else {
@@ -157,6 +162,18 @@ public class Examples
             System.out.printf("filter processed %,d values\n", filter.count);
         }
         return values.size() > 0 ? 0 : 1;
+    }
+
+    public static int delete(HBaseClient client, String[] argv) throws Exception
+    {
+        byte[] table = Bytes.UTF8(TABLE);
+        byte[] key = Bytes.UTF8(argv[2]);
+        byte[] family = argv.length <= 3 ? null : Bytes.UTF8(argv[3]);
+        byte[][] qualifier = family == null ? null : argv.length <= 4 ? new byte[0][] : new byte[][] {Bytes.UTF8(argv[4])};
+
+        client.delete(new DeleteRequest(table, key, family, qualifier)).join();
+
+        return 1;
     }
 
     public static int scan(HBaseClient client, String[] argv, SimpleFilter filter) throws Exception
