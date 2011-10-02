@@ -230,10 +230,10 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
         edit_buffer = this.edit_buffer;
         this.edit_buffer = null;
       }
-      if (edit_buffer == null || edit_buffer.size() == 0) {
-        return;  // Nothing to flush, let's stop periodic flushes for now.
+      if (edit_buffer != null && edit_buffer.size() != 0) {
+        final Deferred<Object> d = edit_buffer.getDeferred();
+        sendRpc(edit_buffer);
       }
-      doFlush(edit_buffer);
     }
   }
 
@@ -273,23 +273,7 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
       edit_buffer = this.edit_buffer;
       this.edit_buffer = null;
     }
-    return doFlush(edit_buffer);
-  }
-
-  /**
-   * Flushes the given multi-puts.
-   * <p>
-   * Typically this method should be called after atomically getting the
-   * buffers that we need to flush.
-   * @param edit_buffer Edits to flush, can be {@code null}.
-   * @return A {@link Deferred}, whose callback chain will be invoked the
-   * given edits have been flushed.  If the argument is {@code null}, returns
-   * a {@link Deferred} already called back.
-   */
-  private Deferred<Object> doFlush(final MultiPutRequest edit_buffer) {
-    // Note: the argument are shadowing the attribute of the same name.
-    // This is intentional.
-    if (edit_buffer == null) {  // Nothing to do.
+    if (edit_buffer == null || edit_buffer.size() == 0) {
       return Deferred.fromResult(null);
     }
     final Deferred<Object> d = edit_buffer.getDeferred();
@@ -335,8 +319,9 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
         this.edit_buffer = null;
       }
       if (edit_buffer != null && edit_buffer.size() != 0) {
-        return doFlush(edit_buffer)
-          .addCallbackDeferring(new RetryShutdown<Object>(1));
+        final Deferred<Object> d = edit_buffer.getDeferred();
+        sendRpc(edit_buffer);
+        return d.addCallbackDeferring(new RetryShutdown<Object>(1));
       }
     }
 
