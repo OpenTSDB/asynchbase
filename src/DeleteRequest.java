@@ -303,7 +303,7 @@ public final class DeleteRequest extends HBaseRpc
       buf.writeBytes(family);   // Duplicate column family...
       buf.writeBytes(qualifier);
       buf.writeLong(Long.MAX_VALUE);   // Timestamp (we set it to the max value).
-      buf.writeByte(KeyValue.DELETE);  // Type of the KeyValue.
+      buf.writeByte(KeyValue.DELETE_COLUMN);  // Type of the KeyValue.
       // No `value' part of the KeyValue to write.
     }
     return buf;

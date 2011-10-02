@@ -20,6 +20,9 @@ Noteworthy changes:
   - When disconnecting from a RegionServer, if the socket wasn't getting
     closed immediately, a Deferred could get called back twice, which would
     trigger an AssertionError.
+  - DeleteRequest used to delete the last version of a cell, which wasn't the
+    intended behavior.  It has been changed to delete all the previous
+    versions of a cell.
 
 New public APIs:
   - DeleteRequest now has constructors for deleting multiple qualifiers per
