@@ -79,7 +79,7 @@ final class Test {
                        + "  get <table> <key> [family] [qualifiers ...]\n"
                        + "  icv <table> <key> <family> <qualifier> [amount]\n"
                        + "  put <table> <key> <family> <qualifier> <value>\n"
-                       + "  delete <table> <key> [<family> <qualifier>]\n"
+                       + "  delete <table> <key> [<family> [<qualifier>]]\n"
                        + "  scan <table> [start] [family] [qualifier] [stop] [regexp]\n"
                        + "Variants that acquire an explicit row-lock:\n"
                        + "  lget <table> <key> [family] [qualifiers ...]\n"
@@ -224,11 +224,17 @@ final class Test {
         lock = client.lockRow(rlr).joinUninterruptibly();
         LOG.info("Acquired explicit row lock: " + lock);
       }
-      final DeleteRequest delete = lock == null
-        ? (args.length == 4
-           ? new DeleteRequest(args[2], args[3])
-           : new DeleteRequest(args[2], args[3], args[4], args[5]))
-        : new DeleteRequest(args[2], args[3], args[4], args[5], lock);
+      final DeleteRequest delete;
+      if (lock == null) {
+        switch (args.length) {
+          case 4: delete = new DeleteRequest(args[2], args[3]); break;
+          case 5: delete = new DeleteRequest(args[2], args[3], args[4]); break;
+          case 6: delete = new DeleteRequest(args[2], args[3], args[4], args[5]); break;
+          default: throw new AssertionError("Should never be here");
+        }
+      } else {
+        delete = new DeleteRequest(args[2], args[3], args[4], args[5], lock);
+      }
       args = null;
       try {
         final Object result = client.delete(delete).joinUninterruptibly();

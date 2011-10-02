@@ -26,7 +26,7 @@ Noteworthy changes:
 
 New public APIs:
   - DeleteRequest now has constructors for deleting multiple qualifiers per
-    row at once.
+    row at once and deleting a whole family at once.
   - New `qualifiers' method in GetRequest for getting multiple qualifiers per
     row at once.
   - Add new interfaces nested in `HBaseRpc' to provide public APIs to be able

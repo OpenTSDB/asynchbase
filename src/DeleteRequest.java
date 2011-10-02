@@ -46,6 +46,10 @@ public final class DeleteRequest extends HBaseRpc
     'd', 'e', 'l', 'e', 't', 'e'
   };
 
+  /** Special value for {@link #qualifiers} when deleting a whole family.  */
+  private static final byte[][] DELETE_FAMILY_MARKER =
+    new byte[][] { HBaseClient.EMPTY_ARRAY };
+
   private final byte[] family;     // TODO(tsuna): Handle multiple families?
   private final byte[][] qualifiers;
   private final long lockid;
@@ -58,6 +62,20 @@ public final class DeleteRequest extends HBaseRpc
    */
   public DeleteRequest(final byte[] table, final byte[] key) {
     this(table, key, null, null, RowLock.NO_LOCK);
+  }
+
+  /**
+   * Constructor to delete a specific family.
+   * <strong>These byte arrays will NOT be copied.</strong>
+   * @param table The table to edit.
+   * @param key The key of the row to edit in that table.
+   * @param family The column family to edit in that table.
+   * @since 1.1
+   */
+  public DeleteRequest(final byte[] table,
+                       final byte[] key,
+                       final byte[] family) {
+    this(table, key, family, DELETE_FAMILY_MARKER, RowLock.NO_LOCK);
   }
 
   /**
@@ -133,6 +151,20 @@ public final class DeleteRequest extends HBaseRpc
    */
   public DeleteRequest(final String table, final String key) {
     this(table.getBytes(), key.getBytes(), null, null, RowLock.NO_LOCK);
+  }
+
+  /**
+   * Constructor to delete a specific family.
+   * @param table The table to edit.
+   * @param key The key of the row to edit in that table.
+   * @param family The column family to edit in that table.
+   * @since 1.1
+   */
+  public DeleteRequest(final String table,
+                       final String key,
+                       final String family) {
+    this(table.getBytes(), key.getBytes(), family.getBytes(),
+         DELETE_FAMILY_MARKER, RowLock.NO_LOCK);
   }
 
   /**
@@ -290,6 +322,9 @@ public final class DeleteRequest extends HBaseRpc
     writeByteArray(buf, family);  // Column family name.
     buf.writeInt(qualifiers.length);  // How many KeyValues for this family?
 
+    // Are we deleting a whole family at once or just a bunch of columns?
+    final byte type = (qualifiers == DELETE_FAMILY_MARKER
+                       ? KeyValue.DELETE_FAMILY : KeyValue.DELETE_COLUMN);
     // Write the KeyValues
     for (final byte[] qualifier : qualifiers) {
       final int total_rowkey_length = 2 + key.length + 1 + family.length
@@ -303,7 +338,7 @@ public final class DeleteRequest extends HBaseRpc
       buf.writeBytes(family);   // Duplicate column family...
       buf.writeBytes(qualifier);
       buf.writeLong(Long.MAX_VALUE);   // Timestamp (we set it to the max value).
-      buf.writeByte(KeyValue.DELETE_COLUMN);  // Type of the KeyValue.
+      buf.writeByte(type);  // Type of the KeyValue.
       // No `value' part of the KeyValue to write.
     }
     return buf;
