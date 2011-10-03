@@ -1411,6 +1411,20 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
     public void handleDownstream(final ChannelHandlerContext ctx,
                                  ChannelEvent event) {
       if (event instanceof MessageEvent) {
+        // We're going to send the header, so let's remove ourselves from the
+        // pipeline.
+        try {
+          ctx.getPipeline().remove(this);
+        } catch (NoSuchElementException e) {
+          // There was a race with another thread, and we lost the race: the
+          // other thread sent the handshake and remove ourselves from the
+          // pipeline already (we got the NoSuchElementException because we
+          // tried remove ourselves again).  In this case, it's fine, we can
+          // just keep going and pass the event downstream, unchanged.
+          ctx.sendDownstream(event);
+          return;
+        }
+
         final MessageEvent me = (MessageEvent) event;
         final ChannelBuffer payload = (ChannelBuffer) me.getMessage();
         final ChannelBuffer header = ChannelBuffers.wrappedBuffer(HELLO_HEADER);
@@ -1420,7 +1434,7 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
         // pretty quickly.  Since it's most likely going to fit in the same
         // packet we send out, it adds ~zero overhead.  But don't piggyback
         // a version request if the payload is already a version request.
-        ChannelBuffer buf;
+        final ChannelBuffer buf;
         if (!isVersionRequest(payload)) {
           final RegionClient client = ctx.getPipeline().get(RegionClient.class);
           final ChannelBuffer version =
@@ -1429,19 +1443,8 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
         } else {
           buf = ChannelBuffers.wrappedBuffer(header, payload);
         }
-        // We're going to send the header, so let's remove ourselves from the
-        // pipeline.
-        try {
-          ctx.getPipeline().remove(this);
-          event = new DownstreamMessageEvent(ctx.getChannel(), me.getFuture(),
-                                             buf, me.getRemoteAddress());
-        } catch (NoSuchElementException e) {
-          // There was a race with another thread, and we lost the race: the
-          // other thread sent the handshake and remove ourselves from the
-          // pipeline already (we got the NoSuchElementException because we
-          // tried remove ourselves again).  In this case, it's fine, we can
-          // just keep going and pass the event downstream, unchanged.
-        }
+        event = new DownstreamMessageEvent(ctx.getChannel(), me.getFuture(),
+                                           buf, me.getRemoteAddress());
       }
       ctx.sendDownstream(event);
     }
