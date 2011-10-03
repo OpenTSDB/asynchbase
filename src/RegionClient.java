@@ -1035,22 +1035,35 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
    * Manages the parser state for the current inprogress RPC.
    */
   abstract private class ResultParser {
-    final HBaseRpc rpc;                           // inflight rpc
-    final int rpcid;                              // ID of this rpc request
-    KeyValue prev;                                // previous parsed key value
-    int length = -1;                              // total expected bytes: -1 means unknown
-    int offset;                                   // bytes processed so far
+    final HBaseRpc rpc;              // inflight rpc
+    final int rpcid;                 // ID of this rpc request
+    KeyValue prev;                   // previous parsed key value
+    int length = -1;                 // total expected bytes: -1 means unknown
+    int offset;                      // bytes processed so far
+    Throwable throwable;             // a KeyValue callback exception
 
     protected ResultParser(int rpcid) {
-      this.rpc = rpcs_inflight.get(rpcid);
       this.rpcid = rpcid;
+      this.rpc = rpcs_inflight.get(rpcid);
+      if (rpc == null) {
+        throw new NonRecoverableException("Missing inflight rpc for rpcid=" + rpcid);
+      }
       checkpoint();
      }
 
     /**
      * Handles a KeyValue.
      */
-    abstract protected void handle(KeyValue vk);
+    protected void handle(final KeyValue kv) {
+      try {
+        if (rpc.invokeFilter(kv) == null) {
+          return;
+        }
+      } catch (Throwable t) {
+        throwable = t;
+      }
+    }
+
 
     /**
      * Returns the completed value.
@@ -1112,13 +1125,8 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
      * whether to include it or not.
      */
     protected void handle(final KeyValue kv) {
-      try {
-        if (rpc.invokeFilter(kv) == null) {
-          return;
-        }
-      } catch (Exception e) {
-        throw new NonRecoverableException("Unexpected exception in filter callback: " + e);
-      }
+      // do the callback if there is one
+      super.handle(kv);
 
       if (values == null) {
         values = new ArrayList<KeyValue>(10);
@@ -1127,6 +1135,9 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
     }
 
     protected Object completed() {
+      if (throwable != null) {
+        return throwable;
+      }
       return values == null ? new ArrayList<KeyValue>(0) : values;
     }
 
@@ -1196,15 +1207,8 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
      * Handles a new KeyValue by adding it to the current row.
      */
     protected void handle(final KeyValue kv) {
-      if (rpc != null) {
-        try {
-          if (rpc.invokeFilter(kv) == null) {
-            return;
-          }
-        } catch (Exception e) {
-          throw new NonRecoverableException("Unexpected exception in filter callback: " + e);
-        }
-      }
+      // do the callback if there is one
+      super.handle(kv);
 
       if (rowPending) {
         if (values == null) {
@@ -1227,6 +1231,9 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
     }
 
     protected Object completed() {
+      if (throwable != null) {
+        return throwable;
+      }
       if (values == null) {
         if (num_rows == 0) {
           // tells the caller that we're reached the end of this region
