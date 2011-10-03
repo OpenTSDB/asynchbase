@@ -62,12 +62,11 @@ public final class KeyValue implements Comparable<KeyValue> {
 
   // Note: type can be one of:
   //   -  4  0b00000100  Put
-  //   -  8  0b00001000  Delete
-  static final byte DELETE = 8;
+  //   -  8  0b00001000  Delete        (delete only the last version of a cell)
+  //   - 12  0b00001100  DeleteColumn  (delete all previous versions of a cell)
   static final byte DELETE_COLUMN = 12;
-  static final byte DELETE_FAMILY = 14;
-  //   - 12  0b00001100  DeleteColumn  (??)
   //   - 14  0b01110010  DeleteFamily  (delete all cells within a family)
+  static final byte DELETE_FAMILY = 14;
   // (Not sure how those have been assigned...  Randomly maybe?)
 
   /**
@@ -78,11 +77,11 @@ public final class KeyValue implements Comparable<KeyValue> {
    * @param value The value, the contents of the cell.
    */
   public KeyValue(final byte[] key,
-                  final byte[] family, 
+                  final byte[] family,
                   final byte[] qualifier,
                   final long timestamp,
-                  // final byte type, 
-                  final byte[] value 
+                  // final byte type,
+                  final byte[] value
                   ) {
     this.key = key;
     this.family = family;
