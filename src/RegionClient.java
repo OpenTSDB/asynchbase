@@ -759,9 +759,14 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
       }  // else: continue to the "we're disconnected" code path below.
     }
 
+    boolean tryagain = false;
     boolean dead;  // Shadows this.dead;
     synchronized (this) {
-      if (!(dead = this.dead)) {
+      dead = this.dead;
+      // Check if we got connected while entering this synchronized block.
+      if (chan != null) {
+        tryagain = true;
+      } else if (!dead) {
         if (pending_rpcs == null) {
           pending_rpcs = new ArrayList<HBaseRpc>();
         }
@@ -774,6 +779,14 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
       } else {
         hbase_client.sendRpcToRegion(rpc);  // Re-schedule the RPC.
       }
+      return;
+    } else if (tryagain) {
+      // This recursion will not lead to a loop because we only get here if we
+      // connected while entering the synchronized block above. So when trying
+      // a second time,  we will either succeed to send the RPC if we're still
+      // connected, or fail through to the code below if we got disconnected
+      // in the mean time.
+      sendRpc(rpc);
       return;
     }
     LOG.debug("RPC queued: {}", rpc);

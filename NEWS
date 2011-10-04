@@ -23,6 +23,8 @@ Noteworthy changes:
   - DeleteRequest used to delete the last version of a cell, which wasn't the
     intended behavior.  It has been changed to delete all the previous
     versions of a cell.
+  - Fixed various other race conditions during startup / shutdown that would
+    generally affect short-lived programs or MapReduce users.
 
 New public APIs:
   - DeleteRequest now has constructors for deleting multiple qualifiers per
