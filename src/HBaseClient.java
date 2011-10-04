@@ -1918,7 +1918,6 @@ public final class HBaseClient {
 
     if (server_version < 0) {
       synchronized (this) {
-        System.err.println("REQUESTING SERVER VERSION INSIDE LOCK!!!!!!!!!!!!");
         try {
           client.getProtocolVersion().join();
         } catch (Exception e) {

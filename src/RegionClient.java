@@ -333,13 +333,19 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
       }
     }
 
+    // The main reason we get pending rpcs here if we call shutdown before the
+    // channel has connected. However, another way happens when the channel has
+    // already been connected and the pending_rpcs sent, but then a few more
+    // requests came in while processing the original batch.
     synchronized (this) {
       if (pending_rpcs != null && !pending_rpcs.isEmpty()) {
         final ArrayList<Deferred<Object>> pending =
           new ArrayList<Deferred<Object>>(pending_rpcs.size());
+        LOG.info(this + ": " + pending_rpcs.size() + " pending rpcs in shutdown: " + pending_rpcs);
         for (final HBaseRpc rpc : pending_rpcs) {
           pending.add(rpc.getDeferred());
         }
+        sendPendingRpcs("shutdown");
         return Deferred.group(pending).addCallbackDeferring(
           new RetryShutdown<ArrayList<Object>>(pending.size()));
       }
@@ -823,12 +829,26 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
   public void channelConnected(final ChannelHandlerContext ctx,
                                final ChannelStateEvent e) {
     chan = e.getChannel();
+    sendPendingRpcs(null);
+  }
+
+  //
+  // Sends pending rpcs after we're connected and during shutdown if we missed
+  // any. Also schedule a timer for 100 ms into the future in case some new ones
+  // came in while we were processing.
+  //
+  private void sendPendingRpcs(String from)
+  {
     ArrayList<HBaseRpc> rpcs;
     synchronized (this) {
       rpcs = pending_rpcs;
       pending_rpcs = null;
     }
     if (rpcs != null) {
+      if (from != null) {
+        LOG.debug("Running " + rpcs.size() + " pending rpc(s) from: " + from);
+      }
+
       for (final HBaseRpc rpc : rpcs) {
         if (chan != null) {
           LOG.debug("Executing RPC queued: {}", rpc);
@@ -838,6 +858,11 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
           }
         }
       }
+      hbase_client.timer.newTimeout(new TimerTask() {
+          public void run(final Timeout timeout) {
+            sendPendingRpcs("timer");
+          }
+        }, 100, MILLISECONDS);
     }
   }
 
@@ -1659,7 +1684,7 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
             // version request if the payload is already a version request or if
             // we already know the server version.
             final ChannelBuffer buf;
-            if ((true || client.server_version < 0) && !isVersionRequest(payload)) {
+            if (client.server_version < 0 && !isVersionRequest(payload)) {
               final ChannelBuffer version =
                 client.encode(client.getProtocolVersionRequest());
               buf = ChannelBuffers.wrappedBuffer(header, payload, version);
