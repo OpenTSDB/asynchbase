@@ -45,6 +45,7 @@ import org.jboss.netty.channel.ChannelEvent;
 import org.jboss.netty.channel.ChannelFuture;
 import org.jboss.netty.channel.ChannelFutureListener;
 import org.jboss.netty.channel.ChannelHandlerContext;
+import org.jboss.netty.channel.ChannelPipeline;
 import org.jboss.netty.channel.ChannelStateEvent;
 import org.jboss.netty.channel.Channels;
 import org.jboss.netty.channel.DownstreamMessageEvent;
@@ -315,7 +316,6 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
       }
       final int size = inflight.size();
       if (size > 0) {
-        System.err.println(this + ": inflight: " + inflight);
         return Deferred.group(inflight)
           .addCallbackDeferring(new RetryShutdown<ArrayList<Object>>(size));
       }
@@ -869,9 +869,6 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
   private void cleanup(final Channel chan) {
     final ConnectionResetException exception =
       new ConnectionResetException(chan);
-    if (rpcs_inflight.size() > 0) {
-      System.err.println(this + ": RETRYING " + rpcs_inflight.size() + " RPCs in cleanup!!!!");
-    }
     failOrRetryRpcs(rpcs_inflight.values(), exception);
     rpcs_inflight.clear();
 
@@ -977,7 +974,6 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
       getProtocolVersion().addBoth(new RetryRpc<Long>(rpc));
       return null;
     }
-    // System.err.println("Encode request: " + rpc);
 
     // TODO(tsuna): Add rate-limiting here.  We don't want to send more than
     // N QPS to a given region server.
@@ -1647,40 +1643,37 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
     public void handleDownstream(final ChannelHandlerContext ctx,
                                  ChannelEvent event) {
       if (event instanceof MessageEvent) {
-        // We're going to send the header, so let's remove ourselves from the
-        // pipeline.
-        try {
-          ctx.getPipeline().remove(this);
-        } catch (NoSuchElementException e) {
-          // There was a race with another thread, and we lost the race: the
-          // other thread sent the handshake and remove ourselves from the
-          // pipeline already (we got the NoSuchElementException because we
-          // tried remove ourselves again).  In this case, it's fine, we can
-          // just keep going and pass the event downstream, unchanged.
-          ctx.sendDownstream(event);
-          return;
-        }
+        synchronized (ctx) {
+          final ChannelPipeline pipeline = ctx.getPipeline();
 
-        final MessageEvent me = (MessageEvent) event;
-        final ChannelBuffer payload = (ChannelBuffer) me.getMessage();
-        final ChannelBuffer header = ChannelBuffers.wrappedBuffer(HELLO_HEADER);
+          if (pipeline.get(SayHelloFirstRpc.class) == this) {
+            final MessageEvent me = (MessageEvent) event;
+            final ChannelBuffer payload = (ChannelBuffer) me.getMessage();
+            final ChannelBuffer header = ChannelBuffers.wrappedBuffer(HELLO_HEADER);
+            final RegionClient client = pipeline.get(RegionClient.class);
 
-        // Piggyback a version request in the 1st packet, after the payload
-        // we were trying to send.  This way we'll have the version handy
-        // pretty quickly.  Since it's most likely going to fit in the same
-        // packet we send out, it adds ~zero overhead.  But don't piggyback
-        // a version request if the payload is already a version request.
-        final ChannelBuffer buf;
-        if (!isVersionRequest(payload)) {
-          final RegionClient client = ctx.getPipeline().get(RegionClient.class);
-          final ChannelBuffer version =
-            client.encode(client.getProtocolVersionRequest());
-          buf = ChannelBuffers.wrappedBuffer(header, payload, version);
-        } else {
-          buf = ChannelBuffers.wrappedBuffer(header, payload);
+            // Piggyback a version request in the 1st packet after the payload
+            // we were trying to send. This way we'll have the version handy
+            // pretty quickly. Since it's most likely going to fit in the same
+            // packet we send out, it adds ~zero overhead. But don't piggyback a
+            // version request if the payload is already a version request or if
+            // we already know the server version.
+            final ChannelBuffer buf;
+            if ((true || client.server_version < 0) && !isVersionRequest(payload)) {
+              final ChannelBuffer version =
+                client.encode(client.getProtocolVersionRequest());
+              buf = ChannelBuffers.wrappedBuffer(header, payload, version);
+            } else {
+              buf = ChannelBuffers.wrappedBuffer(header, payload);
+            }
+            ctx.sendDownstream(new DownstreamMessageEvent(ctx.getChannel(), me.getFuture(),
+                                                          buf, me.getRemoteAddress()));
+            // remove us from the pipeline so nobody else will send hello packet
+            pipeline.remove(this);
+            return;
+          }
+          // falls through ...
         }
-        event = new DownstreamMessageEvent(ctx.getChannel(), me.getFuture(),
-                                           buf, me.getRemoteAddress());
       }
       ctx.sendDownstream(event);
     }
@@ -1701,7 +1694,5 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
       // so this must be a version request.
       return true;
     }
-
   }
-
 }
