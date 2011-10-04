@@ -45,6 +45,7 @@ import org.jboss.netty.channel.ChannelEvent;
 import org.jboss.netty.channel.ChannelFuture;
 import org.jboss.netty.channel.ChannelFutureListener;
 import org.jboss.netty.channel.ChannelHandlerContext;
+import org.jboss.netty.channel.ChannelPipeline;
 import org.jboss.netty.channel.ChannelStateEvent;
 import org.jboss.netty.channel.Channels;
 import org.jboss.netty.channel.DownstreamMessageEvent;
@@ -1409,38 +1410,41 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
      */
     @Override
     public void handleDownstream(final ChannelHandlerContext ctx,
-                                 ChannelEvent event) {
+                                 final ChannelEvent event) {
       if (event instanceof MessageEvent) {
-        final MessageEvent me = (MessageEvent) event;
-        final ChannelBuffer payload = (ChannelBuffer) me.getMessage();
-        final ChannelBuffer header = ChannelBuffers.wrappedBuffer(HELLO_HEADER);
+        synchronized (ctx) {
+          final ChannelPipeline pipeline = ctx.getPipeline();
 
-        // Piggyback a version request in the 1st packet, after the payload
-        // we were trying to send.  This way we'll have the version handy
-        // pretty quickly.  Since it's most likely going to fit in the same
-        // packet we send out, it adds ~zero overhead.  But don't piggyback
-        // a version request if the payload is already a version request.
-        ChannelBuffer buf;
-        if (!isVersionRequest(payload)) {
-          final RegionClient client = ctx.getPipeline().get(RegionClient.class);
-          final ChannelBuffer version =
-            client.encode(client.getProtocolVersionRequest());
-          buf = ChannelBuffers.wrappedBuffer(header, payload, version);
-        } else {
-          buf = ChannelBuffers.wrappedBuffer(header, payload);
-        }
-        // We're going to send the header, so let's remove ourselves from the
-        // pipeline.
-        try {
-          ctx.getPipeline().remove(this);
-          event = new DownstreamMessageEvent(ctx.getChannel(), me.getFuture(),
-                                             buf, me.getRemoteAddress());
-        } catch (NoSuchElementException e) {
-          // There was a race with another thread, and we lost the race: the
-          // other thread sent the handshake and remove ourselves from the
-          // pipeline already (we got the NoSuchElementException because we
-          // tried remove ourselves again).  In this case, it's fine, we can
-          // just keep going and pass the event downstream, unchanged.
+          // After acquiring the lock on `ctx', if we're still in the pipeline
+          // it means that no message has been sent downstream yet, we're the
+          // first one to attempt to send something.
+          if (pipeline.get(SayHelloFirstRpc.class) == this) {
+            final MessageEvent me = (MessageEvent) event;
+            final ChannelBuffer payload = (ChannelBuffer) me.getMessage();
+            final ChannelBuffer header = ChannelBuffers.wrappedBuffer(HELLO_HEADER);
+            final RegionClient client = pipeline.get(RegionClient.class);
+
+            // Piggyback a version request in the 1st packet after the payload
+            // we were trying to send. This way we'll have the version handy
+            // pretty quickly. Since it's most likely going to fit in the same
+            // packet we send out, it adds ~zero overhead. But don't piggyback a
+            // version request if the payload is already a version request or if
+            // we already know the server version.
+            final ChannelBuffer buf;
+            if (!isVersionRequest(payload)) {
+              final ChannelBuffer version =
+                client.encode(client.getProtocolVersionRequest());
+              buf = ChannelBuffers.wrappedBuffer(header, payload, version);
+            } else {
+              buf = ChannelBuffers.wrappedBuffer(header, payload);
+            }
+            ctx.sendDownstream(new DownstreamMessageEvent(ctx.getChannel(), me.getFuture(),
+                                                          buf, me.getRemoteAddress()));
+            // Remove us from the pipeline so nobody else will send hello packet.
+            pipeline.remove(this);
+            return;
+          }
+          // else: Fall through.
         }
       }
       ctx.sendDownstream(event);
