@@ -345,7 +345,6 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
         for (final HBaseRpc rpc : pending_rpcs) {
           pending.add(rpc.getDeferred());
         }
-        sendPendingRpcs("shutdown");
         return Deferred.group(pending).addCallbackDeferring(
           new RetryShutdown<ArrayList<Object>>(pending.size()));
       }
@@ -777,9 +776,14 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
       }  // else: continue to the "we're disconnected" code path below.
     }
 
+    boolean tryagain = false;
     boolean dead;  // Shadows this.dead;
     synchronized (this) {
-      if (!(dead = this.dead)) {
+      dead = this.dead;
+      // Check if we got connected while entering this synchronized block.
+      if (chan != null) {
+        tryagain = true;
+      } else if (!dead) {
         if (pending_rpcs == null) {
           pending_rpcs = new ArrayList<HBaseRpc>();
         }
@@ -792,6 +796,14 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
       } else {
         hbase_client.sendRpcToRegion(rpc);  // Re-schedule the RPC.
       }
+      return;
+    } else if (tryagain) {
+      // This recursion will not lead to a loop because we only get here if we
+      // connected while entering the synchronized block above. So when trying
+      // a second time,  we will either succeed to send the RPC if we're still
+      // connected, or fail through to the code below if we got disconnected
+      // in the mean time.
+      sendRpc(rpc);
       return;
     }
     LOG.debug("RPC queued: {}", rpc);
@@ -829,26 +841,13 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
   public void channelConnected(final ChannelHandlerContext ctx,
                                final ChannelStateEvent e) {
     chan = e.getChannel();
-    sendPendingRpcs(null);
-  }
 
-  //
-  // Sends pending rpcs after we're connected and during shutdown if we missed
-  // any. Also schedule a timer for 100 ms into the future in case some new ones
-  // came in while we were processing.
-  //
-  private void sendPendingRpcs(String from)
-  {
     ArrayList<HBaseRpc> rpcs;
     synchronized (this) {
       rpcs = pending_rpcs;
       pending_rpcs = null;
     }
     if (rpcs != null) {
-      if (from != null) {
-        LOG.debug("Running " + rpcs.size() + " pending rpc(s) from: " + from);
-      }
-
       for (final HBaseRpc rpc : rpcs) {
         if (chan != null) {
           LOG.debug("Executing RPC queued: {}", rpc);
@@ -858,11 +857,6 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
           }
         }
       }
-      hbase_client.timer.newTimeout(new TimerTask() {
-          public void run(final Timeout timeout) {
-            sendPendingRpcs("timer");
-          }
-        }, 100, MILLISECONDS);
     }
   }
 
