@@ -75,7 +75,7 @@ public final class DeleteRequest extends HBaseRpc
   public DeleteRequest(final byte[] table,
                        final byte[] key,
                        final byte[] family) {
-    this(table, key, family, DELETE_FAMILY_MARKER, RowLock.NO_LOCK);
+    this(table, key, family, null, RowLock.NO_LOCK);
   }
 
   /**
@@ -90,7 +90,7 @@ public final class DeleteRequest extends HBaseRpc
                        final byte[] key,
                        final byte[] family,
                        final byte[] qualifier) {
-    this(table, key, family, new byte[][] { qualifier }, RowLock.NO_LOCK);
+      this(table, key, family, qualifier == null ? null : new byte[][] { qualifier }, RowLock.NO_LOCK);
   }
 
   /**
@@ -123,7 +123,7 @@ public final class DeleteRequest extends HBaseRpc
                        final byte[] family,
                        final byte[] qualifier,
                        final RowLock lock) {
-    this(table, key, family, new byte[][] { qualifier }, lock.id());
+    this(table, key, family, qualifier == null ? null : new byte[][] { qualifier }, lock.id());
   }
 
   /**
@@ -163,8 +163,7 @@ public final class DeleteRequest extends HBaseRpc
   public DeleteRequest(final String table,
                        final String key,
                        final String family) {
-    this(table.getBytes(), key.getBytes(), family.getBytes(),
-         DELETE_FAMILY_MARKER, RowLock.NO_LOCK);
+    this(table.getBytes(), key.getBytes(), family.getBytes(), null, RowLock.NO_LOCK);
   }
 
   /**
@@ -179,7 +178,7 @@ public final class DeleteRequest extends HBaseRpc
                        final String family,
                        final String qualifier) {
     this(table.getBytes(), key.getBytes(), family.getBytes(),
-         new byte[][] { qualifier.getBytes() }, RowLock.NO_LOCK);
+         qualifier == null ? null : new byte[][] { qualifier.getBytes() }, RowLock.NO_LOCK);
   }
 
   /**
@@ -196,7 +195,7 @@ public final class DeleteRequest extends HBaseRpc
                        final String qualifier,
                        final RowLock lock) {
     this(table.getBytes(), key.getBytes(), family.getBytes(),
-         new byte[][] { qualifier.getBytes() }, lock.id());
+         qualifier == null ? null : new byte[][] { qualifier.getBytes() }, lock.id());
   }
 
   /** Private constructor.  */
@@ -215,7 +214,7 @@ public final class DeleteRequest extends HBaseRpc
       }
     }
     this.family = family;
-    this.qualifiers = qualifiers;
+    this.qualifiers = qualifiers == null ? DELETE_FAMILY_MARKER : qualifiers;
     this.lockid = lockid;
   }
 
