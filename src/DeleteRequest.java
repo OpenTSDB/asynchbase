@@ -329,6 +329,7 @@ public final class DeleteRequest extends HBaseRpc
     final byte type = (qualifiers == DELETE_FAMILY_MARKER
                        ? KeyValue.DELETE_FAMILY : KeyValue.DELETE_COLUMN);
     // Write the KeyValues
+    buf.writeInt(qualifiers.length); // Number of KeyValues that follow
     for (final byte[] qualifier : qualifiers) {
       final int total_rowkey_length = 2 + key.length + 1 + family.length
         + qualifier.length + 8 + 1;
@@ -339,7 +340,7 @@ public final class DeleteRequest extends HBaseRpc
       buf.writeBytes(key);      // Duplicate key...
       buf.writeByte(family.length);
       buf.writeBytes(family);   // Duplicate column family...
-      // no qualifier
+      buf.writeBytes(qualifier);
       buf.writeLong(Long.MAX_VALUE);   // Timestamp (we set it to the max value).
       buf.writeByte(type);  // Type of the KeyValue.
       // No `value' part of the KeyValue to write.
