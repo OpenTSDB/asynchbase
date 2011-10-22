@@ -1660,11 +1660,14 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
      */
     @Override
     public void handleDownstream(final ChannelHandlerContext ctx,
-                                 ChannelEvent event) {
+                                 final ChannelEvent event) {
       if (event instanceof MessageEvent) {
         synchronized (ctx) {
           final ChannelPipeline pipeline = ctx.getPipeline();
 
+          // After acquiring the lock on `ctx', if we're still in the pipeline
+          // it means that no message has been sent downstream yet, we're the
+          // first one to attempt to send something.
           if (pipeline.get(SayHelloFirstRpc.class) == this) {
             final MessageEvent me = (MessageEvent) event;
             final ChannelBuffer payload = (ChannelBuffer) me.getMessage();
@@ -1687,11 +1690,11 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
             }
             ctx.sendDownstream(new DownstreamMessageEvent(ctx.getChannel(), me.getFuture(),
                                                           buf, me.getRemoteAddress()));
-            // remove us from the pipeline so nobody else will send hello packet
+            // Remove us from the pipeline so nobody else will send hello packet.
             pipeline.remove(this);
             return;
           }
-          // falls through ...
+          // else: Fall through.
         }
       }
       ctx.sendDownstream(event);

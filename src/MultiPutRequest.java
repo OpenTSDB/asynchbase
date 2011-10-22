@@ -297,8 +297,8 @@ final class MultiPutRequest extends HBaseRpc {
       }
       nkeys_per_family++;
 
-      buf.writeInt(KeyValue.serializedLength(edit.key(), edit.family(), edit.qualifier(), null));
-      KeyValue.serialize(buf, KeyValue.PUT, Long.MAX_VALUE, edit.key(), edit.family(), edit.qualifier(), null);
+      buf.writeInt(KeyValue.serializedLength(edit.key(), edit.family(), edit.qualifier(), edit.value()));
+      KeyValue.serialize(buf, KeyValue.PUT, Long.MAX_VALUE, edit.key(), edit.family(), edit.qualifier(), edit.value());
       prev = edit;
     }  // Yay, we made it!
 
