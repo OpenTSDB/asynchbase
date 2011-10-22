@@ -76,16 +76,22 @@ public final class KeyValue implements Comparable<KeyValue> {
 
   /**
    * Constructor.
-   * @param key The row key.
-   * @param family The column family.
+   * @param key The row key.  Length must fit in 16 bits.
+   * @param family The column family.  Length must fit in 8 bits.
    * @param qualifier The column qualifier.
    * @param value The value, the contents of the cell.
+   * @throws IllegalArgumentException if any argument is invalid (e.g. array
+   * size is too long).
    */
   public KeyValue(final byte[] key,
                   final byte[] family, final byte[] qualifier,
                   final byte[] value//,
                   //final long timestamp, final byte type
                   ) {
+    checkKey(key);
+    checkFamily(family);
+    checkQualifier(qualifier);
+    checkValue(value);
     this.key = key;
     this.family = family;
     this.qualifier = qualifier;
