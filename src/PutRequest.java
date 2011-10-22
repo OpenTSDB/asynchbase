@@ -131,6 +131,39 @@ public final class PutRequest extends HBaseRpc
          qualifier.getBytes(), value.getBytes(), lock.id());
   }
 
+  /**
+   * Constructor.
+   * @param table The table to edit.
+   * @param kv The {@link KeyValue} to store.
+   * @since 1.1
+   */
+  public PutRequest(final byte[] table,
+                    final KeyValue kv) {
+    this(table, kv, RowLock.NO_LOCK);
+  }
+
+  /**
+   * Constructor.
+   * @param table The table to edit.
+   * @param kv The {@link KeyValue} to store.
+   * @param lock An explicit row lock to use with this request.
+   * @since 1.1
+   */
+  public PutRequest(final byte[] table,
+                    final KeyValue kv,
+                    final RowLock lock) {
+    this(table, kv, lock.id());
+  }
+
+  /** Private constructor.  */
+  public PutRequest(final byte[] table,
+                    final KeyValue kv,
+                    final long lockid) {
+    super(PUT, table, kv.key());
+    this.kv = kv;
+    this.lockid = lockid;
+  }
+
   /** Private constructor.  */
   private PutRequest(final byte[] table,
                      final byte[] key,
@@ -139,9 +172,7 @@ public final class PutRequest extends HBaseRpc
                      final byte[] value,
                      final long lockid) {
     super(PUT, table, key);
-    KeyValue.checkFamily(family);
-    KeyValue.checkQualifier(qualifier);
-    KeyValue.checkValue(value);
+    // KeyValue's constructor will validate the remaining arguments.
     this.kv = new KeyValue(key, family, qualifier, value);
     this.lockid = lockid;
   }
