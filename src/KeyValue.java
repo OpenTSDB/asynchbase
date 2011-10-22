@@ -66,6 +66,7 @@ public final class KeyValue implements Comparable<KeyValue> {
 
   // Note: type can be one of:
   //   -  4  0b00000100  Put
+  static final byte PUT = 4;
   //   -  8  0b00001000  Delete        (delete only the last version of a cell)
   //   - 12  0b00001100  DeleteColumn  (delete all previous versions of a cell)
   static final byte DELETE_COLUMN = 12;
@@ -307,6 +308,82 @@ public final class KeyValue implements Comparable<KeyValue> {
    */
   static void checkValue(final byte[] value) {
     HBaseRpc.checkArrayLength(value);
+  }
+
+  // ---------------------- //
+  // Serialization helpers. //
+  // ---------------------- //
+
+  /**
+   * Serializes this KeyValue.
+   * @param buf The buffer into which to write the serialized form.
+   * @param type What kind of KV (e.g. {@link #PUT} or {@link DELETE_FAMILY}).
+   */
+  void serialize(final ChannelBuffer buf, final byte type) {
+    serialize(buf, type, Long.MAX_VALUE, key, family, qualifier, value);
+  }
+
+  /**
+   * Returns the serialized length of a KeyValue.
+   */
+  int predictSerializedSize() {
+    return predictSerializedSize(key, family, qualifier, value);
+  }
+
+  /**
+   * Returns the serialized length of a KeyValue.
+   */
+  static int predictSerializedSize(final byte[] key,
+                                   final byte[] family,
+                                   final byte[] qualifier,
+                                   final byte[] value) {
+    return
+      + 4  // int: Total length of the whole KeyValue.
+      + 4  // int: Total length of the key part of the KeyValue.
+      + 4  // int: Total length of the value part of the KeyValue.
+      + 2                 // short: Row key length.
+      + key.length        // The row key.
+      + 1                 // byte: Family length.
+      + family.length     // The family.
+      + qualifier.length  // The qualifier.
+      + 8                 // long: The timestamp.
+      + 1                 // byte: The type of KeyValue.
+      + (value == null ? 0 : value.length);
+  }
+
+  /**
+   * Serializes a KeyValue.
+   * @param buf The buffer into which to write the serialized form.
+   * @param type What kind of KV (e.g. {@link #PUT} or {@link DELETE_FAMILY}).
+   * @param timestamp The timestamp to put on the KV.
+   */
+  static void serialize(final ChannelBuffer buf,
+                        final byte type,
+                        final long timestamp,
+                        final byte[] key,
+                        final byte[] family,
+                        final byte[] qualifier,
+                        final byte[] value) {
+    final int val_length = value == null ? 0 : value.length;
+    final int key_length = 2 + key.length + 1 + family.length
+      + qualifier.length + 8 + 1;
+
+    // Write the length of the whole KeyValue again (this is so useless...).
+    buf.writeInt(4 + 4 + key_length + val_length);   // Total length.
+    buf.writeInt(key_length);                        // Key length.
+    buf.writeInt(val_length);                        // Value length.
+
+    // Then the whole key.
+    buf.writeShort(key.length);           // Row length.
+    buf.writeBytes(key);                  // The row key (again!).
+    buf.writeByte((byte) family.length);  // Family length.
+    buf.writeBytes(family);               // Write the family (again!).
+    buf.writeBytes(qualifier);            // The qualifier.
+    buf.writeLong(timestamp);             // The timestamp (again!).
+    buf.writeByte(type);                  // Type of edit
+    if (value != null) {
+      buf.writeBytes(value);              // Finally, the value (if any).
+    }
   }
 
 }

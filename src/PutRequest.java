@@ -54,9 +54,7 @@ public final class PutRequest extends HBaseRpc
     EMPTY_PUT.setRegion(new RegionInfo(zero, zero, zero));
   }
 
-  private final byte[] family;
-  private final byte[] qualifier;
-  private final byte[] value;
+  private final KeyValue kv;
   private final long lockid;
   private boolean durable = true;
   private boolean bufferable = true;
@@ -144,9 +142,7 @@ public final class PutRequest extends HBaseRpc
     KeyValue.checkFamily(family);
     KeyValue.checkQualifier(qualifier);
     KeyValue.checkValue(value);
-    this.family = family;
-    this.qualifier = qualifier;
-    this.value = value;
+    this.kv = new KeyValue(key, family, qualifier, value);
     this.lockid = lockid;
   }
 
@@ -189,23 +185,23 @@ public final class PutRequest extends HBaseRpc
 
   @Override
   public byte[] family() {
-    return family;
+    return kv.family();
   }
 
   @Override
   public byte[] qualifier() {
-    return qualifier;
+    return kv.qualifier();
   }
 
   @Override
   public byte[] value() {
-    return value;
+    return kv.value();
   }
 
   public String toString() {
     return super.toStringWithQualifier("PutRequest",
-                                       family, qualifier,
-                                       ", value=" + Bytes.pretty(value)
+                                       kv.family(), kv.qualifier(),
+                                       ", value=" + Bytes.pretty(kv.value())
                                        + ", lockid=" + lockid
                                        + ", durable=" + durable
                                        + ", bufferable=" + bufferable);
@@ -214,6 +210,10 @@ public final class PutRequest extends HBaseRpc
   // ---------------------- //
   // Package private stuff. //
   // ---------------------- //
+
+  KeyValue kv() {
+    return kv;
+  }
 
   long lockid() {
     return lockid;
@@ -249,28 +249,18 @@ public final class PutRequest extends HBaseRpc
 
     size += 1;  // byte: Version of Put.
     size += 3;  // vint: row key length (3 bytes => max length = 32768).
-    size += key.length;  // The row key.
+    size += kv.key().length;  // The row key.
     size += 8;  // long: Timestamp.
     size += 8;  // long: Lock ID.
     size += 1;  // bool: Whether or not to write to the WAL.
     size += 4;  // int:  Number of families for which we have edits.
 
     size += 1;  // vint: Family length (guaranteed on 1 byte).
-    size += family.length;  // The family.
+    size += kv.family().length;  // The family.
     size += 4;  // int:  Number of KeyValues that follow.
     size += 4;  // int:  Total number of bytes for all those KeyValues.
 
-    size += 4;  // int:   Key + value length.
-    size += 4;  // int:   Key length.
-    size += 4;  // int:   Value length.
-    size += 2;  // short: Row length.
-    size += key.length;        // The row key (again!).
-    size += 1;  // byte:  Family length.
-    size += family.length;     // The family (again!).
-    size += qualifier.length;  // The qualifier.
-    size += 8;  // long:  Timestamp (again!).
-    size += 1;  // byte:  Type of edit.
-    size += value.length;
+    size += kv.predictSerializedSize();
 
     return size;
   }
@@ -298,45 +288,12 @@ public final class PutRequest extends HBaseRpc
     buf.writeByte(durable ? 0x01 : 0x00);  // Whether or not to use the WAL.
 
     buf.writeInt(1);  // Number of families that follow.
-    writeByteArray(buf, family);  // The column family.
+    writeByteArray(buf, kv.family());  // The column family.
 
     buf.writeInt(1);  // Number of "KeyValues" that follow.
-    final int kv_length = 4 + 4 + keyLength() + value.length;
-    // Total number of bytes taken by those "KeyValues".
-    buf.writeInt(kv_length);
-
-    serializeKeyValue(buf);
+    buf.writeInt(kv.predictSerializedSize());  // Size of the KV that follows.
+    kv.serialize(buf, KeyValue.PUT);
     return buf;
-  }
-
-  /**
-   * Returns the number of bytes needed for the key part of the KeyValue of
-   * this edit.
-   */
-  int keyLength() {
-    return 2 + key.length + 1 + family.length + qualifier.length + 8 + 1;
-  }
-
-  /**
-   * Serializes the KeyValue represented by this edit.
-   * @param buf The buffer into which to serialize the KeyValue.
-   */
-  void serializeKeyValue(final ChannelBuffer buf) {
-    final int key_length = keyLength();
-    // Write the length of the whole KeyValue again (this is so useless...).
-    buf.writeInt(4 + 4 + key_length + value.length);
-    buf.writeInt(key_length);   // Key length.
-    buf.writeInt(value.length);  // Value length.
-
-    // Then the whole key.
-    buf.writeShort(key.length);           // Row length.
-    buf.writeBytes(key);                  // The row key (again!).
-    buf.writeByte((byte) family.length);  // Family length.
-    buf.writeBytes(family);               // Write the family (again!).
-    buf.writeBytes(qualifier);            // The qualifier.
-    buf.writeLong(Long.MAX_VALUE);        // The timestamp (again!).
-    buf.writeByte(0x04);                  // Type of edit (4 = Put).
-    buf.writeBytes(value);                // Finally, the value.
   }
 
 }

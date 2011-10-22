@@ -354,19 +354,8 @@ public final class DeleteRequest extends HBaseRpc
                        ? KeyValue.DELETE_FAMILY : KeyValue.DELETE_COLUMN);
     // Write the KeyValues
     for (final byte[] qualifier : qualifiers) {
-      final int total_rowkey_length = 2 + key.length + 1 + family.length
-        + qualifier.length + 8 + 1;
-      buf.writeInt(total_rowkey_length + 8);  // Total length of the KeyValue.
-      buf.writeInt(total_rowkey_length);      // Total length of the row key.
-      buf.writeInt(0);                        // Length of the (empty) value.
-      buf.writeShort(key.length);
-      buf.writeBytes(key);      // Duplicate key...
-      buf.writeByte(family.length);
-      buf.writeBytes(family);   // Duplicate column family...
-      buf.writeBytes(qualifier);
-      buf.writeLong(Long.MAX_VALUE);   // Timestamp (we set it to the max value).
-      buf.writeByte(type);  // Type of the KeyValue.
-      // No `value' part of the KeyValue to write.
+      KeyValue.serialize(buf, type, Long.MAX_VALUE,
+                         key, family, qualifier, null);
     }
     return buf;
   }
