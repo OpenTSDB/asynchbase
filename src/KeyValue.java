@@ -64,6 +64,7 @@ public final class KeyValue implements Comparable<KeyValue> {
   //   -  4  0b00000100  Put
   //   -  8  0b00001000  Delete        (delete only the last version of a cell)
   //   - 12  0b00001100  DeleteColumn  (delete all previous versions of a cell)
+  static final byte PUT = 4;
   static final byte DELETE_COLUMN = 12;
   //   - 14  0b01110010  DeleteFamily  (delete all cells within a family)
   static final byte DELETE_FAMILY = 14;
@@ -308,4 +309,38 @@ public final class KeyValue implements Comparable<KeyValue> {
     HBaseRpc.checkArrayLength(value);
   }
 
+  /**
+   * Serialized length of a KeyValue.
+   */
+  static int serializedLength(final byte[] key, final byte[] family, final byte[] qualifier, final byte[] value)
+  {
+    final int val_length = value == null ? 0 : value.length;
+    final int key_length = 2 + key.length + 1 + family.length + qualifier.length + 8 + 1;
+    return 4 + 4 + val_length + key_length;
+  }
+
+  /**
+   * Serialize a KeyValue.
+   */
+  static void serialize(final ChannelBuffer buf, final byte type, final long timestamp, final byte[] key, final byte[] family, final byte[] qualifier, final byte[] value) {
+    final int val_length = value == null ? 0 : value.length;
+    final int key_length = 2 + key.length + 1 + family.length + qualifier.length + 8 + 1;
+
+    // Write the length of the whole KeyValue again (this is so useless...).
+    buf.writeInt(4 + 4 + key_length + val_length);   // Total length.
+    buf.writeInt(key_length);                        // Key length.
+    buf.writeInt(val_length);                        // Value length.
+
+    // Then the whole key.
+    buf.writeShort(key.length);           // Row length.
+    buf.writeBytes(key);                  // The row key (again!).
+    buf.writeByte((byte) family.length);  // Family length.
+    buf.writeBytes(family);               // Write the family (again!).
+    buf.writeBytes(qualifier);            // The qualifier.
+    buf.writeLong(Long.MAX_VALUE);        // The timestamp (again!).
+    buf.writeByte(type);                  // Type of edit
+    if (value != null) {
+        buf.writeBytes(value);            // Finally, the value (if any).
+    }
+  }
 }
