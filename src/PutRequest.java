@@ -173,7 +173,7 @@ public final class PutRequest extends HBaseRpc
                      final long lockid) {
     super(PUT, table, key);
     // KeyValue's constructor will validate the remaining arguments.
-    this.kv = new KeyValue(key, family, qualifier, value);
+    this.kv = new KeyValue(key, family, qualifier, Long.MAX_VALUE, value);
     this.lockid = lockid;
   }
 
