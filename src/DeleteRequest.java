@@ -59,6 +59,7 @@ public final class DeleteRequest extends HBaseRpc
    * <strong>These byte arrays will NOT be copied.</strong>
    * @param table The table to edit.
    * @param key The key of the row to edit in that table.
+   * @throws IllegalArgumentException if any argument is malformed.
    */
   public DeleteRequest(final byte[] table, final byte[] key) {
     this(table, key, null, null, RowLock.NO_LOCK);
@@ -70,6 +71,7 @@ public final class DeleteRequest extends HBaseRpc
    * @param table The table to edit.
    * @param key The key of the row to edit in that table.
    * @param family The column family to edit in that table.
+   * @throws IllegalArgumentException if any argument is malformed.
    * @since 1.1
    */
   public DeleteRequest(final byte[] table,
@@ -85,6 +87,8 @@ public final class DeleteRequest extends HBaseRpc
    * @param key The key of the row to edit in that table.
    * @param family The column family to edit in that table.
    * @param qualifier The column qualifier to delete in that family.
+   * Can be {@code null} since version 1.1.
+   * @throws IllegalArgumentException if any argument is malformed.
    */
   public DeleteRequest(final byte[] table,
                        final byte[] key,
@@ -100,6 +104,7 @@ public final class DeleteRequest extends HBaseRpc
    * @param key The key of the row to edit in that table.
    * @param family The column family to edit in that table.
    * @param qualifiers The column qualifiers to delete in that family.
+   * @throws IllegalArgumentException if any argument is malformed.
    * @since 1.1
    */
   public DeleteRequest(final byte[] table,
@@ -117,6 +122,7 @@ public final class DeleteRequest extends HBaseRpc
    * @param family The column family to edit in that table.
    * @param qualifier The column qualifier to delete in that family.
    * @param lock An explicit row lock to use with this request.
+   * @throws IllegalArgumentException if any argument is malformed.
    */
   public DeleteRequest(final byte[] table,
                        final byte[] key,
@@ -133,7 +139,9 @@ public final class DeleteRequest extends HBaseRpc
    * @param key The key of the row to edit in that table.
    * @param family The column family to edit in that table.
    * @param qualifiers The column qualifiers to delete in that family.
+   * Can be {@code null}.
    * @param lock An explicit row lock to use with this request.
+   * @throws IllegalArgumentException if any argument is malformed.
    * @since 1.1
    */
   public DeleteRequest(final byte[] table,
@@ -148,6 +156,7 @@ public final class DeleteRequest extends HBaseRpc
    * Constructor to delete an entire row.
    * @param table The table to edit.
    * @param key The key of the row to edit in that table.
+   * @throws IllegalArgumentException if any argument is malformed.
    */
   public DeleteRequest(final String table, final String key) {
     this(table.getBytes(), key.getBytes(), null, null, RowLock.NO_LOCK);
@@ -158,6 +167,7 @@ public final class DeleteRequest extends HBaseRpc
    * @param table The table to edit.
    * @param key The key of the row to edit in that table.
    * @param family The column family to edit in that table.
+   * @throws IllegalArgumentException if any argument is malformed.
    * @since 1.1
    */
   public DeleteRequest(final String table,
@@ -172,6 +182,8 @@ public final class DeleteRequest extends HBaseRpc
    * @param key The key of the row to edit in that table.
    * @param family The column family to edit in that table.
    * @param qualifier The column qualifier to delete in that family.
+   * Can be {@code null} since version 1.1.
+   * @throws IllegalArgumentException if any argument is malformed.
    */
   public DeleteRequest(final String table,
                        final String key,
@@ -187,7 +199,9 @@ public final class DeleteRequest extends HBaseRpc
    * @param key The key of the row to edit in that table.
    * @param family The column family to edit in that table.
    * @param qualifier The column qualifier to delete in that family.
+   * Can be {@code null} since version 1.1.
    * @param lock An explicit row lock to use with this request.
+   * @throws IllegalArgumentException if any argument is malformed.
    */
   public DeleteRequest(final String table,
                        final String key,
@@ -207,14 +221,25 @@ public final class DeleteRequest extends HBaseRpc
     super(DELETE, table, key);
     if (family != null) {
       KeyValue.checkFamily(family);
-      if (qualifiers != null) {
-        for (final byte[] qualifier : qualifiers) {
-          KeyValue.checkQualifier(qualifier);
-        }
-      }
     }
     this.family = family;
-    this.qualifiers = qualifiers == null ? DELETE_FAMILY_MARKER : qualifiers;
+
+    if (qualifiers != null) {
+      if (family == null) {
+        throw new IllegalArgumentException("You can't delete specific qualifiers"
+          + " without specifying which family they belong to."
+          + "  table=" + Bytes.pretty(table)
+          + ", key=" + Bytes.pretty(key));
+      }
+      for (final byte[] qualifier : qualifiers) {
+        KeyValue.checkQualifier(qualifier);
+      }
+      this.qualifiers = qualifiers;
+    } else {
+      // No specific qualifier to delete: delete the entire family.  Not that
+      // if `family == null', we'll delete and setting this is harmless.
+      this.qualifiers = DELETE_FAMILY_MARKER;
+    }
     this.lockid = lockid;
   }
 
@@ -330,7 +355,8 @@ public final class DeleteRequest extends HBaseRpc
     // Write the KeyValues
     buf.writeInt(qualifiers.length); // Number of KeyValues that follow
     for (final byte[] qualifier : qualifiers) {
-      KeyValue.serialize(buf, type, Long.MAX_VALUE, key, family, qualifier, null);
+      KeyValue.serialize(buf, type, Long.MAX_VALUE,
+                         key, family, qualifier, null);
     }
     return buf;
   }

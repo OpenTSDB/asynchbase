@@ -182,18 +182,7 @@ final class MultiPutRequest extends HBaseRpc {
         size += 4;  // int:  Total number of bytes for all those KeyValues.
       }
 
-      size += 4;  // int:   Key + value length.
-      size += 4;  // int:   Key length.
-      size += 4;  // int:   Value length.
-      size += 2;  // short: Row length.
-      size += key_length;               // The row key (again!).
-      size += 1;  // byte:  Family length.
-      size += family_length;            // The family (again!).
-      size += edit.qualifier().length;  // The qualifier.
-      size += 8;  // long:  Timestamp (again!).
-      size += 1;  // byte:  Type of edit.
-      size += edit.value().length;
-
+      size += edit.kv().predictSerializedSize();
       prev = edit;
     }
     return size;
@@ -297,8 +286,9 @@ final class MultiPutRequest extends HBaseRpc {
       }
       nkeys_per_family++;
 
-      buf.writeInt(KeyValue.serializedLength(edit.key(), edit.family(), edit.qualifier(), edit.value()));
-      KeyValue.serialize(buf, KeyValue.PUT, Long.MAX_VALUE, edit.key(), edit.family(), edit.qualifier(), edit.value());
+      final KeyValue kv = edit.kv();
+      nbytes_per_family += kv.predictSerializedSize();
+      kv.serialize(buf, KeyValue.PUT);
       prev = edit;
     }  // Yay, we made it!
 

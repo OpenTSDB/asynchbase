@@ -54,9 +54,7 @@ public final class PutRequest extends HBaseRpc
     EMPTY_PUT.setRegion(new RegionInfo(zero, zero, zero));
   }
 
-  private final byte[] family;
-  private final byte[] qualifier;
-  private final byte[] value;
+  private final KeyValue kv;
   private final long lockid;
   private boolean durable = true;
   private boolean bufferable = true;
@@ -133,6 +131,39 @@ public final class PutRequest extends HBaseRpc
          qualifier.getBytes(), value.getBytes(), lock.id());
   }
 
+  /**
+   * Constructor.
+   * @param table The table to edit.
+   * @param kv The {@link KeyValue} to store.
+   * @since 1.1
+   */
+  public PutRequest(final byte[] table,
+                    final KeyValue kv) {
+    this(table, kv, RowLock.NO_LOCK);
+  }
+
+  /**
+   * Constructor.
+   * @param table The table to edit.
+   * @param kv The {@link KeyValue} to store.
+   * @param lock An explicit row lock to use with this request.
+   * @since 1.1
+   */
+  public PutRequest(final byte[] table,
+                    final KeyValue kv,
+                    final RowLock lock) {
+    this(table, kv, lock.id());
+  }
+
+  /** Private constructor.  */
+  public PutRequest(final byte[] table,
+                    final KeyValue kv,
+                    final long lockid) {
+    super(PUT, table, kv.key());
+    this.kv = kv;
+    this.lockid = lockid;
+  }
+
   /** Private constructor.  */
   private PutRequest(final byte[] table,
                      final byte[] key,
@@ -141,12 +172,8 @@ public final class PutRequest extends HBaseRpc
                      final byte[] value,
                      final long lockid) {
     super(PUT, table, key);
-    KeyValue.checkFamily(family);
-    KeyValue.checkQualifier(qualifier);
-    KeyValue.checkValue(value);
-    this.family = family;
-    this.qualifier = qualifier;
-    this.value = value;
+    // KeyValue's constructor will validate the remaining arguments.
+    this.kv = new KeyValue(key, family, qualifier, value);
     this.lockid = lockid;
   }
 
@@ -189,23 +216,23 @@ public final class PutRequest extends HBaseRpc
 
   @Override
   public byte[] family() {
-    return family;
+    return kv.family();
   }
 
   @Override
   public byte[] qualifier() {
-    return qualifier;
+    return kv.qualifier();
   }
 
   @Override
   public byte[] value() {
-    return value;
+    return kv.value();
   }
 
   public String toString() {
     return super.toStringWithQualifier("PutRequest",
-                                       family, qualifier,
-                                       ", value=" + Bytes.pretty(value)
+                                       kv.family(), kv.qualifier(),
+                                       ", value=" + Bytes.pretty(kv.value())
                                        + ", lockid=" + lockid
                                        + ", durable=" + durable
                                        + ", bufferable=" + bufferable);
@@ -214,6 +241,10 @@ public final class PutRequest extends HBaseRpc
   // ---------------------- //
   // Package private stuff. //
   // ---------------------- //
+
+  KeyValue kv() {
+    return kv;
+  }
 
   long lockid() {
     return lockid;
@@ -249,28 +280,18 @@ public final class PutRequest extends HBaseRpc
 
     size += 1;  // byte: Version of Put.
     size += 3;  // vint: row key length (3 bytes => max length = 32768).
-    size += key.length;  // The row key.
+    size += kv.key().length;  // The row key.
     size += 8;  // long: Timestamp.
     size += 8;  // long: Lock ID.
     size += 1;  // bool: Whether or not to write to the WAL.
     size += 4;  // int:  Number of families for which we have edits.
 
     size += 1;  // vint: Family length (guaranteed on 1 byte).
-    size += family.length;  // The family.
+    size += kv.family().length;  // The family.
     size += 4;  // int:  Number of KeyValues that follow.
     size += 4;  // int:  Total number of bytes for all those KeyValues.
 
-    size += 4;  // int:   Key + value length.
-    size += 4;  // int:   Key length.
-    size += 4;  // int:   Value length.
-    size += 2;  // short: Row length.
-    size += key.length;        // The row key (again!).
-    size += 1;  // byte:  Family length.
-    size += family.length;     // The family (again!).
-    size += qualifier.length;  // The qualifier.
-    size += 8;  // long:  Timestamp (again!).
-    size += 1;  // byte:  Type of edit.
-    size += value.length;
+    size += kv.predictSerializedSize();
 
     return size;
   }
@@ -298,11 +319,11 @@ public final class PutRequest extends HBaseRpc
     buf.writeByte(durable ? 0x01 : 0x00);  // Whether or not to use the WAL.
 
     buf.writeInt(1);  // Number of families that follow.
-    writeByteArray(buf, family);  // The column family.
+    writeByteArray(buf, kv.family());  // The column family.
 
     buf.writeInt(1);  // Number of "KeyValues" that follow.
-    buf.writeInt(KeyValue.serializedLength(key, family, qualifier, value));
-    KeyValue.serialize(buf, KeyValue.PUT, Long.MAX_VALUE, key, family, qualifier, value);
+    buf.writeInt(kv.predictSerializedSize());  // Size of the KV that follows.
+    kv.serialize(buf, KeyValue.PUT);
     return buf;
   }
 
