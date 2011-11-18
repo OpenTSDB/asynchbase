@@ -1856,8 +1856,9 @@ public final class HBaseClient {
       // We don't use Netty's ClientBootstrap class because it makes it
       // unnecessarily complicated to have control over which ChannelPipeline
       // exactly will be given to the channel.  It's over-designed.
-      chan = channel_factory.newChannel(new RegionClientPipeline());
-      client = chan.getPipeline().get(RegionClient.class);
+      final RegionClientPipeline pipeline = new RegionClientPipeline();
+      client = pipeline.init();
+      chan = channel_factory.newChannel(pipeline);
       ip2client.put(hostport, client);  // This is guaranteed to return null.
     }
     // Configure and connect the channel without locking ip2client.
@@ -1894,9 +1895,17 @@ public final class HBaseClient {
     private boolean disconnected = false;
 
     RegionClientPipeline() {
-      // "hello" handler will remove itself from the pipeline after 1st RPC.
-      super.addLast("hello", RegionClient.SayHelloFirstRpc.INSTANCE);
-      super.addLast("handler", new RegionClient(HBaseClient.this));
+    }
+
+    /**
+     * Initializes this pipeline.
+     * This method <strong>MUST</strong> be called on each new instance
+     * before it's used as a pipeline for a channel.
+     */
+    RegionClient init() {
+      final RegionClient client = new RegionClient(HBaseClient.this);
+      super.addLast("handler", client);
+      return client;
     }
 
     @Override

@@ -212,11 +212,13 @@ public abstract class HBaseRpc {
    * Then comes 4 bytes to specify the rest of the length of the "hello"
    * message.  The remaining is a `Writable' instance serialized that
    * specifies which authentication provider to use and give our credentials.
-   * I have a hunch that this is going to change imminently in Hadoop when
-   * they roll out the security stuff they've been working on for a while,
-   * and HBase will probably have to adopt that (unless they decide to stop
-   * using Hadoop RPC and switch to something more modern and reasonable).
-   * The "hello" message is implemented in `RegionClient.SayHelloFirstRpc'.
+   * In HBase 0.92 and above, the `Writable' should represent what protocol
+   * the client wants to speak, which should be the name of an interface.
+   * "org.apache.hadoop.hbase.ipc.HRegionInterface" should be used.
+   * The "hello" message is implemented in `RegionClient#helloRpc'.  In order
+   * to support HBase 0.92, we always piggy back a `getProtocolVersion' RPC
+   * right after the header, so we can tell what version the server is using
+   * and how to serialize RPCs and read its responses.
    */
 
   // ------ //

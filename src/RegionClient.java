@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2010  StumbleUpon, Inc.  All rights reserved.
+ * Copyright (c) 2010, 2011  StumbleUpon, Inc.  All rights reserved.
  * This file is part of Async HBase.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -40,22 +40,17 @@ import static java.util.concurrent.TimeUnit.MILLISECONDS;
 import org.jboss.netty.buffer.ChannelBuffer;
 import org.jboss.netty.buffer.ChannelBuffers;
 import org.jboss.netty.channel.Channel;
-import org.jboss.netty.channel.ChannelDownstreamHandler;
 import org.jboss.netty.channel.ChannelEvent;
 import org.jboss.netty.channel.ChannelFuture;
 import org.jboss.netty.channel.ChannelFutureListener;
 import org.jboss.netty.channel.ChannelHandlerContext;
-import org.jboss.netty.channel.ChannelPipeline;
 import org.jboss.netty.channel.ChannelStateEvent;
 import org.jboss.netty.channel.Channels;
-import org.jboss.netty.channel.DownstreamMessageEvent;
 import org.jboss.netty.channel.ExceptionEvent;
-import org.jboss.netty.channel.MessageEvent;
 import org.jboss.netty.handler.codec.replay.ReplayingDecoder;
 import org.jboss.netty.handler.codec.replay.VoidEnum;
 import org.jboss.netty.util.Timeout;
 import org.jboss.netty.util.TimerTask;
-import static org.jboss.netty.channel.ChannelHandler.Sharable;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -105,6 +100,15 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
                                new VersionMismatchException(null, null));
   }
 
+  /** We don't know the RPC protocol version of the server yet.  */
+  private static final byte SERVER_VERSION_UNKNWON = 0;
+
+  /** Protocol version we pretend to use for HBase 0.90 and before.  */
+  static final byte SERVER_VERSION_090_AND_BEFORE = 24;
+
+  /** We know at least that the server uses 0.92 or above.  */
+  static final byte SERVER_VERSION_092_OR_ABOVE = 29;
+
   /** The HBase client we belong to.  */
   private final HBaseClient hbase_client;
 
@@ -128,17 +132,10 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
 
   /**
    * What RPC protocol version is this RegionServer using?.
-   * -1 means unknown.  No synchronization is typically used to read / write
-   * this value, as it's typically accessed after a volatile read or updated
-   * before a volatile write on {@link #deferred_server_version}.
+   * No synchronization is typically used to read this value.
+   * It is written only once by {@link ProtocolVersionCB}.
    */
-  private byte server_version = -1;
-
-  /**
-   * If we're in the process of looking up the server version...
-   * ... This will be non-null.
-   */
-  private volatile Deferred<Long> deferred_server_version;
+  private byte server_version = SERVER_VERSION_UNKNWON;
 
   /**
    * Multi-put request in which we accumulate buffered edits.
@@ -390,90 +387,68 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
     'V', 'e', 'r', 's', 'i', 'o', 'n'
   };
 
-  final static class GetProtocolVersionRequest extends HBaseRpc {
+  private final static class GetProtocolVersionRequest extends HBaseRpc {
 
     GetProtocolVersionRequest() {
       super(GET_PROTOCOL_VERSION);
     }
 
-    ChannelBuffer serialize(final byte unused_server_version) {
+    ChannelBuffer serialize(final byte server_version) {
     /** Pre-serialized form for this RPC, which is always the same.  */
       // num param + type 1 + string length + string + type 2 + long
       final ChannelBuffer buf = newBuffer(4 + 1 + 1 + 44 + 1 + 8);
       buf.writeInt(2);  // Number of parameters.
       // 1st param.
       writeHBaseString(buf, "org.apache.hadoop.hbase.ipc.HRegionInterface");
-      writeHBaseLong(buf, 24);  // 2nd param.
+      // 2nd param: what protocol version to speak.  If we don't know what the
+      // server expects, try an old version first (0.90 and before).
+      // Otherwise tell the server we speak the same version as it does.
+      writeHBaseLong(buf, server_version == SERVER_VERSION_UNKNWON
+                     ?  SERVER_VERSION_090_AND_BEFORE : server_version);
       return buf;
     }
   };
 
-  /**
-   * Returns a new {@link GetProtocolVersionRequest} ready to go.
-   * The RPC returned already has the right callback set.
-   */
-  @SuppressWarnings("unchecked")
-  private GetProtocolVersionRequest getProtocolVersionRequest() {
-    final GetProtocolVersionRequest rpc = new GetProtocolVersionRequest();
-    final Deferred/*<Long>*/ version = rpc.getDeferred();
-    deferred_server_version = version;  // Volatile write.
-    version.addCallback(got_protocol_version);
-    return rpc;
-  }
+  /** Callback to handle responses of getProtocolVersion RPCs.  */
+  private final class ProtocolVersionCB implements Callback<Long, Object> {
 
-  /**
-   * Asks the server which RPC protocol version it's running.
-   * @return a Deferred {@link Long}.
-   */
-  @SuppressWarnings("unchecked")
-  public Deferred<Long> getProtocolVersion() {
-    Deferred<Long> version = deferred_server_version;  // Volatile read.
-    if (server_version != -1) {
-      return Deferred.fromResult((long) server_version);
-    }
-    // Non-atomic check-then-update is OK here.  In case of a race and a
-    // thread overwrites this reference by creating another lookup, we just
-    // pay for an unnecessary network round-trip, not a big deal.
-    if (version != null) {
+    public Long call(final Object response) throws Exception {
+      if (response instanceof VersionMismatchException) {
+        if (server_version == SERVER_VERSION_UNKNWON) {
+          // If we get here, it's because we tried to handshake with a server
+          // running HBase 0.92 or above, but using a pre-0.92 handshake.  So
+          // we know we have to handshake differently.
+          server_version = SERVER_VERSION_092_OR_ABOVE;
+          Channels.write(chan, helloRpc(header092()));
+        } else {
+          // We get here if the server refused our 0.92-style handshake.  This
+          // must be a future version of HBase that broke compatibility again,
+          // and we don't know how to talk to it, so give up here.
+          throw (VersionMismatchException) response;
+        }
+        return null;
+      } else if (!(response instanceof Long)) {
+        if (response instanceof Exception) {  // If it's already an exception,
+          throw (Exception) response;         // just re-throw it as-is.
+        }
+        throw new InvalidResponseException(Long.class, response);
+      }
+      final Long version = (Long) response;
+      final long v = version;
+      if (v <= 0 || v > Byte.MAX_VALUE) {
+        throw new InvalidResponseException("getProtocolVersion returned a "
+          + (v <= 0 ? "negative" : "too large") + " value", version);
+      }
+      server_version = (byte) v;
+      sendQueuedRpcs();
       return version;
     }
 
-    final GetProtocolVersionRequest rpc = getProtocolVersionRequest();
-    sendRpc(rpc);
-    return (Deferred) rpc.getDeferred();
-  }
+    public String toString() {
+      return "handle getProtocolVersion response";
+    }
 
-  /** Singleton callback to handle responses of getProtocolVersion RPCs.  */
-  private final Callback<Long, Object> got_protocol_version =
-    new Callback<Long, Object>() {
-      public Long call(final Object response) {
-        if (!(response instanceof Long)) {
-          throw new InvalidResponseException(Long.class, response);
-        }
-        final Long version = (Long) response;
-        final long v = version;
-        if (v < 0 || v > Byte.MAX_VALUE) {
-          throw new InvalidResponseException("getProtocolVersion returned a "
-            + (v < 0 ? "negative" : "too large") + " value", version);
-        }
-        final byte prev_version = server_version;
-        server_version = (byte) v;
-        deferred_server_version = null;  // Volatile write.
-        if (prev_version == -1) {   // We're 1st to get the version.
-          if (LOG.isDebugEnabled()) {
-            LOG.debug(chan + " uses RPC protocol version " + server_version);
-          }
-        } else if (prev_version != server_version) {
-          LOG.error("WTF?  We previously found that " + chan + " uses RPC"
-                    + " protocol version " + prev_version + " but now the "
-                    + " server claims to be using version " + server_version);
-        }
-        return (Long) response;
-      }
-      public String toString() {
-        return "type getProtocolVersion response";
-      }
-    };
+  }
 
   private static final byte[] GET_CLOSEST_ROW_BEFORE = new byte[] {
     'g', 'e', 't',
@@ -825,7 +800,23 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
   @Override
   public void channelConnected(final ChannelHandlerContext ctx,
                                final ChannelStateEvent e) {
-    chan = e.getChannel();
+    final Channel chan = this.chan = e.getChannel();
+    final ChannelBuffer header;
+    if (System.getProperty("org.hbase.async.cdh3b3") != null) {
+      header = headerCDH3b3();
+    } else {
+      header = header090();
+    }
+    Channels.write(chan, helloRpc(header));
+  }
+
+  /**
+   * Sends the queued RPCs to the server, once we're connected to it.
+   * This gets called after {@link #channelConnected}, once we were able to
+   * handshake with the server and find out which version it's running.
+   * @see #helloRpc
+   */
+  private void sendQueuedRpcs() {
     ArrayList<HBaseRpc> rpcs;
     synchronized (this) {
       rpcs = pending_rpcs;
@@ -971,10 +962,6 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
   private ChannelBuffer encode(final HBaseRpc rpc) {
     if (!rpc.hasDeferred()) {
       throw new AssertionError("Should never happen!  rpc=" + rpc);
-    }
-    if (rpc.versionSensitive() && server_version == -1) {
-      getProtocolVersion().addBoth(new RetryRpc<Long>(rpc));
-      return null;
     }
 
     // TODO(tsuna): Add rate-limiting here.  We don't want to send more than
@@ -1353,184 +1340,105 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
     return buf.toString();
   }
 
+  // -------------------------------------------- //
+  // Dealing with the handshake at the beginning. //
+  // -------------------------------------------- //
+
+  /** Initial part of the header.  */
+  private final static byte[] HRPC3 = new byte[] { 'h', 'r', 'p', 'c', 3 };
+
+  /** Common part of the hello header: magic + version.  */
+  private ChannelBuffer commonHeader(final byte[] buf, final byte[] hrpc) {
+    final ChannelBuffer header = ChannelBuffers.wrappedBuffer(buf);
+    header.clear();  // Set the writerIndex to 0.
+
+    // Magic header.  See HBaseClient#writeHeader
+    // "hrpc" followed by the version.
+    // See HBaseServer#HEADER and HBaseServer#CURRENT_VERSION.
+    header.writeBytes(hrpc);  // 4 + 1
+    return header;
+  }
+
+  /** Hello header for HBase 0.92 and later.  */
+  private ChannelBuffer header092() {
+    final byte[] buf = new byte[4 + 1 + 4 + 1 + 44];
+    final ChannelBuffer header = commonHeader(buf, HRPC3);
+
+    // Serialized ipc.ConnectionHeader
+    // We skip 4 bytes now and will set it to the actual size at the end.
+    header.writerIndex(header.writerIndex() + 4);  // 4
+    final String klass = "org.apache.hadoop.hbase.ipc.HRegionInterface";
+    header.writeByte(klass.length());              // 1
+    header.writeBytes(Bytes.ISO88591(klass));      // 44
+
+    // Now set the length of the whole damn thing.
+    // -4 because the length itself isn't part of the payload.
+    // -5 because the "hrpc" + version isn't part of the payload.
+    header.setInt(5, header.writerIndex() - 4 - 5);
+    return header;
+  }
+
+  /** Hello header for HBase 0.90 and earlier.  */
+  private ChannelBuffer header090() {
+    final byte[] buf = new byte[4 + 1 + 4 + 2 + 29 + 2 + 48 + 2 + 47];
+    final ChannelBuffer header = commonHeader(buf, HRPC3);
+
+    // Serialized UserGroupInformation to say who we are.
+    // We're not nice so we're not gonna say who we are and we'll just send
+    // `null' (hadoop.io.ObjectWritable$NullInstance).
+    // First, we need the size of the whole damn UserGroupInformation thing.
+    // We skip 4 bytes now and will set it to the actual size at the end.
+    header.writerIndex(header.writerIndex() + 4);             // 4
+    // Write the class name of the object.
+    // See hadoop.io.ObjectWritable#writeObject
+    // See hadoop.io.UTF8#writeString
+    // String length as a short followed by UTF-8 string.
+    String klass = "org.apache.hadoop.io.Writable";
+    header.writeShort(klass.length());                        // 2
+    header.writeBytes(Bytes.ISO88591(klass));                 // 29
+    klass = "org.apache.hadoop.io.ObjectWritable$NullInstance";
+    header.writeShort(klass.length());                        // 2
+    header.writeBytes(Bytes.ISO88591(klass));                 // 48
+    klass = "org.apache.hadoop.security.UserGroupInformation";
+    header.writeShort(klass.length());                        // 2
+    header.writeBytes(Bytes.ISO88591(klass));                 // 47
+
+    // Now set the length of the whole damn thing.
+    // -4 because the length itself isn't part of the payload.
+    // -5 because the "hrpc" + version isn't part of the payload.
+    header.setInt(5, header.writerIndex() - 4 - 5);
+    return header;
+  }
+
+  /** CDH3b3-specific header for Hadoop "security".  */
+  private ChannelBuffer headerCDH3b3() {
+    // CDH3 b3 includes a temporary patch that is non-backwards compatible
+    // and results in clients getting disconnected as soon as they send the
+    // header, because the HBase RPC protocol provides no mechanism to send
+    // an error message back to the client during the initial "hello" stage
+    // of a connection.
+    final byte[] user = Bytes.UTF8(System.getProperty("user.name", "asynchbase"));
+    final byte[] buf = new byte[4 + 1 + 4 + 4 + user.length];
+    final ChannelBuffer header = commonHeader(buf, HRPC3);
+
+    // Length of the encoded string (useless).
+    header.writeInt(4 + user.length);  // 4
+    // String as encoded by `WritableUtils.writeString'.
+    header.writeInt(user.length);      // 4
+    header.writeBytes(user);           // length bytes
+    return header;
+  }
+
   /**
-   * Handler that sends the Hadoop RPC "hello" header before the first RPC.
-   * <p>
-   * This handler will simply prepend the "hello" header before the first RPC
-   * and will then remove itself from the pipeline, so all subsequent messages
-   * going through the pipeline won't need to go through this handler.
+   * Returns the "hello" message needed when opening a new connection.
+   * This message is immediately followed by a {@link GetProtocolVersionRequest}
+   * so we can learn what version the server is running to be able to talk to
+   * it the way it expects.
    */
-  @Sharable
-  final static class SayHelloFirstRpc implements ChannelDownstreamHandler {
-
-    /** Singleton instance.  */
-    public final static SayHelloFirstRpc INSTANCE = new SayHelloFirstRpc();
-
-    /** The header to send.  */
-    private static final byte[] HELLO_HEADER;
-    static {
-      final String prop;
-      // 0.91 includes a non-backwards compatible change to the RPC layer that
-      // was made to accommodate for coprocessors.  Unfortunately the change
-      // has been done carelessly in such a way that clients don't get a chance
-      // of detecting how to greet the server properly.
-      if ((prop = System.getProperty("org.hbase.async.091")) != null
-          && !"false".equals(prop)) {
-        HELLO_HEADER = new byte[4 + 1 + 4 + 1 + 44];
-        header091();
-      // CDH3 b3 includes a temporary patch that is non-backwards compatible
-      // and results in clients getting disconnected as soon as they send the
-      // header, because the HBase RPC protocol provides no mechanism to send
-      // an error message back to the client during the initial "hello" stage
-      // of a connection.
-      } else if (System.getProperty("org.hbase.async.cdh3b3") != null) {
-        final byte[] user = Bytes.UTF8(System.getProperty("user.name", "asynchbase"));
-        HELLO_HEADER = new byte[4 + 1 + 4 + 4 + user.length];
-        headerCDH3b3(user);
-      } else {
-        HELLO_HEADER = new byte[4 + 1 + 4 + 2 + 29 + 2 + 48 + 2 + 47];
-        header090();
-      }
-    }
-
-    /** Common part of the hello header: magic + version.  */
-    private static ChannelBuffer commonHeader() {
-      final ChannelBuffer buf = ChannelBuffers.wrappedBuffer(HELLO_HEADER);
-      buf.clear();  // Set the writerIndex to 0.
-
-      // Magic header.  See HBaseClient#writeHeader
-      // "hrpc" followed by the version (3).
-      // See HBaseServer#HEADER and HBaseServer#CURRENT_VERSION.
-      buf.writeBytes(new byte[] { 'h', 'r', 'p', 'c', 3 });  // 4 + 1
-      return buf;
-    }
-
-    /** Hello header for HBase 0.91 and later.  */
-    private static void header091() {
-      final ChannelBuffer buf = commonHeader();
-
-      // Serialized ipc.ConnectionHeader
-      // We skip 4 bytes now and will set it to the actual size at the end.
-      buf.writerIndex(buf.writerIndex() + 4);  // 4
-      final String klass = "org.apache.hadoop.hbase.ipc.HRegionInterface";
-      buf.writeByte(klass.length());           // 1
-      buf.writeBytes(Bytes.ISO88591(klass));   // 44
-
-      // Now set the length of the whole damn thing.
-      // -4 because the length itself isn't part of the payload.
-      // -5 because the "hrpc" + version isn't part of the payload.
-      buf.setInt(5, buf.writerIndex() - 4 - 5);
-    }
-
-    /** Hello header for HBase 0.90 and earlier.  */
-    private static void header090() {
-      final ChannelBuffer buf = commonHeader();
-
-      // Serialized UserGroupInformation to say who we are.
-      // We're not nice so we're not gonna say who we are and we'll just send
-      // `null' (hadoop.io.ObjectWritable$NullInstance).
-      // First, we need the size of the whole damn UserGroupInformation thing.
-      // We skip 4 bytes now and will set it to the actual size at the end.
-      buf.writerIndex(buf.writerIndex() + 4);                // 4
-      // Write the class name of the object.
-      // See hadoop.io.ObjectWritable#writeObject
-      // See hadoop.io.UTF8#writeString
-      // String length as a short followed by UTF-8 string.
-      String klass = "org.apache.hadoop.io.Writable";
-      buf.writeShort(klass.length());                        // 2
-      buf.writeBytes(Bytes.ISO88591(klass));                 // 29
-      klass = "org.apache.hadoop.io.ObjectWritable$NullInstance";
-      buf.writeShort(klass.length());                        // 2
-      buf.writeBytes(Bytes.ISO88591(klass));                 // 48
-      klass = "org.apache.hadoop.security.UserGroupInformation";
-      buf.writeShort(klass.length());                        // 2
-      buf.writeBytes(Bytes.ISO88591(klass));                 // 47
-
-      // Now set the length of the whole damn thing.
-      // -4 because the length itself isn't part of the payload.
-      // -5 because the "hrpc" + version isn't part of the payload.
-      buf.setInt(5, buf.writerIndex() - 4 - 5);
-    }
-
-    /** CDH3b3-specific header for Hadoop "security".  */
-    private static void headerCDH3b3(final byte[] user) {
-      // Our username.
-      final ChannelBuffer buf = commonHeader();
-
-      // Length of the encoded string (useless).
-      buf.writeInt(4 + user.length);  // 4
-      // String as encoded by `WritableUtils.writeString'.
-      buf.writeInt(user.length);      // 4
-      buf.writeBytes(user);           // length bytes
-    }
-
-    private SayHelloFirstRpc() {  // Singleton, can't instantiate from outside.
-    }
-
-    /**
-     * Handles messages going downstream (to the wire).
-     * @param ctx The context of the channel handler.
-     * @param event The event traveling downstream.
-     */
-    @Override
-    public void handleDownstream(final ChannelHandlerContext ctx,
-                                 final ChannelEvent event) {
-      if (event instanceof MessageEvent) {
-        synchronized (ctx) {
-          final ChannelPipeline pipeline = ctx.getPipeline();
-
-          // After acquiring the lock on `ctx', if we're still in the pipeline
-          // it means that no message has been sent downstream yet, we're the
-          // first one to attempt to send something.
-          if (pipeline.get(SayHelloFirstRpc.class) == this) {
-            final MessageEvent me = (MessageEvent) event;
-            final ChannelBuffer payload = (ChannelBuffer) me.getMessage();
-            final ChannelBuffer header = ChannelBuffers.wrappedBuffer(HELLO_HEADER);
-            final RegionClient client = pipeline.get(RegionClient.class);
-
-            // Piggyback a version request in the 1st packet after the payload
-            // we were trying to send. This way we'll have the version handy
-            // pretty quickly. Since it's most likely going to fit in the same
-            // packet we send out, it adds ~zero overhead. But don't piggyback a
-            // version request if the payload is already a version request or if
-            // we already know the server version.
-            final ChannelBuffer buf;
-            if (!isVersionRequest(payload)) {
-              final ChannelBuffer version =
-                client.encode(client.getProtocolVersionRequest());
-              buf = ChannelBuffers.wrappedBuffer(header, payload, version);
-            } else {
-              buf = ChannelBuffers.wrappedBuffer(header, payload);
-            }
-            ctx.sendDownstream(new DownstreamMessageEvent(ctx.getChannel(), me.getFuture(),
-                                                          buf, me.getRemoteAddress()));
-            // Remove us from the pipeline so nobody else will send hello packet.
-            pipeline.remove(this);
-            return;
-          }
-          // else: Fall through.
-        }
-      }
-      ctx.sendDownstream(event);
-    }
-
-    /** Inspects the payload and returns true if it's a version RPC.  */
-    private static boolean isVersionRequest(final ChannelBuffer payload) {
-      final int length = GET_PROTOCOL_VERSION.length;
-      // Header = 4+4+2, followed by method name.
-      if (payload.readableBytes() < 4 + 4 + 2 + length) {
-        return false;  // Too short to be a version request.
-      }
-      for (int i = 0; i < length; i++) {
-        if (payload.getByte(4 + 4 + 2 + i) != GET_PROTOCOL_VERSION[i]) {
-          return false;
-        }
-      }
-      // No other RPC has a name that starts with "getProtocolVersion"
-      // so this must be a version request.
-      return true;
-    }
-
+  private ChannelBuffer helloRpc(final ChannelBuffer header) {
+    final GetProtocolVersionRequest rpc = new GetProtocolVersionRequest();
+    rpc.getDeferred().addBoth(new ProtocolVersionCB());
+    return ChannelBuffers.wrappedBuffer(header, encode(rpc));
   }
 
 }
