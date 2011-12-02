@@ -77,9 +77,9 @@ hbaseasync_LIBADD := \
 	$(ZOOKEEPER)	\
 	$(SUASYNC)	\
 
-test_SOURCES = src/Test.java
+test_SOURCES = test/Test.java
 unittest_SRC = \
-	src/TestNSREs.java
+	test/TestNSREs.java
 
 test_LIBADD := \
 	$(hbaseasync_LIBADD)	\
@@ -96,8 +96,8 @@ package_dir := $(subst .,/,$(package))
 AM_JAVACFLAGS = -Xlint
 JVM_ARGS =
 classes := $(hbaseasync_SOURCES:src/%.java=$(top_builddir)/$(package_dir)/%.class)
-test_classes := $(test_SOURCES:src/%.java=$(top_builddir)/%.class)
-UNITTESTS := $(unittest_SRC:src/%.java=$(package_dir)/%.class)
+test_classes := $(test_SOURCES:test/%.java=$(top_builddir)/%.class)
+UNITTESTS := $(unittest_SRC:test/%.java=$(package_dir)/%.class)
 
 jar: $(jar)
 
@@ -122,7 +122,7 @@ test_classes_with_nested_classes := $(UNITTESTS:.class=*.class)
 cli: $(test_classes)
 	$(JAVA) -ea -esa $(JVM_ARGS) -cp "$(get_runtime_dep_classpath):$(top_builddir)" Test $(ARGS)
 
-# Little set script to make a pretty-ish banner.
+# Little sed script to make a pretty-ish banner.
 BANNER := sed 's/^.*/  &  /;h;s/./=/g;p;x;p;x'
 check: $(UNITTESTS)
 	classes=`cd $(top_builddir) && echo $(test_classes_with_nested_classes)` \
