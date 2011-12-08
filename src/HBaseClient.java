@@ -257,7 +257,7 @@ public final class HBaseClient {
    * Factory through which we will create all its channels / sockets.
    */
   private final NioClientSocketChannelFactory channel_factory
-    = new NioClientSocketChannelFactory(executor, executor);;
+    = new NioClientSocketChannelFactory(executor, executor);
 
   /** Watcher to keep track of the -ROOT- region in ZooKeeper.  */
   private final ZKClient zkclient;
