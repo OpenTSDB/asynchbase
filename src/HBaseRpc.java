@@ -189,9 +189,15 @@ public abstract class HBaseRpc {
    * Hadoop in certain (but not all) code paths.
    *
    * The way RPC responses are encoded is as follows.  First comes the 4-byte
-   * RPC ID.  Then 1 byte which is a boolean indicating whether or not the
-   * request failed on the remote side (if the byte is zero = false).  If
-   * the request failed, the rest of the response is just 2 Hadoop-encoded
+   * RPC ID.  Then 1 byte containing flags indicating whether or not the
+   * request failed (0x01) on the remote side, and whether the response is
+   * framed (0x02).  If flags are only 0x00, this is an old-style (pre 0.92)
+   * successful response that is not framed.  Framed responses contain a
+   * 4-byte integer with the length of the entire response, including the
+   * leading RPC ID, flags, and the length itself.  If there is a length, it
+   * is always followed by a 4-byte integer with the state of the RPC follows.
+   * As of 0.92, this state mostly useless.  If the request failed (flag 0x01
+   * is set), the rest of the response is just 2 Hadoop-encoded
    * strings (2-byte length, followed by a UTF-8 string).  The first string is
    * the name of the class of the exception and the second is the message of
    * the exception (which typically includes some of the server-side stack
@@ -212,6 +218,39 @@ public abstract class HBaseRpc {
    * using Hadoop RPC and switch to something more modern and reasonable).
    * The "hello" message is implemented in `RegionClient.SayHelloFirstRpc'.
    */
+
+  // ------ //
+  // Flags. //
+  // ------ //
+  // 5th byte into the response.
+  // See ipc/ResponseFlag.java in HBase's source code.
+
+  static final byte RPC_SUCCESS = 0x00;
+  static final byte RPC_ERROR = 0x01;
+  /**
+   * Indicates that the next byte is an integer with the length of the response.
+   * This can be found on both successful ({@link RPC_SUCCESS}) or failed
+   * ({@link RPC_ERROR}) responses.
+   * @since HBase 0.92
+   */
+  static final byte RPC_FRAMED = 0x02;
+
+  // ----------- //
+  // RPC Status. //
+  // ----------- //
+  // 4 byte integer (on wire), located 9 byte into the response, only if
+  // {@link RPC_FRAMED} is set.
+  // See ipc/Status.java in HBase's source code.
+
+  /**
+   * Indicates that an error prevented the RPC from being executed.
+   * This is a somewhat misleading name.  It indicates that the RPC couldn't
+   * be executed, typically because of a protocol version mismatch, an
+   * incorrectly encoded RPC (or possibly corrupted on-wire such that the
+   * server couldn't deserialize it), or an authentication error (unsure about
+   * that one).
+   */
+  static final byte RPC_FATAL = -1;
 
   /**
    * To be implemented by the concrete sub-type.

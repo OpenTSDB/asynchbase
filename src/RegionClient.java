@@ -1104,8 +1104,31 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
    * or an exception).
    */
   private Object deserialize(final ChannelBuffer buf, final int rpcid) {
-    // The 1st byte of the payload tells us whether the request failed.
-    if (buf.readByte() != 0x00) {  // 0x00 means no error.
+    // The 1st byte of the payload contains flags:
+    //   0x00  Old style success (prior 0.92).
+    //   0x01  RPC failed with an exception.
+    //   0x02  New style success (0.92 and above).
+    final byte flags = buf.readByte();
+    if ((flags & HBaseRpc.RPC_FRAMED) != 0) {
+      // Total size of the response, including the RPC ID (4 bytes) and flags
+      // (1 byte) that we've already read, including the 4 bytes used by
+      // the length itself, and including the 4 bytes used for the RPC status.
+      final int length = buf.readInt() - 4 - 1 - 4 - 4;
+      final int status = buf.readInt();  // Unused right now.
+      try {
+        HBaseRpc.checkArrayLength(buf, length);
+        // Make sure we have that many bytes readable.
+        // This will have to change to be able to do streaming RPCs where we
+        // deserialize parts of the response as it comes off the wire.
+        buf.markReaderIndex();
+        buf.skipBytes(length);
+        buf.resetReaderIndex();
+      } catch (IllegalArgumentException e) {
+        LOG.error("WTF?  RPC #" + rpcid + ": ", e);
+      }
+    }
+
+    if ((flags & HBaseRpc.RPC_ERROR) != 0) {
       // In case of failures, the rest of the response is just 2
       // Hadoop-encoded strings.  The first is the class name of the
       // exception, the 2nd is the message and stack trace.
