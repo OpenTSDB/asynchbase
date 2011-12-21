@@ -101,6 +101,8 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
                                new UnknownScannerException(null, null));
     REMOTE_EXCEPTION_TYPES.put(UnknownRowLockException.REMOTE_CLASS,
                                new UnknownRowLockException(null, null));
+    REMOTE_EXCEPTION_TYPES.put(VersionMismatchException.REMOTE_CLASS,
+                               new VersionMismatchException(null, null));
   }
 
   /** The HBase client we belong to.  */

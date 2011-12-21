@@ -70,6 +70,7 @@ asynchbase_SOURCES = \
 	src/TableNotFoundException.java	\
 	src/UnknownRowLockException.java	\
 	src/UnknownScannerException.java	\
+	src/VersionMismatchException.java	\
 
 asynchbase_LIBADD := \
 	$(NETTY)	\
