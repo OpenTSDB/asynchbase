@@ -40,6 +40,7 @@ spec_version = 1.1.0
 jar := $(top_builddir)/hbaseasync-$(spec_version).jar
 hbaseasync_SOURCES = \
 	src/AtomicIncrementRequest.java	\
+ 	src/CheckAndPutRequest.java	\
 	src/BrokenMetaException.java	\
 	src/Bytes.java	\
 	src/ConnectionResetException.java	\

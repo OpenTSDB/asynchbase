@@ -892,6 +892,28 @@ public final class HBaseClient {
   }
 
   /**
+   * C-A-S Compare-And-Set in HBase.
+   * <p>
+   * @param request The {@code cas} request.
+   * @return A deferred object that indicates the completion of the request.
+   */
+  public Deferred<Boolean> checkAndPut(final CheckAndPutRequest request) {
+      return sendRpcToRegion(request).addCallbacks(
+      new Callback<Boolean, Object>() {
+        public Boolean call(final Object response) {
+          if (response instanceof Boolean) {
+            return (Boolean)response;
+          } else {
+            throw new InvalidResponseException(Boolean.class, response);
+          }
+        }
+        public String toString() {
+          return "type checkAndPut response";
+        }
+      }, Callback.PASSTHROUGH);
+  }
+
+  /**
    * Acquires an explicit row lock.
    * <p>
    * For a description of what row locks are, see {@link RowLock}.
