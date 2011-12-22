@@ -37,8 +37,8 @@ spec_title = Asynchronous HBase Client
 spec_vendor = StumbleUpon, Inc.
 # Semantic Versioning (see http://semver.org/).
 spec_version = 1.1.0
-jar := $(top_builddir)/hbaseasync-$(spec_version).jar
-hbaseasync_SOURCES = \
+jar := $(top_builddir)/asynchbase-$(spec_version).jar
+asynchbase_SOURCES = \
 	src/AtomicIncrementRequest.java	\
 	src/BrokenMetaException.java	\
 	src/Bytes.java	\
@@ -71,7 +71,7 @@ hbaseasync_SOURCES = \
 	src/UnknownRowLockException.java	\
 	src/UnknownScannerException.java	\
 
-hbaseasync_LIBADD := \
+asynchbase_LIBADD := \
 	$(NETTY)	\
 	$(SLF4J_API)	\
 	$(ZOOKEEPER)	\
@@ -82,7 +82,7 @@ unittest_SRC = \
 	test/TestNSREs.java
 
 test_LIBADD := \
-	$(hbaseasync_LIBADD)	\
+	$(asynchbase_LIBADD)	\
 	$(LOG4J_OVER_SLF4J)	\
 	$(LOGBACK_CLASSIC)	\
 	$(LOGBACK_CORE)	\
@@ -95,17 +95,17 @@ test_LIBADD := \
 package_dir := $(subst .,/,$(package))
 AM_JAVACFLAGS = -Xlint
 JVM_ARGS =
-classes := $(hbaseasync_SOURCES:src/%.java=$(top_builddir)/$(package_dir)/%.class)
+classes := $(asynchbase_SOURCES:src/%.java=$(top_builddir)/$(package_dir)/%.class)
 test_classes := $(test_SOURCES:test/%.java=$(top_builddir)/%.class)
 UNITTESTS := $(unittest_SRC:test/%.java=$(package_dir)/%.class)
 
 jar: $(jar)
 
-get_dep_classpath = `echo $(hbaseasync_LIBADD) | tr ' ' ':'`
-$(top_builddir)/.javac-stamp: $(hbaseasync_SOURCES) $(hbaseasync_LIBADD)
+get_dep_classpath = `echo $(asynchbase_LIBADD) | tr ' ' ':'`
+$(top_builddir)/.javac-stamp: $(asynchbase_SOURCES) $(asynchbase_LIBADD)
 	@mkdir -p $(top_builddir)
 	javac $(AM_JAVACFLAGS) -cp $(get_dep_classpath) \
-	  -d $(top_builddir) $(hbaseasync_SOURCES)
+	  -d $(top_builddir) $(asynchbase_SOURCES)
 	@touch "$@"
 
 get_runtime_dep_classpath = `echo $(test_LIBADD) | tr ' ' ':'`
@@ -163,9 +163,9 @@ JDK_JAVADOC=http://download.oracle.com/javase/6/docs/api
 NETTY_JAVADOC=http://docs.jboss.org/netty/3.2/api
 SUASYNC_JAVADOC=http://tsunanet.net/~tsuna/async/api
 JAVADOCS = $(JDK_JAVADOC) $(NETTY_JAVADOC) $(SUASYNC_JAVADOC)
-$(top_builddir)/api/index.html: $(hbaseasync_SOURCES)
+$(top_builddir)/api/index.html: $(asynchbase_SOURCES)
 	javadoc -d $(top_builddir)/api -classpath $(get_dep_classpath) \
-          `echo $(JAVADOCS) | sed 's/\([^ ]*\)/-link \1/g'` $(hbaseasync_SOURCES)
+          `echo $(JAVADOCS) | sed 's/\([^ ]*\)/-link \1/g'` $(asynchbase_SOURCES)
 
 clean:
 	@rm -f $(top_builddir)/.javac-stamp

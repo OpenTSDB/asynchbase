@@ -1350,7 +1350,7 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
       // an error message back to the client during the initial "hello" stage
       // of a connection.
       if (System.getProperty("org.hbase.async.cdh3b3") != null) {
-        final byte[] user = Bytes.UTF8(System.getProperty("user.name", "hbaseasync"));
+        final byte[] user = Bytes.UTF8(System.getProperty("user.name", "asynchbase"));
         HELLO_HEADER = new byte[4 + 1 + 4 + 4 + user.length];
         headerCDH3b3(user);
       } else {
