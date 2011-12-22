@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2010  StumbleUpon, Inc.  All rights reserved.
+ * Copyright (c) 2010, 2011  StumbleUpon, Inc.  All rights reserved.
  * This file is part of Async HBase.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -812,8 +812,9 @@ public final class Scanner {
     }
 
     /** Serializes this request.  */
-    ChannelBuffer serialize(final byte unused_server_version) {
-      final ChannelBuffer buf = newBuffer(predictSerializedSize());
+    ChannelBuffer serialize(final byte server_version) {
+      final ChannelBuffer buf = newBuffer(server_version,
+                                          predictSerializedSize());
       buf.writeInt(2);  // Number of parameters.
 
       // 1st param: byte array containing region name
@@ -900,8 +901,9 @@ public final class Scanner {
     }
 
     /** Serializes this request.  */
-    ChannelBuffer serialize(final byte unused_server_version) {
-      final ChannelBuffer buf = newBuffer(4 + 1 + 8 + 1 + 4);
+    ChannelBuffer serialize(final byte server_version) {
+      final ChannelBuffer buf = newBuffer(server_version,
+                                          4 + 1 + 8 + 1 + 4);
       buf.writeInt(2);  // Number of parameters.
       writeHBaseLong(buf, scanner_id);
       writeHBaseInt(buf, max_num_rows);
@@ -932,8 +934,9 @@ public final class Scanner {
     }
 
     /** Serializes this request.  */
-    ChannelBuffer serialize(final byte unused_server_version) {
-      final ChannelBuffer buf = newBuffer(4 + 1 + 8);
+    ChannelBuffer serialize(final byte server_version) {
+      final ChannelBuffer buf = newBuffer(server_version,
+                                          4 + 1 + 8);
       buf.writeInt(1);  // Number of parameters.
       writeHBaseLong(buf, scanner_id);
       return buf;

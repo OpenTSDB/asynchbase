@@ -165,6 +165,15 @@ public abstract class HBaseRpc {
    * that specifies how many parameters follow (this way you can have up to
    * 2 147 483 648 parameters, which may come in handy in a few centuries).
    *
+   * In HBase 0.92 and above, 3 more fields have been added in the header as
+   * previously described.  The first is a one byte version number that comes
+   * right before the method name, indicating how the parameters of the RPC
+   * have been serialized.  Then there is a 8 byte (!) client version that's
+   * right after the method name, followed by a 4 byte "fingerprint", which
+   * is a sort of hash code of the method's signature (name, return type, and
+   * parameters types).  Note that the client version seems to be always set
+   * to zero...
+   *
    * In Hadoop RPC, the name of the class is first serialized (2 bytes
    * specifying the length of the string, followed by that number of bytes
    * of a UTF-8 encoded string in case you name your classes with Kanjis).
@@ -554,6 +563,7 @@ public abstract class HBaseRpc {
 
   /**
    * Creates a new fixed-length buffer on the heap.
+   * @param server_version What RPC protocol version the server is running.
    * @param max_payload_size A good approximation of the size of the payload.
    * The approximation must be an upper bound on the expected size of the
    * payload as trying to store more than {@code max_payload_size} bytes in
@@ -562,13 +572,20 @@ public abstract class HBaseRpc {
    * When no reasonable upper bound on the payload size can be easily
    * estimated ahead of time, you can use {@link #newDynamicBuffer} instead.
    */
-  final ChannelBuffer newBuffer(final int max_payload_size) {
+  final ChannelBuffer newBuffer(final byte server_version,
+                                final int max_payload_size) {
     // Add extra bytes for the RPC header:
     //   4 bytes: Payload size.
     //   4 bytes: RPC ID.
     //   2 bytes: Length of the method name.
     //   N bytes: The method name.
-    final int header = 4 + 4 + 2 + method.length;
+    final int header = 4 + 4 + 2 + method.length
+      // Add extra bytes for the RPC header used in HBase 0.92 and above:
+      //   1 byte:  RPC header version.
+      //   8 bytes: Client version.  Yeah, 8 bytes, WTF seriously.
+      //   4 bytes: Method fingerprint.
+      + (server_version < RegionClient.SERVER_VERSION_092_OR_ABOVE ? 0
+         : 1 + 8 + 4);
     final ChannelBuffer buf = ChannelBuffers.buffer(header + max_payload_size);
     buf.setIndex(0, header);  // Advance the writerIndex past the header.
     return buf;
@@ -576,6 +593,7 @@ public abstract class HBaseRpc {
 
   /**
    * Creates a new dynamic-length buffer on the heap.
+   * @param server_version What RPC protocol version the server is running.
    * @param max_payload_size A good approximation of the size of the payload.
    * The approximation should be an upper bound on the expected size of the
    * payload.  Trying to store more than {@code max_payload_size} bytes in
@@ -587,9 +605,12 @@ public abstract class HBaseRpc {
    * benchmark I did, writing to a dynamic-length buffer was about 16% slower
    * and that's without ever re-sizing the buffer!
    */
-  final ChannelBuffer newDynamicBuffer(final int max_payload_size) {
+  final ChannelBuffer newDynamicBuffer(final byte server_version,
+                                       final int max_payload_size) {
     // See the comment in newBuffer above.
-    final int header = 4 + 4 + 2 + method.length;
+    final int header = 4 + 4 + 2 + method.length
+      + (server_version < RegionClient.SERVER_VERSION_092_OR_ABOVE ? 0
+         : 1 + 8 + 4);
     final ChannelBuffer buf = ChannelBuffers.dynamicBuffer(header
                                                            + max_payload_size);
     buf.setIndex(0, header);  // Advance the writerIndex past the header.

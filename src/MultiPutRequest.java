@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2010  StumbleUpon, Inc.  All rights reserved.
+ * Copyright (c) 2010, 2011  StumbleUpon, Inc.  All rights reserved.
  * This file is part of Async HBase.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -189,7 +189,7 @@ final class MultiPutRequest extends HBaseRpc {
   }
 
   /** Serializes this request.  */
-  ChannelBuffer serialize(final byte unused_server_version) {
+  ChannelBuffer serialize(final byte server_version) {
     // Due to the wire format expected by HBase, we need to group all the
     // edits by region, then by key, then by family.  HBase does this by
     // building a crazy map-of-map-of-map-of-list-of-edits, but this is
@@ -203,7 +203,8 @@ final class MultiPutRequest extends HBaseRpc {
     // efficiently tell ahead of time how many edits or bytes will follow
     // until we cross such boundaries.
     Collections.sort(edits, MULTIPUT_CMP);
-    final ChannelBuffer buf = newBuffer(predictSerializedSize());
+    final ChannelBuffer buf = newBuffer(server_version,
+                                        predictSerializedSize());
     buf.writeInt(1);  // Number of parameters.
 
     // 1st and only param: a MultiPut object.

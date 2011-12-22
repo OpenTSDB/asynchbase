@@ -297,8 +297,9 @@ public final class PutRequest extends HBaseRpc
   }
 
   /** Serializes this request.  */
-  ChannelBuffer serialize(final byte unused_server_version) {
-    final ChannelBuffer buf = newBuffer(predictSerializedSize());
+  ChannelBuffer serialize(final byte server_version) {
+    final ChannelBuffer buf = newBuffer(server_version,
+                                        predictSerializedSize());
     buf.writeInt(2);  // Number of parameters.
 
     // 1st param: byte array containing region name

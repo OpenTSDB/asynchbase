@@ -396,7 +396,8 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
     ChannelBuffer serialize(final byte server_version) {
     /** Pre-serialized form for this RPC, which is always the same.  */
       // num param + type 1 + string length + string + type 2 + long
-      final ChannelBuffer buf = newBuffer(4 + 1 + 1 + 44 + 1 + 8);
+      final ChannelBuffer buf = newBuffer(server_version,
+                                          4 + 1 + 1 + 44 + 1 + 8);
       buf.writeInt(2);  // Number of parameters.
       // 1st param.
       writeHBaseString(buf, "org.apache.hadoop.hbase.ipc.HRegionInterface");
@@ -516,14 +517,15 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
       }
 
       @Override
-      ChannelBuffer serialize(final byte unused_server_version) {
+      ChannelBuffer serialize(final byte server_version) {
         // region.length and row.length will use at most a 3-byte VLong.
         // This is because VLong wastes 1 byte of meta-data + 2 bytes of
         // payload.  HBase's own KeyValue code uses a short to store the row
         // length.  Finally, family.length cannot be on more than 1 byte,
         // HBase's own KeyValue code uses a byte to store the family length.
         final byte[] region_name = region.name();
-        final ChannelBuffer buf = newBuffer(4      // num param
+        final ChannelBuffer buf = newBuffer(server_version,
+          + 4                                      // num param
           + 1 + 2 + region_name.length             // 3 times 1 byte for the
           + 1 + 4 + row.length                     //   parm type + VLong
           + 1 + 1 + family.length);                //             + array
@@ -980,12 +982,30 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
       // buffer without this extra space at the beginning, we're going to
       // corrupt the RPC at this point.
       final byte[] method = rpc.method();
-      // The first int is the size of the message, excluding the 4 bytes
-      // needed for the size itself, hence the `-4'.
-      payload.setInt(0, payload.readableBytes() - 4); // 4 bytes
-      payload.setInt(4, rpcid);                       // 4 bytes
-      payload.setShort(8, method.length);             // 2 bytes
-      payload.setBytes(10, method);                   // method.length bytes
+      if (server_version >= SERVER_VERSION_092_OR_ABOVE) {
+        // The first int is the size of the message, excluding the 4 bytes
+        // needed for the size itself, hence the `-4'.
+        payload.setInt(0, payload.readableBytes() - 4); // 4 bytes
+        payload.setInt(4, rpcid);                       // 4 bytes
+        // RPC version (org.apache.hadoop.hbase.ipc.Invocation.RPC_VERSION).
+        payload.setByte(8, 1);                          // 4 bytes
+        payload.setShort(9, method.length);             // 2 bytes
+        payload.setBytes(11, method);                   // method.length bytes
+        // Client version.  We always pretend to run the same version as the
+        // server we're talking to.
+        payload.setLong(11 + method.length, server_version);
+        // Finger print of the method (also called "clientMethodsHash").
+        // This field is unused, so we never set it, which is why the next
+        // line is commented out.  It doesn't matter what value it has.
+        //payload.setInt(11 + method.length + 8, 0);
+      } else {  // Serialize for versions 0.90 and before.
+        // The first int is the size of the message, excluding the 4 bytes
+        // needed for the size itself, hence the `-4'.
+        payload.setInt(0, payload.readableBytes() - 4); // 4 bytes
+        payload.setInt(4, rpcid);                       // 4 bytes
+        payload.setShort(8, method.length);             // 2 bytes
+        payload.setBytes(10, method);                   // method.length bytes
+      }
     } catch (Exception e) {
       LOG.error("Uncaught exception while serializing RPC: " + rpc, e);
       rpc.callback(e);  // Make the RPC fail with the exception.

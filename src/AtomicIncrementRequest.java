@@ -203,8 +203,9 @@ public final class AtomicIncrementRequest extends HBaseRpc
   }
 
   /** Serializes this request.  */
-  ChannelBuffer serialize(final byte unused_server_version) {
-    final ChannelBuffer buf = newBuffer(predictSerializedSize());
+  ChannelBuffer serialize(final byte server_version) {
+    final ChannelBuffer buf = newBuffer(server_version,
+                                        predictSerializedSize());
     buf.writeInt(6);  // Number of parameters.
 
     writeHBaseByteArray(buf, region.name());
