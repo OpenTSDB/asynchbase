@@ -184,4 +184,7 @@ distclean: clean
 	rm -rf $(top_builddir)/api
 	test ! -d $(top_builddir) || rmdir $(top_builddir)
 
+pom.xml: pom.xml.in
+	cp $^ $@
+
 .PHONY: all jar clean cli distclean doc check
