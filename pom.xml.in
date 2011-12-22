@@ -3,10 +3,10 @@
 
   <groupId>org.hbase</groupId>
   <artifactId>asynchbase</artifactId>
-  <version>1.1.0-SNAPSHOT</version>
-  <name>Asynchronous HBase Client</name>
+  <version>@spec_version@-SNAPSHOT</version>
+  <name>@spec_title@</name>
   <organization>
-    <name>StumbleUpon, Inc.</name>
+    <name>@spec_vendor@</name>
     <url>http://www.stumbleupon.com</url>
   </organization>
   <description>
@@ -105,17 +105,17 @@
     <dependency>
       <groupId>org.jboss.netty</groupId>
       <artifactId>netty</artifactId>
-      <version>[3.2.7.Final,)</version>
+      <version>[@NETTY_VERSION@,)</version>
     </dependency>
     <dependency>
       <groupId>com.stumbleupon</groupId>
       <artifactId>async</artifactId>
-      <version>[1.1.0,)</version>
+      <version>[@SUASYNC_VERSION@,)</version>
     </dependency>
     <dependency>
       <groupId>org.apache.zookeeper</groupId>
       <artifactId>zookeeper</artifactId>
-      <version>[3.3.4,)</version>
+      <version>[@ZOOKEEPER_VERSION@,)</version>
       <exclusions>
         <exclusion>
           <groupId>log4j</groupId>
@@ -138,20 +138,20 @@
     <dependency>
       <groupId>org.slf4j</groupId>
       <artifactId>slf4j-api</artifactId>
-      <version>[1.6.4,)</version>
+      <version>[@SLF4J_API_VERSION@,)</version>
     </dependency>
 
     <!-- runtime dependencies -->
     <dependency>
       <groupId>org.slf4j</groupId>
       <artifactId>log4j-over-slf4j</artifactId>
-      <version>[1.6.4,)</version>
+      <version>[@LOG4J_OVER_SLF4J_VERSION@,)</version>
       <scope>runtime</scope>
     </dependency>
     <dependency>
       <groupId>org.slf4j</groupId>
       <artifactId>jcl-over-slf4j</artifactId>
-      <version>[1.6.4,)</version>
+      <version>[@JCL_OVER_SLF4J_VERSION@,)</version>
       <scope>runtime</scope>
     </dependency>
 
@@ -159,31 +159,31 @@
     <dependency>
       <groupId>junit</groupId>
       <artifactId>junit</artifactId>
-      <version>4.10</version>
+      <version>@JUNIT_VERSION@</version>
       <scope>test</scope>
     </dependency>
     <dependency>
       <groupId>org.javassist</groupId>
       <artifactId>javassist</artifactId>
-      <version>3.15.0-GA</version>
+      <version>@JAVASSIST_VERSION@</version>
       <scope>test</scope>
     </dependency>
     <dependency>
       <groupId>org.mockito</groupId>
       <artifactId>mockito-all</artifactId>
-      <version>1.9.0</version>
+      <version>@MOCKITO_VERSION@</version>
       <scope>test</scope>
     </dependency>
     <dependency>
       <groupId>org.powermock</groupId>
       <artifactId>powermock-module-junit4</artifactId>
-      <version>1.4.10</version>
+      <version>@POWERMOCK_MOCKITO_VERSION@</version>
       <scope>test</scope>
     </dependency>
     <dependency>
       <groupId>org.powermock</groupId>
       <artifactId>powermock-api-mockito</artifactId>
-      <version>1.4.10</version>
+      <version>@POWERMOCK_MOCKITO_VERSION@</version>
       <scope>test</scope>
     </dependency>
   </dependencies>
