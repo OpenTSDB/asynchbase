@@ -3,7 +3,7 @@
 
   <groupId>org.hbase</groupId>
   <artifactId>asynchbase</artifactId>
-  <version>@spec_version@-SNAPSHOT</version>
+  <version>@spec_version@</version>
   <name>@spec_title@</name>
   <organization>
     <name>@spec_vendor@</name>
