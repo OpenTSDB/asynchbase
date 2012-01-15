@@ -100,7 +100,11 @@ final class RegionInfo implements Comparable<RegionInfo> {
                                  final byte[][] out_start_key) {
     final ChannelBuffer buf = ChannelBuffers.wrappedBuffer(kv.value());
     final byte version = buf.readByte();
-    if (version != 0) {
+    // version 1 was introduced in HBase 0.92 (see HBASE-451).
+    // The differences between v0 and v1 are irrelevant to us,
+    // as we only look at the first few fields, and they didn't
+    // change across these 2 versions.
+    if (version != 1 && version != 0) {
       LOG.warn("Unsupported region info version: " + version
                + " in .META.  entry: " + kv);
       // Keep going anyway, just in case the new version is backwards
