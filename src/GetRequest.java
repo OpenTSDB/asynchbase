@@ -236,6 +236,9 @@ public final class GetRequest extends HBaseRpc
         }
       }
     }
+    if (server_version >= RegionClient.SERVER_VERSION_092_OR_ABOVE) {
+      size += 1;  // int: Attributes map.  Always 0.
+    }
     return size;
   }
 
@@ -286,6 +289,9 @@ public final class GetRequest extends HBaseRpc
       } else {
         buf.writeByte(0x00);  // Boolean: we don't want specific qualifiers.
       }
+    }
+    if (server_version >= RegionClient.SERVER_VERSION_092_OR_ABOVE) {
+      buf.writeInt(0);  // Attributes map: number of elements.
     }
     return buf;
   }
