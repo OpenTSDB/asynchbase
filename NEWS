@@ -8,6 +8,9 @@ Noteworthy changes:
     NOTE: HBase never had a release in the 0.91 branch, and as such
     this branch isn't fully supported.
 
+New public APIs:
+  - KeyValue now supports timestamps.
+
 
 * Version 1.1.0 (2011-12-22) [1272a9e]
 
@@ -62,7 +65,7 @@ Initial alpha release:
 
 -----
 
-Copyright (c) 2010, 2011  StumbleUpon, Inc.  All rights reserved.
+Copyright (c) 2010-2012  StumbleUpon, Inc.  All rights reserved.
 This file is part of Async HBase.
 
 Redistribution and use in source and binary forms, with or without

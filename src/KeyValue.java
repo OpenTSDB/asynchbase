@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2010  StumbleUpon, Inc.  All rights reserved.
+ * Copyright (c) 2010-2012  StumbleUpon, Inc.  All rights reserved.
  * This file is part of Async HBase.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -48,12 +48,16 @@ import org.slf4j.LoggerFactory;
  */
 public final class KeyValue implements Comparable<KeyValue> {
   /*
-   * This class deliberately does not give access to the timestamp of a
-   * KeyValue.  I think exposing timestamps in Bigtable (and HBase) was
-   * a mistake -- at least giving users the opportunity write them was.
-   *
    * We don't support versions for simplicity, but this can be added.
    */
+
+  /**
+   * Timestamp value to let the server set the timestamp at processing time.
+   * When this value is used as a timestamp on a {@code KeyValue}, the server
+   * will substitute a real timestamp at the time it processes it.  HBase uses
+   * current UNIX time in milliseconds.
+   */
+  public static final long TIMESTAMP_NOW = Long.MAX_VALUE;
 
   //private static final Logger LOG = LoggerFactory.getLogger(KeyValue.class);
 
@@ -61,8 +65,8 @@ public final class KeyValue implements Comparable<KeyValue> {
   private final byte[] family;  // Max length: Byte.MAX_VALUE  =   128
   private final byte[] qualifier;
   private final byte[] value;
-  //private final long timestamp; // TODO(tsuna): Do I care about those?
-  //private final byte type;      //              Will I need them?  Not sure.
+  private final long timestamp;
+  //private final byte type;  // Not needed for us ATM.
 
   // Note: type can be one of:
   //   -  4  0b00000100  Put
@@ -79,25 +83,49 @@ public final class KeyValue implements Comparable<KeyValue> {
    * @param key The row key.  Length must fit in 16 bits.
    * @param family The column family.  Length must fit in 8 bits.
    * @param qualifier The column qualifier.
+   * @param timestamp Timestamp on the value.  This timestamp can be set to
+   * guarantee ordering of values or operations.  It is strongly advised to
+   * use a UNIX timestamp in milliseconds, e.g. from a source such as
+   * {@link System#currentTimeMillis}.  This value must be strictly positive.
    * @param value The value, the contents of the cell.
    * @throws IllegalArgumentException if any argument is invalid (e.g. array
-   * size is too long).
+   * size is too long) or if the timestamp is negative.
    */
   public KeyValue(final byte[] key,
                   final byte[] family, final byte[] qualifier,
-                  final byte[] value//,
-                  //final long timestamp, final byte type
-                  ) {
+                  final long timestamp,
+                  //final byte type,
+                  final byte[] value) {
     checkKey(key);
     checkFamily(family);
     checkQualifier(qualifier);
+    checkTimestamp(timestamp);
     checkValue(value);
     this.key = key;
     this.family = family;
     this.qualifier = qualifier;
     this.value = value;
-    //this.timestamp = timestamp;
+    this.timestamp = timestamp;
     //this.type = type;
+  }
+
+  /**
+   * Constructor.
+   * <p>
+   * This {@code KeyValue} will be timestamped by the server at the time
+   * the server processes it.
+   * @param key The row key.  Length must fit in 16 bits.
+   * @param family The column family.  Length must fit in 8 bits.
+   * @param qualifier The column qualifier.
+   * @param value The value, the contents of the cell.
+   * @throws IllegalArgumentException if any argument is invalid (e.g. array
+   * size is too long).
+   * @see #TIMESTAMP_NOW
+   */
+  public KeyValue(final byte[] key,
+                  final byte[] family, final byte[] qualifier,
+                  final byte[] value) {
+    this(key, family, qualifier, TIMESTAMP_NOW, value);
   }
 
   /** Returns the row key.  */
@@ -115,9 +143,13 @@ public final class KeyValue implements Comparable<KeyValue> {
     return qualifier;
   }
 
-  //public long timestamp() {
-  //  return timestamp;
-  //}
+  /**
+   * Returns the timestamp stored in this {@code KeyValue}.
+   * @see #TIMESTAMP_NOW
+   */
+  public long timestamp() {
+    return timestamp;
+  }
 
   //public byte type() {
   //  return type;
@@ -139,8 +171,8 @@ public final class KeyValue implements Comparable<KeyValue> {
       return d;
     //} else if ((d = Bytes.memcmp(value, other.value)) != 0) {
     //  return d;
-    //} else if ((d = Long.signum(timestamp - other.timestamp)) != 0) {
-    //  return d;
+    } else if ((d = Long.signum(timestamp - other.timestamp)) != 0) {
+      return d;
     } else {
     //  d = type - other.type;
       d = Bytes.memcmp(value, other.value);
@@ -160,7 +192,7 @@ public final class KeyValue implements Comparable<KeyValue> {
       ^ Arrays.hashCode(family)
       ^ Arrays.hashCode(qualifier)
       ^ Arrays.hashCode(value)
-      //^ (int) (timestamp ^ (timestamp >>> 32))
+      ^ (int) (timestamp ^ (timestamp >>> 32))
       //^ type
       ;
   }
@@ -178,7 +210,7 @@ public final class KeyValue implements Comparable<KeyValue> {
     Bytes.pretty(buf, qualifier);
     buf.append(", value=");
     Bytes.pretty(buf, value);
-    //buf.append(", timestamp=").append(timestamp)
+    buf.append(", timestamp=").append(timestamp);
     //  .append(", type=").append(type);
     buf.append(')');
     return buf.toString();
@@ -239,13 +271,13 @@ public final class KeyValue implements Comparable<KeyValue> {
               + qual_length + " + 8 + 1" + " != kl:" + rowkey_length);
     }
     if (prev == null) {
-      return new KeyValue(key, family, qualifier, /*timestamp, key_type,*/
+      return new KeyValue(key, family, qualifier, timestamp, /*key_type,*/
                           value);
     } else {
       return new KeyValue(Bytes.deDup(prev.key, key),
                           Bytes.deDup(prev.family, family),
                           Bytes.deDup(prev.qualifier, qualifier),
-                          /*timestamp, key_type,*/ value);
+                          timestamp, /*key_type,*/ value);
     }
   }
 
@@ -308,6 +340,16 @@ public final class KeyValue implements Comparable<KeyValue> {
   }
 
   /**
+   * Validates a timestamp.
+   * @throws IllegalArgumentException if the timestamp is zero or negative.
+   */
+  static void checkTimestamp(final long timestamp) {
+    if (timestamp <= 0) {
+      throw new IllegalArgumentException("Negative timestamp: " + timestamp);
+    }
+  }
+
+  /**
    * Validates a value (the contents of an HBase cell).
    * @throws IllegalArgumentException if the value is too big.
    * @throws NullPointerException if the value is {@code null}.
@@ -326,7 +368,7 @@ public final class KeyValue implements Comparable<KeyValue> {
    * @param type What kind of KV (e.g. {@link #PUT} or {@link DELETE_FAMILY}).
    */
   void serialize(final ChannelBuffer buf, final byte type) {
-    serialize(buf, type, Long.MAX_VALUE, key, family, qualifier, value);
+    serialize(buf, type, timestamp, key, family, qualifier, value);
   }
 
   /**
