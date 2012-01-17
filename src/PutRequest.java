@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2010, 2011  StumbleUpon, Inc.  All rights reserved.
+ * Copyright (c) 2010-2012  StumbleUpon, Inc.  All rights reserved.
  * This file is part of Async HBase.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -62,6 +62,9 @@ public final class PutRequest extends HBaseRpc
   /**
    * Constructor.
    * <strong>These byte arrays will NOT be copied.</strong>
+   * <p>
+   * Note: If you want to set your own timestamp, use
+   * {@link #PutRequest(byte[], KeyValue)} instead.
    * @param table The table to edit.
    * @param key The key of the row to edit in that table.
    * @param family The column family to edit in that table.
@@ -79,6 +82,9 @@ public final class PutRequest extends HBaseRpc
   /**
    * Constructor.
    * <strong>These byte arrays will NOT be copied.</strong>
+   * <p>
+   * Note: If you want to set your own timestamp, use
+   * {@link #PutRequest(byte[], KeyValue, RowLock)} instead.
    * @param table The table to edit.
    * @param key The key of the row to edit in that table.
    * @param family The column family to edit in that table.
@@ -97,6 +103,9 @@ public final class PutRequest extends HBaseRpc
 
   /**
    * Constructor.
+   * <p>
+   * Note: If you want to set your own timestamp, use
+   * {@link #PutRequest(byte[], KeyValue)} instead.
    * @param table The table to edit.
    * @param key The key of the row to edit in that table.
    * @param family The column family to edit in that table.
@@ -114,6 +123,9 @@ public final class PutRequest extends HBaseRpc
 
   /**
    * Constructor.
+   * <p>
+   * Note: If you want to set your own timestamp, use
+   * {@link #PutRequest(byte[], KeyValue, RowLock)} instead.
    * @param table The table to edit.
    * @param key The key of the row to edit in that table.
    * @param family The column family to edit in that table.
@@ -311,10 +323,7 @@ public final class PutRequest extends HBaseRpc
     buf.writeByte(1);    // Put#PUT_VERSION.  Undocumented versioning of Put.
     writeByteArray(buf, key);  // The row key.
 
-    // Timestamp.  We always set it to Long.MAX_VALUE, which means "unset".
-    // The RegionServer will set it for us, right before writing to the WAL
-    // (or to the Memstore if we're not using the WAL).
-    buf.writeLong(Long.MAX_VALUE);
+    buf.writeLong(kv.timestamp());  // Timestamp.
 
     buf.writeLong(lockid);    // Lock ID.
     buf.writeByte(durable ? 0x01 : 0x00);  // Whether or not to use the WAL.

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2010, 2011  StumbleUpon, Inc.  All rights reserved.
+ * Copyright (c) 2010-2012  StumbleUpon, Inc.  All rights reserved.
  * This file is part of Async HBase.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -255,9 +255,8 @@ final class MultiPutRequest extends HBaseRpc {
         buf.writeByte(1);    // Undocumented versioning of Put.
         writeByteArray(buf, key);  // The row key.
 
-        // Timestamp.  We always set it to Long.MAX_VALUE, which means "unset".
-        // The RegionServer will set it for us, right before writing to the WAL
-        // (or to the Memstore if we're not using the WAL).
+        // Timestamp.  This timestamp is unused, only the KeyValue-level
+        // timestamp is used.  So we set it to something arbitrary.
         buf.writeLong(Long.MAX_VALUE);
 
         buf.writeLong(RowLock.NO_LOCK);    // Lock ID.
