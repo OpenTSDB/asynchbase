@@ -137,10 +137,10 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
   private byte server_version = SERVER_VERSION_UNKNWON;
 
   /**
-   * Multi-put request in which we accumulate buffered edits.
+   * RPCs being batched together for efficiency.
    * Manipulating this reference requires synchronizing on `this'.
    */
-  private MultiPutRequest edit_buffer;
+  private MultiAction batched_rpcs;
 
   /**
    * RPCs we've been asked to serve while disconnected from the RegionServer.
@@ -223,15 +223,15 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
       if (LOG.isDebugEnabled()) {
         LOG.debug("Periodic flush timer: flushing edits for " + this);
       }
-      // Copy the edits to local variables and null out the buffers.
-      MultiPutRequest edit_buffer;
+      // Copy the batch to a local variable and null it out.
+      final MultiAction batched_rpcs;
       synchronized (this) {
-        edit_buffer = this.edit_buffer;
-        this.edit_buffer = null;
+        batched_rpcs = this.batched_rpcs;
+        this.batched_rpcs = null;
       }
-      if (edit_buffer != null && edit_buffer.size() != 0) {
-        final Deferred<Object> d = edit_buffer.getDeferred();
-        sendRpc(edit_buffer);
+      if (batched_rpcs != null && batched_rpcs.size() != 0) {
+        final Deferred<Object> d = batched_rpcs.getDeferred();
+        sendRpc(batched_rpcs);
       }
     }
   }
@@ -266,17 +266,17 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
    * everything that was buffered at the time of the call has been flushed.
    */
   public Deferred<Object> flush() {
-    // Copy the edits to local variables and null out the buffers.
-    MultiPutRequest edit_buffer;
+    // Copy the batch to a local variable and null it out.
+    final MultiAction batched_rpcs;
     synchronized (this) {
-      edit_buffer = this.edit_buffer;
-      this.edit_buffer = null;
+      batched_rpcs = this.batched_rpcs;
+      this.batched_rpcs = null;
     }
-    if (edit_buffer == null || edit_buffer.size() == 0) {
+    if (batched_rpcs == null || batched_rpcs.size() == 0) {
       return Deferred.fromResult(null);
     }
-    final Deferred<Object> d = edit_buffer.getDeferred();
-    sendRpc(edit_buffer);
+    final Deferred<Object> d = batched_rpcs.getDeferred();
+    sendRpc(batched_rpcs);
     return d;
   }
 
@@ -310,16 +310,16 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
         return Deferred.group(inflight)
           .addCallbackDeferring(new RetryShutdown<ArrayList<Object>>(size));
       }
-      // Then check whether have buffered edits.  If we do, flush them.
-      // Copy the edits to local variables and null out the buffers.
-      MultiPutRequest edit_buffer;
+      // Then check whether have batched RPCs.  If we do, flush them.
+      // Copy the batch to a local variable and null it out.
+      final MultiAction batched_rpcs;
       synchronized (this) {
-        edit_buffer = this.edit_buffer;
-        this.edit_buffer = null;
+        batched_rpcs = this.batched_rpcs;
+        this.batched_rpcs = null;
       }
-      if (edit_buffer != null && edit_buffer.size() != 0) {
-        final Deferred<Object> d = edit_buffer.getDeferred();
-        sendRpc(edit_buffer);
+      if (batched_rpcs != null && batched_rpcs.size() != 0) {
+        final Deferred<Object> d = batched_rpcs.getDeferred();
+        sendRpc(batched_rpcs);
         return d.addCallbackDeferring(new RetryShutdown<Object>(1));
       }
     }
@@ -574,33 +574,33 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
    * @param request An edit to sent to HBase.
    */
   private void bufferEdit(final PutRequest request) {
-    MultiPutRequest multiput;
+    MultiAction batch;
     boolean schedule_flush = false;
 
     synchronized (this) {
-      if (edit_buffer == null) {
-        edit_buffer = new MultiPutRequest();
-        addMultiPutCallbacks(edit_buffer);
+      if (batched_rpcs == null) {
+        batched_rpcs = new MultiAction();
+        addMultiPutCallbacks(batched_rpcs);
         schedule_flush = true;
       }
-      multiput = edit_buffer;
+      batch = batched_rpcs;
       // Unfortunately we have to hold the monitor on `this' while we do
       // this entire atomic dance.
-      multiput.add(request);
-      if (multiput.size() < 1024) {  // XXX Don't hardcode.
-        multiput = null;   // We're going to buffer this edit for now.
+      batch.add(request);
+      if (batch.size() < 1024) {  // XXX Don't hardcode.
+        batch = null;  // We're going to buffer this edit for now.
       } else {
         // Execute the edits buffered so far.  But first we must clear
         // the reference to the buffer we're about to send to HBase.
-        edit_buffer = new MultiPutRequest();
-        addMultiPutCallbacks(edit_buffer);
+        batched_rpcs = new MultiAction();
+        addMultiPutCallbacks(batched_rpcs);
       }
     }
 
     if (schedule_flush) {
       scheduleNextPeriodicFlush();
-    } else if (multiput != null) {
-      sendRpc(multiput);
+    } else if (batch != null) {
+      sendRpc(batch);
     }
   }
 
@@ -608,7 +608,7 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
    * Creates callbacks to handle a multi-put and adds them to the request.
    * @param request The request for which we must handle the response.
    */
-  private void addMultiPutCallbacks(final MultiPutRequest request) {
+  private void addMultiPutCallbacks(final MultiAction request) {
     final class MultiPutCallback implements Callback<Object, Object> {
       public Object call(final Object resp) {
         if (!(resp instanceof MultiPutResponse)) {
@@ -719,11 +719,11 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
           return;
         }
         addSingleEditCallbacks(edit);
-      } else if (rpc instanceof MultiPutRequest) {
+      } else if (rpc instanceof MultiAction) {
         // Transform single-edit multi-put into single-put.
-        final MultiPutRequest multiput = (MultiPutRequest) rpc;
-        if (multiput.size() == 1) {
-          rpc = multiPutToSinglePut(multiput);
+        final MultiAction batch = (MultiAction) rpc;
+        if (batch.size() == 1) {
+          rpc = multiPutToSinglePut(batch);
         }
       }
       final ChannelBuffer serialized = encode(rpc);
@@ -774,19 +774,19 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
    * Transforms the given single-edit multi-put into a regular single-put.
    * @param multiput The single-edit multi-put to transform.
    */
-  private PutRequest multiPutToSinglePut(final MultiPutRequest multiput) {
-    final PutRequest edit = multiput.edits().get(0);
+  private PutRequest multiPutToSinglePut(final MultiAction batch) {
+    final PutRequest edit = batch.edits().get(0);
     addSingleEditCallbacks(edit);
     // Once the single-edit is done, we still need to make sure we're
-    // going to run the callback chain of the MultiPutRequest.
+    // going to run the callback chain of the MultiAction.
     final class Multi2SingleCB implements Callback<Object, Object> {
       public Object call(final Object arg) {
-        // If there was a problem, let the MultiPutRequest know.
-        // Otherwise, give the PutRequest in argument to the MultiPutRequest
-        // callback.  This is kind of a kludge: the MultiPutRequest callback
+        // If there was a problem, let the MultiAction know.
+        // Otherwise, give the PutRequest in argument to the MultiAction
+        // callback.  This is kind of a kludge: the MultiAction callback
         // will understand that this means that this single-edit was already
         // successfully executed on its own.
-        multiput.callback(arg instanceof Exception ? arg : edit);
+        batch.callback(arg instanceof Exception ? arg : edit);
         return arg;
       }
     }
@@ -867,20 +867,20 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
     failOrRetryRpcs(rpcs_inflight.values(), exception);
     rpcs_inflight.clear();
 
-    ArrayList<HBaseRpc> rpcs;
-    MultiPutRequest multiput;
+    final ArrayList<HBaseRpc> rpcs;
+    final MultiAction batch;
     synchronized (this) {
       dead = true;
       rpcs = pending_rpcs;
       pending_rpcs = null;
-      multiput = edit_buffer;
-      edit_buffer = null;
+      batch = batched_rpcs;
+      batched_rpcs = null;
     }
     if (rpcs != null) {
       failOrRetryRpcs(rpcs, exception);
     }
-    if (multiput != null) {
-      multiput.callback(exception);  // Make it fail.
+    if (batch != null) {
+      batch.callback(exception);  // Make it fail.
     }
   }
 
@@ -1348,10 +1348,10 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
     int nedits;
     synchronized (this) {
       npending_rpcs = pending_rpcs == null ? 0 : pending_rpcs.size();
-      nedits = edit_buffer == null ? 0 : edit_buffer.size();
+      nedits = batched_rpcs == null ? 0 : batched_rpcs.size();
     }
     buf.append(npending_rpcs)             // = 1
-      .append(", #edits=")                // = 9
+      .append(", #batched=")              // = 9
       .append(nedits);                    // ~ 2
     buf.append(", #rpcs_inflight=")       // =17
       .append(rpcs_inflight.size())       // ~ 2

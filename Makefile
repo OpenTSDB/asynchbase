@@ -51,7 +51,7 @@ asynchbase_SOURCES = \
 	src/HBaseRpc.java	\
 	src/InvalidResponseException.java	\
 	src/KeyValue.java	\
-	src/MultiPutRequest.java	\
+	src/MultiAction.java	\
 	src/MultiPutResponse.java	\
 	src/NoSuchColumnFamilyException.java	\
 	src/NonRecoverableException.java	\

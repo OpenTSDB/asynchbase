@@ -40,7 +40,7 @@ import org.slf4j.LoggerFactory;
  * This RPC is guaranteed to be sent atomically (but HBase doesn't guarantee
  * that it will apply it atomically).
  */
-final class MultiPutRequest extends HBaseRpc {
+final class MultiAction extends HBaseRpc {
 
   private static final byte[] MULTI_PUT = new byte[] {
     'm', 'u', 'l', 't', 'i', 'P', 'u', 't'
@@ -56,7 +56,7 @@ final class MultiPutRequest extends HBaseRpc {
   /**
    * Constructor.
    */
-  public MultiPutRequest() {
+  public MultiAction() {
     super(MULTI_PUT);
   }
 
@@ -105,7 +105,7 @@ final class MultiPutRequest extends HBaseRpc {
         edits_per_region = 0;
         final Integer i = failures.get(region_name);
         if (i == null) {  // Should never happen.
-          LoggerFactory.getLogger(MultiPutRequest.class)
+          LoggerFactory.getLogger(MultiAction.class)
             .error("WTF?  Partial failures for " + this + " = " + failures
                    + ", no results for region=" + Bytes.pretty(region_name));
           prev = PutRequest.EMPTY_PUT;
@@ -314,7 +314,7 @@ final class MultiPutRequest extends HBaseRpc {
     // we skip all the remaining ones until the last one, as it's often
     // useful to see the last edit added when debugging.
     final StringBuilder buf = new StringBuilder();
-    buf.append("MultiPutRequest(edits=[");
+    buf.append("MultiAction(edits=[");
     final int nedits = edits.size();
     int i;
     for (i = 0; i < nedits; i++) {

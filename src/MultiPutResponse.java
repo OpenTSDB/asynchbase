@@ -35,7 +35,7 @@ import static org.hbase.async.Bytes.ByteMap;
  * This class isn't user-facing.  Users aren't supposed to deal with this
  * response type directly, because it only contains region names, which are
  * meaningless to users.
- * @see MultiPutRequest
+ * @see MultiAction
  */
 final class MultiPutResponse {
 
@@ -53,7 +53,7 @@ final class MultiPutResponse {
   /**
    * Returns map from region name to "index" of the first failed edit.
    * <p>
-   * A {@link MultiPutRequest} is essentially a map of region name to a list
+   * A {@link MultiAction} is essentially a map of region name to a list
    * of edits for this region.  The "index" here will be the index in that list
    * of the first edit that wasn't applied successfully.  The edits past that
    * index may or may not have been applied successfully.
