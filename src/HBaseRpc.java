@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2010, 2011  StumbleUpon, Inc.  All rights reserved.
+ * Copyright (c) 2010-2012  StumbleUpon, Inc.  All rights reserved.
  * This file is part of Async HBase.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -677,6 +677,16 @@ public abstract class HBaseRpc {
   static void writeByteArray(final ChannelBuffer buf, final byte[] b) {
     writeVLong(buf, b.length);
     buf.writeBytes(b);
+  }
+
+  /**
+   * Serializes a `null' reference.
+   * @param buf The buffer to write to.
+   */
+  static void writeHBaseNull(final ChannelBuffer buf) {
+    buf.writeByte(14);  // Code type for `Writable'.
+    buf.writeByte(17);  // Code type for `NullInstance'.
+    buf.writeByte(14);  // Code type for `Writable'.
   }
 
   /**
