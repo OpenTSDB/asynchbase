@@ -1139,7 +1139,7 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
       return deserializeException(buf, rpc);
     }
     try {
-      return deserializeObject(buf);
+      return deserializeObject(buf, rpc);
     } catch (IllegalArgumentException e) {  // The RPC didn't look good to us.
       return new InvalidResponseException(e.getMessage(), e);
     }
@@ -1170,14 +1170,16 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
    * {@code HbaseObjectWritable#writeObject}.
    * @return The de-serialized object (which can be {@code null}).
    */
-  private static Object deserializeObject(final ChannelBuffer buf) {
+  @SuppressWarnings("fallthrough")
+  static Object deserializeObject(final ChannelBuffer buf,
+                                  final HBaseRpc request) {
     switch (buf.readByte()) {  // Read the type of the response.
       case  1:  // Boolean
         return buf.readByte() != 0x00;
       case  6:  // Long
         return buf.readLong();
       case 14:  // Writable
-        return deserializeObject(buf);  // Recursively de-serialize it.
+        return deserializeObject(buf, request);  // Recursively de-serialize it.
       case 17:  // NullInstance
         buf.readByte();  // Consume the (useless) type of the "null".
         return null;
