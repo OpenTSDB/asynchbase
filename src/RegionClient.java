@@ -1134,23 +1134,34 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
       }
     }
 
+    final HBaseRpc rpc = rpcs_inflight.get(rpcid);
     if ((flags & HBaseRpc.RPC_ERROR) != 0) {
-      // In case of failures, the rest of the response is just 2
-      // Hadoop-encoded strings.  The first is the class name of the
-      // exception, the 2nd is the message and stack trace.
-      final String type = HBaseRpc.readHadoopString(buf);
-      final String msg = HBaseRpc.readHadoopString(buf);
-      final HBaseException exc = REMOTE_EXCEPTION_TYPES.get(type);
-      if (exc != null) {
-        return exc.make(msg, rpcs_inflight.get(rpcid));
-      } else {
-        return new RemoteException(type, msg);
-      }
+      return deserializeException(buf, rpc);
     }
     try {
       return deserializeObject(buf);
     } catch (IllegalArgumentException e) {  // The RPC didn't look good to us.
       return new InvalidResponseException(e.getMessage(), e);
+    }
+  }
+
+  /**
+   * De-serializes an exception.
+   * @param buf The buffer to read from.
+   * @param request The RPC that caused this exception.
+   */
+  static HBaseException deserializeException(final ChannelBuffer buf,
+                                             final HBaseRpc request) {
+    // In case of failures, the rest of the response is just 2
+    // Hadoop-encoded strings.  The first is the class name of the
+    // exception, the 2nd is the message and stack trace.
+    final String type = HBaseRpc.readHadoopString(buf);
+    final String msg = HBaseRpc.readHadoopString(buf);
+    final HBaseException exc = REMOTE_EXCEPTION_TYPES.get(type);
+    if (exc != null) {
+      return exc.make(msg, request);
+    } else {
+      return new RemoteException(type, msg);
     }
   }
 
