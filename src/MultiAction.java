@@ -47,11 +47,11 @@ final class MultiAction extends HBaseRpc {
   };
 
   /**
-   * All the edits in this multi-put.
+   * All the RPCs in this batch.
    * We'll sort this list before serializing it.
-   * @see MultiPutComparator
+   * @see MultiActionComparator
    */
-  private final ArrayList<PutRequest> edits = new ArrayList<PutRequest>();
+  private final ArrayList<BatchableRpc> batch = new ArrayList<BatchableRpc>();
 
   /**
    * Constructor.
@@ -60,29 +60,30 @@ final class MultiAction extends HBaseRpc {
     super(MULTI_PUT);
   }
 
-  /** Returns the number of edits in this multi-put.  */
+  /** Returns the number of RPCs in this batch.  */
   public int size() {
-    return edits.size();
+    return batch.size();
   }
 
   /**
-   * Adds a "put" request in this multi-put.
+   * Adds an RPC to this batch.
    * <p>
-   * @param request The edit to add in this multi-put.
-   * This edit <b>must not</b> specify an explicit row lock.
+   * @param rpc The RPC to add in this batch.
+   * Any edit added <b>must not</b> specify an explicit row lock.
    */
-  public void add(final PutRequest request) {
-    if (request.lockid() != RowLock.NO_LOCK) {
+  public void add(final BatchableRpc rpc) {
+    if (rpc instanceof PutRequest
+        && ((PutRequest) rpc).lockid() != RowLock.NO_LOCK) {
       throw new AssertionError("Should never happen!  We don't do multi-put"
         + " with RowLocks but we've been given an edit that has one!"
-        + "  edit=" + request + ", this=" + this);
+        + "  edit=" + rpc + ", this=" + this);
     }
-    edits.add(request);
+    batch.add(rpc);
   }
 
-  /** Returns the list of individual puts that make up this multi-put.  */
-  ArrayList<PutRequest> edits() {
-    return edits;
+  /** Returns the list of individual RPCs that make up this batch.  */
+  ArrayList<BatchableRpc> batch() {
+    return batch;
   }
 
   /**
@@ -91,13 +92,13 @@ final class MultiAction extends HBaseRpc {
    * failed.
    * @return A list of edits that need to be retried.
    */
-  Iterable<PutRequest> handlePartialFailure(final Bytes.ByteMap<Integer> failures) {
-    final ArrayList<PutRequest> retry =
-      new ArrayList<PutRequest>(edits.size() >>> 2);  // Start size = 4x smaller.
-    PutRequest prev = PutRequest.EMPTY_PUT;
+  Iterable<BatchableRpc> handlePartialFailure(final Bytes.ByteMap<Integer> failures) {
+    final ArrayList<BatchableRpc> retry =
+      new ArrayList<BatchableRpc>(batch.size() >>> 2);  // Start size = 4x smaller.
+    BatchableRpc prev = PutRequest.EMPTY_PUT;
     int edits_per_region = 0;
     int failed_index = -1;
-    for (final PutRequest edit : edits) {
+    for (final BatchableRpc edit : batch) {
       final byte[] region_name = edit.getRegion().name();
       final boolean new_region = !Bytes.equals(prev.getRegion().name(),
                                                region_name);
@@ -145,25 +146,25 @@ final class MultiAction extends HBaseRpc {
     size += 4;  // int:  Number of parameters.
     size += 1;  // byte: Type of the 1st parameter.
     size += 1;  // byte: Type again (see HBASE-2877).
-    size += 4;  // int:  How many regions do we want to edit?
+    size += 4;  // int:  How many regions do we want to affect?
 
-    PutRequest prev = PutRequest.EMPTY_PUT;
-    for (final PutRequest edit : edits) {
-      final byte[] region_name = edit.getRegion().name();
+    BatchableRpc prev = PutRequest.EMPTY_PUT;
+    for (final BatchableRpc rpc : batch) {
+      final byte[] region_name = rpc.getRegion().name();
       final boolean new_region = !Bytes.equals(prev.getRegion().name(),
                                                region_name);
-      final boolean new_key = new_region || !Bytes.equals(prev.key, edit.key);
+      final boolean new_key = new_region || !Bytes.equals(prev.key, rpc.key);
       final boolean new_family = new_key || !Bytes.equals(prev.family(),
-                                                          edit.family());
+                                                          rpc.family());
 
       if (new_region) {
         size += 3;  // vint: region name length (3 bytes => max length = 32768).
         size += region_name.length;  // The region name.
-        size += 4;  // int:  How many edits for this region.
+        size += 4;  // int:  How many RPCs for this region.
       }
 
-      final int key_length = edit.key.length;
-      final int family_length = edit.family().length;
+      final int key_length = rpc.key.length;
+      final int family_length = rpc.family().length;
 
       if (new_key) {
         size += 1;  // byte: Version of Put.
@@ -182,8 +183,8 @@ final class MultiAction extends HBaseRpc {
         size += 4;  // int:  Total number of bytes for all those KeyValues.
       }
 
-      size += edit.kv().predictSerializedSize();
-      prev = edit;
+      size += ((PutRequest) rpc).kv().predictSerializedSize();
+      prev = rpc;
     }
     return size;
   }
@@ -202,7 +203,7 @@ final class MultiAction extends HBaseRpc {
     // once we cross a row key / family / region boundary, because we can't
     // efficiently tell ahead of time how many edits or bytes will follow
     // until we cross such boundaries.
-    Collections.sort(edits, MULTIPUT_CMP);
+    Collections.sort(batch, MULTI_CMP);
     final ChannelBuffer buf = newBuffer(server_version,
                                         predictSerializedSize());
     buf.writeInt(1);  // Number of parameters.
@@ -210,7 +211,7 @@ final class MultiAction extends HBaseRpc {
     // 1st and only param: a MultiPut object.
     buf.writeByte(57);   // Code for a `MultiPut' parameter.
     buf.writeByte(57);   // Code again (see HBASE-2877).
-    buf.writeInt(0);  // How many regions do we want to edit?
+    buf.writeInt(0);  // How many regions do we want to affect?
     //           ^------ We'll monkey patch this at the end.
 
     int nregions = 0;
@@ -221,16 +222,16 @@ final class MultiAction extends HBaseRpc {
     int nkeys_per_family_index = -1;
     int nkeys_per_family = 0;
     int nbytes_per_family = 0;
-    PutRequest prev = PutRequest.EMPTY_PUT;
-    for (final PutRequest edit : edits) {
-      final byte[] region_name = edit.getRegion().name();
+    BatchableRpc prev = PutRequest.EMPTY_PUT;
+    for (final BatchableRpc rpc : batch) {
+      final byte[] region_name = rpc.getRegion().name();
       final boolean new_region = !Bytes.equals(prev.getRegion().name(),
                                                region_name);
-      final boolean new_key = new_region || !Bytes.equals(prev.key, edit.key);
+      final boolean new_key = new_region || !Bytes.equals(prev.key, rpc.key);
       final boolean new_family = new_key || !Bytes.equals(prev.family(),
-                                                          edit.family());
+                                                          rpc.family());
       if (new_region) {
-        // Monkey-patch the number of edits of the previous region.
+        // Monkey-patch the number of RPCs of the previous region.
         if (nkeys_index > 0) {
           buf.setInt(nkeys_index, nkeys);
           nkeys = 0;
@@ -239,11 +240,11 @@ final class MultiAction extends HBaseRpc {
         nregions++;
         writeByteArray(buf, region_name);  // The region name.
         nkeys_index = buf.writerIndex();
-        // Number of keys for which we have edits for this region.
+        // Number of keys for which we have RPCs for this region.
         buf.writeInt(0);  // We'll monkey patch this later.
       }
 
-      final byte[] key = edit.key;
+      final byte[] key = rpc.key;
       if (new_key) {
         nkeys++;
         // Monkey-patch the number of families of the previous key.
@@ -260,13 +261,13 @@ final class MultiAction extends HBaseRpc {
         buf.writeLong(Long.MAX_VALUE);
 
         buf.writeLong(RowLock.NO_LOCK);    // Lock ID.
-        buf.writeByte(edit.durable() ? 0x01 : 0x00);  // Use the WAL?
+        buf.writeByte(((PutRequest) rpc).durable() ? 0x01 : 0x00);  // Use the WAL?
         nfamilies_index = buf.writerIndex();
         // Number of families that follow.
         buf.writeInt(0);  // We'll monkey patch this later.
       }
 
-      final byte[] family = edit.family();
+      final byte[] family = rpc.family();
       if (new_family) {
         nfamilies++;
         writeByteArray(buf, family);  // The column family.
@@ -286,13 +287,13 @@ final class MultiAction extends HBaseRpc {
       }
       nkeys_per_family++;
 
-      final KeyValue kv = edit.kv();
+      final KeyValue kv = ((PutRequest) rpc).kv();
       nbytes_per_family += kv.predictSerializedSize();
       kv.serialize(buf, KeyValue.PUT);
-      prev = edit;
+      prev = rpc;
     }  // Yay, we made it!
 
-    // Monkey-patch everything for the last set of edits.
+    // Monkey-patch everything for the last set of RPCs.
     buf.setInt(nkeys_per_family_index, nkeys_per_family);
     buf.setInt(nkeys_per_family_index + 4, nbytes_per_family);
     buf.setInt(nfamilies_index, nfamilies);
@@ -306,30 +307,30 @@ final class MultiAction extends HBaseRpc {
   }
 
   public String toString() {
-    // Originally this was simply putting all the edits in the toString
-    // representation, but that's way too expensive when we have lots of
-    // edits.  So instead we toString each edit until we hit some
+    // Originally this was simply putting all the batch in the toString
+    // representation, but that's way too expensive when we have large
+    // batches.  So instead we toString each RPC until we hit some
     // hard-coded upper bound on how much data we're willing to put into
-    // the toString.  If we have too many edits and hit that constant,
+    // the toString.  If we have too many RPCs and hit that constant,
     // we skip all the remaining ones until the last one, as it's often
-    // useful to see the last edit added when debugging.
+    // useful to see the last RPC added when debugging.
     final StringBuilder buf = new StringBuilder();
-    buf.append("MultiAction(edits=[");
-    final int nedits = edits.size();
+    buf.append("MultiAction(batch=[");
+    final int nrpcs = batch.size();
     int i;
-    for (i = 0; i < nedits; i++) {
+    for (i = 0; i < nrpcs; i++) {
       if (buf.length() >= 1024) {
         break;
       }
-      buf.append(edits.get(i)).append(", ");
+      buf.append(batch.get(i)).append(", ");
     }
-    if (i < nedits) {
-      if (i == nedits - 1) {
-        buf.append("... 1 edit not shown])");
+    if (i < nrpcs) {
+      if (i == nrpcs - 1) {
+        buf.append("... 1 RPC not shown])");
       } else {
-        buf.append("... ").append(nedits - 1 - i)
-          .append(" edits not shown ..., ")
-          .append(edits.get(nedits - 1))
+        buf.append("... ").append(nrpcs - 1 - i)
+          .append(" RPCs not shown ..., ")
+          .append(batch.get(nrpcs - 1))
           .append("])");
       }
     } else {
@@ -340,20 +341,24 @@ final class MultiAction extends HBaseRpc {
   }
 
   /**
-   * Sorts {@link PutRequest}s appropriately for the multi-put RPC.
+   * Sorts {@link BatchableRpc}s appropriately for the multi-put / multi-action RPC.
    * We sort by region, row key, column family.  No ordering is needed on the
    * column qualifier or value.
    */
-  private static final MultiPutComparator MULTIPUT_CMP = new MultiPutComparator();
+  static final MultiActionComparator MULTI_CMP = new MultiActionComparator();
 
-  /** Sorts {@link PutRequest}s appropriately for the multi-put RPC.  */
-  private static final class MultiPutComparator implements Comparator<PutRequest> {
+  /** Sorts {@link BatchableRpc}s appropriately for the `multi' RPC.  */
+  private static final class MultiActionComparator
+    implements Comparator<BatchableRpc> {
 
-    private MultiPutComparator() {  // Can't instantiate outside of this class.
+    private MultiActionComparator() {  // Can't instantiate outside of this class.
     }
 
     @Override
-    public int compare(final PutRequest a, final PutRequest b) {
+    /**
+     * Compares two RPCs.
+     */
+    public int compare(final BatchableRpc a, final BatchableRpc b) {
       int d;
       if ((d = Bytes.memcmp(a.getRegion().name(), b.getRegion().name())) != 0) {
         return d;
@@ -364,6 +369,5 @@ final class MultiAction extends HBaseRpc {
     }
 
   }
-
 
 }

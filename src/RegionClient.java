@@ -215,13 +215,13 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
     return !dead;
   }
 
-  /** Periodically flushes buffered edits.  */
+  /** Periodically flushes buffered RPCs.  */
   private void periodicFlush() {
     if (chan != null || dead) {
-      // If we're dead, we want to flush our edits (this will cause them to
+      // If we're dead, we want to flush our RPCs (this will cause them to
       // get failed / retried).
       if (LOG.isDebugEnabled()) {
-        LOG.debug("Periodic flush timer: flushing edits for " + this);
+        LOG.debug("Periodic flush timer: flushing RPCs for " + this);
       }
       // Copy the batch to a local variable and null it out.
       final MultiAction batched_rpcs;
@@ -612,7 +612,7 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
     final class MultiPutCallback implements Callback<Object, Object> {
       public Object call(final Object resp) {
         if (!(resp instanceof MultiPutResponse)) {
-          if (resp instanceof PutRequest) {  // Single-edit multi-put?
+          if (resp instanceof BatchableRpc) {  // Single-RPC multi-action?
             return null;  // Yes, nothing to do.  See multiPutToSinglePut.
           }
           throw new InvalidResponseException(MultiPutResponse.class, resp);
@@ -620,8 +620,8 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
         final MultiPutResponse response = (MultiPutResponse) resp;
         final Bytes.ByteMap<Integer> failures = response.failures();
         if (failures.isEmpty()) {
-          for (final PutRequest edit : request.edits()) {
-            edit.callback(null);  // Success.
+          for (final BatchableRpc rpc : request.batch()) {
+            rpc.callback(null);  // Success.
           }
           return null;  // Yay, success!
         }
@@ -630,7 +630,7 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
         // DEBUG once the pretty bad bug HBASE-2898 is fixed.
         LOG.warn("Some edits failed for " + failures
                  + ", hopefully it's just due to a region split.");
-        for (final PutRequest edit : request.handlePartialFailure(failures)) {
+        for (final BatchableRpc edit : request.handlePartialFailure(failures)) {
           retryEdit(edit, null);
         }
         return null;  // We're retrying, so let's call it a success for now.
@@ -642,8 +642,8 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
     final class MultiPutErrback implements Callback<Object, Exception> {
       public Object call(final Exception e) {
         if (!(e instanceof RecoverableException)) {
-          for (final PutRequest edit : request.edits()) {
-            edit.callback(e);
+          for (final BatchableRpc rpc : request.batch()) {
+            rpc.callback(e);
           }
           return e;  // Can't recover from this error, let it propagate.
         }
@@ -651,8 +651,8 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
           LOG.debug("Multi-put request failed, retrying each of the "
                     + request.size() + " edits individually.", e);
         }
-        for (final PutRequest edit : request.edits()) {
-          retryEdit(edit, (RecoverableException) e);
+        for (final BatchableRpc rpc : request.batch()) {
+          retryEdit(rpc, (RecoverableException) e);
         }
         return null;  // We're retrying, so let's call it a success for now.
       }
@@ -666,18 +666,20 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
 
   /**
    * Retries an edit that failed with a recoverable error.
-   * @param edit The edit that failed.
+   * @param rpc The RPC that failed.
    * @param e The recoverable error that caused the edit to fail, if known.
    * Can be {@code null}.
    * @param The deferred result of the new attempt to send this edit.
    */
-  private Deferred<Object> retryEdit(final PutRequest edit,
+  private Deferred<Object> retryEdit(final BatchableRpc rpc,
                                      final RecoverableException e) {
-    if (HBaseClient.cannotRetryRequest(edit)) {
-      return HBaseClient.tooManyAttempts(edit, e);
+    if (HBaseClient.cannotRetryRequest(rpc)) {
+      return HBaseClient.tooManyAttempts(rpc, e);
     }
-    edit.setBufferable(false);
-    return hbase_client.sendRpcToRegion(edit);
+    // This RPC has already been delayed because of a failure,
+    // so make sure we don't buffer it again.
+    rpc.setBufferable(false);
+    return hbase_client.sendRpcToRegion(rpc);
   }
 
   /**
@@ -774,9 +776,9 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
    * Transforms the given single-edit multi-put into a regular single-put.
    * @param multiput The single-edit multi-put to transform.
    */
-  private PutRequest multiPutToSinglePut(final MultiAction batch) {
-    final PutRequest edit = batch.edits().get(0);
-    addSingleEditCallbacks(edit);
+  private BatchableRpc multiPutToSinglePut(final MultiAction batch) {
+    final PutRequest rpc = (PutRequest) batch.batch().get(0);
+    addSingleEditCallbacks(rpc);
     // Once the single-edit is done, we still need to make sure we're
     // going to run the callback chain of the MultiAction.
     final class Multi2SingleCB implements Callback<Object, Object> {
@@ -786,12 +788,12 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
         // callback.  This is kind of a kludge: the MultiAction callback
         // will understand that this means that this single-edit was already
         // successfully executed on its own.
-        batch.callback(arg instanceof Exception ? arg : edit);
+        batch.callback(arg instanceof Exception ? arg : rpc);
         return arg;
       }
     }
-    edit.getDeferred().addBoth(new Multi2SingleCB());
-    return edit;
+    rpc.getDeferred().addBoth(new Multi2SingleCB());
+    return rpc;
   }
 
   // -------------------------------------- //
