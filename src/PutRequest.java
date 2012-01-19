@@ -37,7 +37,7 @@ import org.jboss.netty.buffer.ChannelBuffer;
  * <h1>A note on passing {@code String}s in argument</h1>
  * All strings are assumed to use the platform's default charset.
  */
-public final class PutRequest extends HBaseRpc
+public final class PutRequest extends BatchableRpc
   implements HBaseRpc.HasTable, HBaseRpc.HasKey, HBaseRpc.HasFamily,
              HBaseRpc.HasQualifier, HBaseRpc.HasValue {
 
@@ -57,7 +57,6 @@ public final class PutRequest extends HBaseRpc
   private final KeyValue kv;
   private final long lockid;
   private boolean durable = true;
-  private boolean bufferable = true;
 
   /**
    * Constructor.
@@ -202,20 +201,6 @@ public final class PutRequest extends HBaseRpc
     this.durable = durable;
   }
 
-  /**
-   * Sets whether or not this edit is bufferable.
-   * The default is {@code true}.
-   * <p>
-   * Setting this to {@code false} bypasses the client-based buffering and
-   * causes this edit to be sent directly to the server.
-   * @param bufferable Whether or not this edit can be buffered (i.e. delayed)
-   * before being sent out to HBase.
-   * @see HBaseClient#setFlushInterval
-   */
-  public void setBufferable(final boolean bufferable) {
-    this.bufferable = bufferable;
-  }
-
   @Override
   public byte[] table() {
     return table;
@@ -247,7 +232,7 @@ public final class PutRequest extends HBaseRpc
                                        ", value=" + Bytes.pretty(kv.value())
                                        + ", lockid=" + lockid
                                        + ", durable=" + durable
-                                       + ", bufferable=" + bufferable);
+                                       + ", bufferable=" + super.bufferable);
   }
 
   // ---------------------- //
@@ -267,10 +252,11 @@ public final class PutRequest extends HBaseRpc
   }
 
   /** Returns whether or not it's OK to buffer this edit on the client side. */
+  @Override
   boolean canBuffer() {
     // Don't buffer edits that have a row-lock, we want those to
     // complete ASAP so as to not hold the lock for too long.
-    return lockid == RowLock.NO_LOCK && bufferable;
+    return lockid == RowLock.NO_LOCK && super.bufferable;
   }
 
   /**

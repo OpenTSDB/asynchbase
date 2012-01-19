@@ -40,6 +40,7 @@ spec_version = 1.2.0-SNAPSHOT
 jar := $(top_builddir)/asynchbase-$(spec_version).jar
 asynchbase_SOURCES = \
 	src/AtomicIncrementRequest.java	\
+	src/BatchableRpc.java	\
 	src/BrokenMetaException.java	\
 	src/Bytes.java	\
 	src/ConnectionResetException.java	\
