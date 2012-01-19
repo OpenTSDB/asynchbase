@@ -53,7 +53,6 @@ asynchbase_SOURCES = \
 	src/InvalidResponseException.java	\
 	src/KeyValue.java	\
 	src/MultiAction.java	\
-	src/MultiPutResponse.java	\
 	src/NoSuchColumnFamilyException.java	\
 	src/NonRecoverableException.java	\
 	src/NotServingRegionException.java	\

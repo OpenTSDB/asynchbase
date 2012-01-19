@@ -579,8 +579,8 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
 
     synchronized (this) {
       if (batched_rpcs == null) {
-        batched_rpcs = new MultiAction();
-        addMultiPutCallbacks(batched_rpcs);
+        batched_rpcs = new MultiAction(server_version);
+        addMultiActionCallbacks(batched_rpcs);
         schedule_flush = true;
       }
       batch = batched_rpcs;
@@ -592,8 +592,8 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
       } else {
         // Execute the edits buffered so far.  But first we must clear
         // the reference to the buffer we're about to send to HBase.
-        batched_rpcs = new MultiAction();
-        addMultiPutCallbacks(batched_rpcs);
+        batched_rpcs = new MultiAction(server_version);
+        addMultiActionCallbacks(batched_rpcs);
       }
     }
 
@@ -608,38 +608,45 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
    * Creates callbacks to handle a multi-put and adds them to the request.
    * @param request The request for which we must handle the response.
    */
-  private void addMultiPutCallbacks(final MultiAction request) {
-    final class MultiPutCallback implements Callback<Object, Object> {
+  private void addMultiActionCallbacks(final MultiAction request) {
+    final class MultiActionCallback implements Callback<Object, Object> {
       public Object call(final Object resp) {
-        if (!(resp instanceof MultiPutResponse)) {
+        if (!(resp instanceof MultiAction.Response)) {
           if (resp instanceof BatchableRpc) {  // Single-RPC multi-action?
             return null;  // Yes, nothing to do.  See multiPutToSinglePut.
           }
-          throw new InvalidResponseException(MultiPutResponse.class, resp);
+          throw new InvalidResponseException(MultiAction.Response.class, resp);
         }
-        final MultiPutResponse response = (MultiPutResponse) resp;
-        final Bytes.ByteMap<Integer> failures = response.failures();
-        if (failures.isEmpty()) {
-          for (final BatchableRpc rpc : request.batch()) {
-            rpc.callback(null);  // Success.
+        final MultiAction.Response response = (MultiAction.Response) resp;
+        final ArrayList<BatchableRpc> batch = request.batch();
+        final int n = batch.size();
+        for (int i = 0; i < n; i++) {
+          final BatchableRpc rpc = batch.get(i);
+          final Object r = response.result(i);
+          if (r instanceof RecoverableException) {
+            if (r instanceof NotServingRegionException) {
+              // We need to do NSRE handling here too, as the response might
+              // have come back successful, but only some parts of the batch
+              // could have encountered an NSRE.
+              hbase_client.handleNSRE(rpc, rpc.getRegion().name(),
+                                      (NotServingRegionException) r);
+            } else {
+              retryEdit(rpc, (RecoverableException) r);
+            }
+          } else {
+            rpc.callback(r);
           }
-          return null;  // Yay, success!
         }
-        // TODO(tsuna): Wondering whether logging this at the WARN level
-        // won't be too spammy / distracting.  Maybe we can tune this down to
-        // DEBUG once the pretty bad bug HBASE-2898 is fixed.
-        LOG.warn("Some edits failed for " + failures
-                 + ", hopefully it's just due to a region split.");
-        for (final BatchableRpc edit : request.handlePartialFailure(failures)) {
-          retryEdit(edit, null);
-        }
-        return null;  // We're retrying, so let's call it a success for now.
+        // We're successful.  If there was a problem, the exception was
+        // delivered to the specific RPCs that failed, and they will be
+        // responsible for retrying.
+        return null;
       }
       public String toString() {
-        return "multiPut response";
+        return "multi-action response";
       }
     };
-    final class MultiPutErrback implements Callback<Object, Exception> {
+    final class MultiActionErrback implements Callback<Object, Exception> {
       public Object call(final Exception e) {
         if (!(e instanceof RecoverableException)) {
           for (final BatchableRpc rpc : request.batch()) {
@@ -648,20 +655,22 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
           return e;  // Can't recover from this error, let it propagate.
         }
         if (LOG.isDebugEnabled()) {
-          LOG.debug("Multi-put request failed, retrying each of the "
-                    + request.size() + " edits individually.", e);
+          LOG.debug("Multi-action request failed, retrying each of the "
+                    + request.size() + " RPCs individually.", e);
         }
         for (final BatchableRpc rpc : request.batch()) {
-          retryEdit(rpc, (RecoverableException) e);
+          if (rpc instanceof PutRequest) {
+            retryEdit(rpc, (RecoverableException) e);
+          }
         }
         return null;  // We're retrying, so let's call it a success for now.
       }
       public String toString() {
-        return "multiPut errback";
+        return "multi-action errback";
       }
     };
-    request.getDeferred().addCallbacks(new MultiPutCallback(),
-                                       new MultiPutErrback());
+    request.getDeferred().addCallbacks(new MultiActionCallback(),
+                                       new MultiActionErrback());
   }
 
   /**
@@ -784,9 +793,9 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
     final class Multi2SingleCB implements Callback<Object, Object> {
       public Object call(final Object arg) {
         // If there was a problem, let the MultiAction know.
-        // Otherwise, give the PutRequest in argument to the MultiAction
+        // Otherwise, give the HBaseRpc in argument to the MultiAction
         // callback.  This is kind of a kludge: the MultiAction callback
-        // will understand that this means that this single-edit was already
+        // will understand that this means that this single-RPC was already
         // successfully executed on its own.
         batch.callback(arg instanceof Exception ? arg : rpc);
         return arg;
@@ -1191,8 +1200,10 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
       case 38:  // Result[]
         return parseResults(buf);
       case 58:  // MultiPutResponse
-        buf.readByte();  // Read the type again.  See HBASE-2877.
-        return MultiPutResponse.fromBuffer(buf);
+        // Fall through
+      case 67:  // MultiResponse
+        // Don't read the type again, responseFromBuffer() will need it.
+        return ((MultiAction) request).responseFromBuffer(buf);
     }
     throw new NonRecoverableException("Couldn't de-serialize "
                                       + Bytes.pretty(buf));
