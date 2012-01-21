@@ -10,6 +10,8 @@ Noteworthy changes:
 
 New public APIs:
   - KeyValue now supports timestamps.
+  - HBaseClient now accepts a custom socket factory or executor, which can
+    be used to share an existing thread pool instead of having its own.
 
 
 * Version 1.1.0 (2011-12-22) [1272a9e]

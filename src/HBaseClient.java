@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2010, 2011  StumbleUpon, Inc.  All rights reserved.
+ * Copyright (c) 2010-2012  StumbleUpon, Inc.  All rights reserved.
  * This file is part of Async HBase.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -54,6 +54,7 @@ import org.jboss.netty.channel.ChannelEvent;
 import org.jboss.netty.channel.ChannelPipeline;
 import org.jboss.netty.channel.ChannelStateEvent;
 import org.jboss.netty.channel.DefaultChannelPipeline;
+import org.jboss.netty.channel.socket.ClientSocketChannelFactory;
 import org.jboss.netty.channel.socket.SocketChannel;
 import org.jboss.netty.channel.socket.SocketChannelConfig;
 import org.jboss.netty.channel.socket.nio.NioClientSocketChannelFactory;
@@ -236,12 +237,6 @@ public final class HBaseClient {
   private static final byte[] SERVER = new byte[] { 's', 'e', 'r', 'v', 'e', 'r' };
 
   /**
-   * Executor with which we create all our threads.
-   * TODO(tsuna): Get it through the ctor to share it with others.
-   */
-  private final Executor executor = Executors.newCachedThreadPool();
-
-  /**
    * Timer we use to handle all our timeouts.
    * <p>
    * This is package-private so that this timer can easily be shared with the
@@ -256,8 +251,7 @@ public final class HBaseClient {
   /**
    * Factory through which we will create all its channels / sockets.
    */
-  private final NioClientSocketChannelFactory channel_factory
-    = new NioClientSocketChannelFactory(executor, executor);
+  private final ClientSocketChannelFactory channel_factory;
 
   /** Watcher to keep track of the -ROOT- region in ZooKeeper.  */
   private final ZKClient zkclient;
@@ -396,6 +390,65 @@ public final class HBaseClient {
    * -ROOT- region.
    */
   public HBaseClient(final String quorum_spec, final String base_path) {
+    this(quorum_spec, base_path, Executors.newCachedThreadPool());
+  }
+
+  /**
+   * Constructor for advanced users with special needs.
+   * <p>
+   * <strong>NOTE:</strong> Only advanced users who really know what they're
+   * doing should use this constructor.  Passing an inappropriate thread
+   * pool, or blocking its threads will prevent this {@code HBaseClient}
+   * from working properly or lead to poor performance.
+   * @param quorum_spec The specification of the quorum, e.g.
+   * {@code "host1,host2,host3"}.
+   * @param base_path The base path under which is the znode for the
+   * -ROOT- region.
+   * @param executor The executor from which to obtain threads for NIO
+   * operations.  It is <strong>strongly</strong> encouraged to use a
+   * {@link Executors#newCachedThreadPool} or something equivalent unless
+   * you're sure to understand how Netty creates and uses threads.
+   * Using a fixed-size thread pool will not work the way you expect.
+   * <p>
+   * Note that calling {@link #shutdown} on this client will <b>NOT</b>
+   * shut down the executor.
+   * @see NioClientSocketChannelFactory
+   * @since 1.2
+   */
+  public HBaseClient(final String quorum_spec, final String base_path,
+                     final Executor executor) {
+    this(quorum_spec, base_path, new CustomChannelFactory(executor));
+  }
+
+  /** A custom channel factory that doesn't shutdown its executor.  */
+  private static final class CustomChannelFactory
+    extends NioClientSocketChannelFactory {
+      CustomChannelFactory(final Executor executor) {
+        super(executor, executor);
+      }
+      @Override
+      public void releaseExternalResources() {
+        // Do nothing, we don't want to shut down the executor.
+      }
+  }
+
+  /**
+   * Constructor for advanced users with special needs.
+   * <p>
+   * Most users don't need to use this constructor.
+   * @param quorum_spec The specification of the quorum, e.g.
+   * {@code "host1,host2,host3"}.
+   * @param base_path The base path under which is the znode for the
+   * -ROOT- region.
+   * @param channel_factory A custom factory to use to create sockets.
+   * <p>
+   * Note that calling {@link #shutdown} on this client will also cause the
+   * shutdown and release of the factory and its underlying thread pool.
+   * @since 1.2
+   */
+  public HBaseClient(final String quorum_spec, final String base_path,
+                     final ClientSocketChannelFactory channel_factory) {
+    this.channel_factory = channel_factory;
     zkclient = new ZKClient(quorum_spec, base_path);
   }
 
@@ -507,8 +560,7 @@ public final class HBaseClient {
         super("HBaseClient@" + HBaseClient.super.hashCode() + " shutdown");
       }
       public void run() {
-        // This terminates the Executor.  TODO(tsuna): Don't do this if
-        // the executor doesn't belong to us (right now it always does).
+        // This terminates the Executor.
         channel_factory.releaseExternalResources();
       }
     };
