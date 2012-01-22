@@ -54,12 +54,9 @@ public final class PutRequest extends BatchableRpc
     EMPTY_PUT.setRegion(new RegionInfo(zero, zero, zero));
   }
 
-  private final byte[] family;
   private final byte[] qualifier;
   private final byte[] value;
-  private final long lockid;
   private final long timestamp;
-  private boolean durable = true;
 
   /**
    * Constructor.
@@ -173,11 +170,9 @@ public final class PutRequest extends BatchableRpc
   private PutRequest(final byte[] table,
                      final KeyValue kv,
                      final long lockid) {
-    super(PUT, table, kv.key());
-    this.family = kv.family();
+    super(PUT, table, kv.key(), kv.family(), lockid);
     this.qualifier = kv.qualifier();
     this.value = kv.value();
-    this.lockid = lockid;
     this.timestamp = kv.timestamp();
   }
 
@@ -188,28 +183,13 @@ public final class PutRequest extends BatchableRpc
                      final byte[] qualifier,
                      final byte[] value,
                      final long lockid) {
-    super(PUT, table, key);
+    super(PUT, table, key, family, lockid);
     KeyValue.checkFamily(family);
     KeyValue.checkQualifier(qualifier);
     KeyValue.checkValue(value);
-    this.family = family;
     this.qualifier = qualifier;
     this.value = value;
-    this.lockid = lockid;
     this.timestamp = KeyValue.TIMESTAMP_NOW;
-  }
-
-  /**
-   * Changes the durability setting of this edit.
-   * The default is {@code true}.
-   * Make sure you've read and understood the
-   * <a href="HBaseClient.html#durability">data durability</a> section before
-   * setting this to {@code false}.
-   * @param durable Whether or not this edit should be stored with data
-   * durability guarantee.
-   */
-  public void setDurable(final boolean durable) {
-    this.durable = durable;
   }
 
   @Override
@@ -220,11 +200,6 @@ public final class PutRequest extends BatchableRpc
   @Override
   public byte[] key() {
     return key;
-  }
-
-  @Override
-  public byte[] family() {
-    return family;
   }
 
   @Override
@@ -250,22 +225,6 @@ public final class PutRequest extends BatchableRpc
   // ---------------------- //
   // Package private stuff. //
   // ---------------------- //
-
-  long lockid() {
-    return lockid;
-  }
-
-  boolean durable() {
-    return durable;
-  }
-
-  /** Returns whether or not it's OK to buffer this edit on the client side. */
-  @Override
-  boolean canBuffer() {
-    // Don't buffer edits that have a row-lock, we want those to
-    // complete ASAP so as to not hold the lock for too long.
-    return lockid == RowLock.NO_LOCK && super.bufferable;
-  }
 
   @Override
   int payloadSize() {

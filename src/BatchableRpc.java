@@ -36,23 +36,47 @@ import org.jboss.netty.buffer.ChannelBuffer;
  */
 abstract class BatchableRpc extends HBaseRpc implements HBaseRpc.HasFamily {
 
+  // Attributes should have `protected' visibility, but doing so exposes
+  // them as part of the public API and in Javadoc, which we don't want.
+  // So instead we make them package-private so that subclasses can still
+  // access them directly.
+
+  /** Family affected by this RPC.  */
+  /*protected*/ final byte[] family;
+
+  /**
+   * Explicit row lock to use, if any.
+   * @see RowLock
+   */
+  /*protected*/ final long lockid;
+
   /**
    * Whether or not this batchable RPC can be buffered on the client side.
-   * This variable should have `protected' visibility, but doing so exposes it
-   * as part of the public API and in Javadoc, which we don't want.  So
-   * instead we make it package-private so that subclasses can still access it
-   * directly.  All other classes should use {@link #canBuffer} instead.
+   * Please call {@link #canBuffer} to check if this RPC can be buffered,
+   * don't test this field directly.
    */
   /*protected*/ boolean bufferable = true;
+
+  /**
+   * Whether or not the RegionServer must write to its WAL (Write Ahead Log).
+   */
+  /*protected*/ boolean durable = true;
 
   /**
    * Package private constructor.
    * @param method The name of the method to invoke on the RegionServer.
    * @param table The name of the table this RPC is for.
    * @param row The name of the row this RPC is for.
+   * @param family The column family to edit in that table.  Subclass must
+   * validate, this class doesn't perform any validation on the family.
+   * @param lockid Explicit row lock to use, or {@link RowLock#NO_LOCK}.
    */
-  BatchableRpc(final byte[] method, final byte[] table, final byte[] key) {
+  BatchableRpc(final byte[] method, final byte[] table,
+               final byte[] key, final byte[] family,
+               final long lockid) {
     super(method, table, key);
+    this.family = family;
+    this.lockid = lockid;
   }
 
   /**
@@ -70,9 +94,33 @@ abstract class BatchableRpc extends HBaseRpc implements HBaseRpc.HasFamily {
     this.bufferable = bufferable;
   }
 
+  /**
+   * Changes the durability setting of this edit.
+   * The default is {@code true}.
+   * Make sure you've read and understood the
+   * <a href="HBaseClient.html#durability">data durability</a> section before
+   * setting this to {@code false}.
+   * @param durable Whether or not this edit should be stored with data
+   * durability guarantee.
+   */
+  public final void setDurable(final boolean durable) {
+    this.durable = durable;
+  }
+
+  @Override
+  public final byte[] family() {
+    return family;
+  }
+
+  // ---------------------- //
+  // Package private stuff. //
+  // ---------------------- //
+
   /** Returns whether or not it's OK to buffer this RPC on the client side. */
-  boolean canBuffer() {
-    return bufferable;
+  final boolean canBuffer() {
+    // Don't buffer edits that have a row-lock, we want those to
+    // complete ASAP so as to not hold the lock for too long.
+    return lockid == RowLock.NO_LOCK && bufferable;
   }
 
   /**

@@ -100,8 +100,7 @@ final class MultiAction extends HBaseRpc {
    * Any edit added <b>must not</b> specify an explicit row lock.
    */
   public void add(final BatchableRpc rpc) {
-    if (rpc instanceof PutRequest
-        && ((PutRequest) rpc).lockid() != RowLock.NO_LOCK) {
+    if (rpc.lockid != RowLock.NO_LOCK) {
       throw new AssertionError("Should never happen!  We don't do multi-put"
         + " with RowLocks but we've been given an edit that has one!"
         + "  edit=" + rpc + ", this=" + this);
@@ -298,7 +297,7 @@ final class MultiAction extends HBaseRpc {
         buf.writeLong(Long.MAX_VALUE);
 
         buf.writeLong(RowLock.NO_LOCK);    // Lock ID.
-        buf.writeByte(((PutRequest) rpc).durable() ? 0x01 : 0x00);  // Use the WAL?
+        buf.writeByte(rpc.durable ? 0x01 : 0x00);  // Use the WAL?
         nfamilies_index = buf.writerIndex();
         // Number of families that follow.
         buf.writeInt(0);  // We'll monkey patch this later.
