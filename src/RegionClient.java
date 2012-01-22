@@ -115,7 +115,9 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
    * The channel we're connected to.
    * This will be {@code null} while we're not connected to the RegionServer.
    * This attribute is volatile because {@link #shutdown} may access it from a
-   * different thread.
+   * different thread, and because while we connect various user threads will
+   * test whether it's {@code null}.  Once we're connected and we know what
+   * protocol version the server speaks, we'll set this reference.
    */
   private volatile Channel chan;
 
@@ -412,6 +414,13 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
   /** Callback to handle responses of getProtocolVersion RPCs.  */
   private final class ProtocolVersionCB implements Callback<Long, Object> {
 
+    /** Channel connected to the server for which we're getting the version.  */
+    private final Channel chan;
+
+    public ProtocolVersionCB(final Channel chan) {
+      this.chan = chan;
+    }
+
     public Long call(final Object response) throws Exception {
       if (response instanceof VersionMismatchException) {
         if (server_version == SERVER_VERSION_UNKNWON) {
@@ -419,7 +428,7 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
           // running HBase 0.92 or above, but using a pre-0.92 handshake.  So
           // we know we have to handshake differently.
           server_version = SERVER_VERSION_092_OR_ABOVE;
-          Channels.write(chan, helloRpc(header092()));
+          helloRpc(chan, header092());
         } else {
           // We get here if the server refused our 0.92-style handshake.  This
           // must be a future version of HBase that broke compatibility again,
@@ -440,12 +449,15 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
           + (v <= 0 ? "negative" : "too large") + " value", version);
       }
       server_version = (byte) v;
+      // The following line will make this client no longer queue incoming
+      // RPCs, as we're now ready to communicate with the server.
+      RegionClient.this.chan = this.chan;  // Volatile write.
       sendQueuedRpcs();
       return version;
     }
 
     public String toString() {
-      return "handle getProtocolVersion response";
+      return "handle getProtocolVersion response on " + chan;
     }
 
   }
@@ -812,14 +824,14 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
   @Override
   public void channelConnected(final ChannelHandlerContext ctx,
                                final ChannelStateEvent e) {
-    final Channel chan = this.chan = e.getChannel();
+    final Channel chan = e.getChannel();
     final ChannelBuffer header;
     if (System.getProperty("org.hbase.async.cdh3b3") != null) {
       header = headerCDH3b3();
     } else {
       header = header090();
     }
-    Channels.write(chan, helloRpc(header));
+    helloRpc(chan, header);
   }
 
   /**
@@ -937,7 +949,7 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
       LOG.warn("RPC rejected by the executor,"
                + " ignore this if we're shutting down", e);
     } else {
-      LOG.error("Unexpected exception from downstream.", e);
+      LOG.error("Unexpected exception from downstream on " + c, e);
     }
     // TODO(tsuna): Do we really want to do that all the time?
     Channels.close(c);
@@ -1475,15 +1487,17 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
   }
 
   /**
-   * Returns the "hello" message needed when opening a new connection.
+   * Sends the "hello" message needed when opening a new connection.
    * This message is immediately followed by a {@link GetProtocolVersionRequest}
    * so we can learn what version the server is running to be able to talk to
    * it the way it expects.
+   * @param chan The channel connected to the server we need to handshake.
+   * @param header The header to use for the handshake.
    */
-  private ChannelBuffer helloRpc(final ChannelBuffer header) {
+  private void helloRpc(final Channel chan, final ChannelBuffer header) {
     final GetProtocolVersionRequest rpc = new GetProtocolVersionRequest();
-    rpc.getDeferred().addBoth(new ProtocolVersionCB());
-    return ChannelBuffers.wrappedBuffer(header, encode(rpc));
+    rpc.getDeferred().addBoth(new ProtocolVersionCB(chan));
+    Channels.write(chan, ChannelBuffers.wrappedBuffer(header, encode(rpc)));
   }
 
 }
