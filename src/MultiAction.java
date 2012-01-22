@@ -179,7 +179,7 @@ final class MultiAction extends HBaseRpc {
         size += 4;  // int:  Total number of bytes for all those KeyValues.
       }
 
-      size += ((PutRequest) rpc).kv().predictSerializedSize();
+      size += rpc.payloadSize();
       prev = rpc;
     }
     return size;
@@ -325,9 +325,8 @@ final class MultiAction extends HBaseRpc {
       nkeys_per_family++;
       nrpcs_per_key++;
 
-      final KeyValue kv = ((PutRequest) rpc).kv();
-      nbytes_per_family += kv.predictSerializedSize();
-      kv.serialize(buf, KeyValue.PUT);
+      nbytes_per_family += rpc.payloadSize();
+      rpc.serializePayload(buf);
       prev = rpc;
     }  // Yay, we made it!
 

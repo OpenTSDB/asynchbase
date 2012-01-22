@@ -26,6 +26,8 @@
  */
 package org.hbase.async;
 
+import org.jboss.netty.buffer.ChannelBuffer;
+
 /**
  * An intermediate abstract class for all RPC requests that can be batched.
  * <p>
@@ -72,5 +74,16 @@ abstract class BatchableRpc extends HBaseRpc implements HBaseRpc.HasFamily {
   boolean canBuffer() {
     return bufferable;
   }
+
+  /**
+   * An estimate of the number of bytes needed for {@link #serializePayload}.
+   * The estimate is conservative.
+   */
+  abstract int payloadSize();
+
+  /**
+   * Serialize the part of this RPC for a {@link MultiAction}.
+   */
+  abstract void serializePayload(final ChannelBuffer buf);
 
 }

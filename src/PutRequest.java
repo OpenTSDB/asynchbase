@@ -54,8 +54,11 @@ public final class PutRequest extends BatchableRpc
     EMPTY_PUT.setRegion(new RegionInfo(zero, zero, zero));
   }
 
-  private final KeyValue kv;
+  private final byte[] family;
+  private final byte[] qualifier;
+  private final byte[] value;
   private final long lockid;
+  private final long timestamp;
   private boolean durable = true;
 
   /**
@@ -171,8 +174,11 @@ public final class PutRequest extends BatchableRpc
                      final KeyValue kv,
                      final long lockid) {
     super(PUT, table, kv.key());
-    this.kv = kv;
+    this.family = kv.family();
+    this.qualifier = kv.qualifier();
+    this.value = kv.value();
     this.lockid = lockid;
+    this.timestamp = kv.timestamp();
   }
 
   /** Private constructor.  */
@@ -183,9 +189,14 @@ public final class PutRequest extends BatchableRpc
                      final byte[] value,
                      final long lockid) {
     super(PUT, table, key);
-    // KeyValue's constructor will validate the remaining arguments.
-    this.kv = new KeyValue(key, family, qualifier, value);
+    KeyValue.checkFamily(family);
+    KeyValue.checkQualifier(qualifier);
+    KeyValue.checkValue(value);
+    this.family = family;
+    this.qualifier = qualifier;
+    this.value = value;
     this.lockid = lockid;
+    this.timestamp = KeyValue.TIMESTAMP_NOW;
   }
 
   /**
@@ -213,23 +224,24 @@ public final class PutRequest extends BatchableRpc
 
   @Override
   public byte[] family() {
-    return kv.family();
+    return family;
   }
 
   @Override
   public byte[] qualifier() {
-    return kv.qualifier();
+    return qualifier;
   }
 
   @Override
   public byte[] value() {
-    return kv.value();
+    return value;
   }
 
   public String toString() {
     return super.toStringWithQualifier("PutRequest",
-                                       kv.family(), kv.qualifier(),
-                                       ", value=" + Bytes.pretty(kv.value())
+                                       family, qualifier,
+                                       ", value=" + Bytes.pretty(value)
+                                       + ", timestamp=" + timestamp
                                        + ", lockid=" + lockid
                                        + ", durable=" + durable
                                        + ", bufferable=" + super.bufferable);
@@ -238,10 +250,6 @@ public final class PutRequest extends BatchableRpc
   // ---------------------- //
   // Package private stuff. //
   // ---------------------- //
-
-  KeyValue kv() {
-    return kv;
-  }
 
   long lockid() {
     return lockid;
@@ -257,6 +265,17 @@ public final class PutRequest extends BatchableRpc
     // Don't buffer edits that have a row-lock, we want those to
     // complete ASAP so as to not hold the lock for too long.
     return lockid == RowLock.NO_LOCK && super.bufferable;
+  }
+
+  @Override
+  int payloadSize() {
+    return KeyValue.predictSerializedSize(key, family, qualifier, value);
+  }
+
+  @Override
+  void serializePayload(final ChannelBuffer buf) {
+    KeyValue.serialize(buf, KeyValue.PUT, timestamp, key, family,
+                       qualifier, value);
   }
 
   /**
@@ -278,23 +297,24 @@ public final class PutRequest extends BatchableRpc
 
     size += 1;  // byte: Version of Put.
     size += 3;  // vint: row key length (3 bytes => max length = 32768).
-    size += kv.key().length;  // The row key.
+    size += key.length;  // The row key.
     size += 8;  // long: Timestamp.
     size += 8;  // long: Lock ID.
     size += 1;  // bool: Whether or not to write to the WAL.
     size += 4;  // int:  Number of families for which we have edits.
 
     size += 1;  // vint: Family length (guaranteed on 1 byte).
-    size += kv.family().length;  // The family.
+    size += family.length;  // The family.
     size += 4;  // int:  Number of KeyValues that follow.
     size += 4;  // int:  Total number of bytes for all those KeyValues.
 
-    size += kv.predictSerializedSize();
+    size += payloadSize();
 
     return size;
   }
 
   /** Serializes this request.  */
+  @Override
   ChannelBuffer serialize(final byte server_version) {
     final ChannelBuffer buf = newBuffer(server_version,
                                         predictSerializedSize());
@@ -309,17 +329,17 @@ public final class PutRequest extends BatchableRpc
     buf.writeByte(1);    // Put#PUT_VERSION.  Undocumented versioning of Put.
     writeByteArray(buf, key);  // The row key.
 
-    buf.writeLong(kv.timestamp());  // Timestamp.
+    buf.writeLong(timestamp);  // Timestamp.
 
     buf.writeLong(lockid);    // Lock ID.
     buf.writeByte(durable ? 0x01 : 0x00);  // Whether or not to use the WAL.
 
     buf.writeInt(1);  // Number of families that follow.
-    writeByteArray(buf, kv.family());  // The column family.
+    writeByteArray(buf, family);  // The column family.
 
     buf.writeInt(1);  // Number of "KeyValues" that follow.
-    buf.writeInt(kv.predictSerializedSize());  // Size of the KV that follows.
-    kv.serialize(buf, KeyValue.PUT);
+    buf.writeInt(payloadSize());  // Size of the KV that follows.
+    serializePayload(buf);
     return buf;
   }
 
