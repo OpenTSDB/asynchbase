@@ -75,7 +75,31 @@ public final class PutRequest extends BatchableRpc
                     final byte[] family,
                     final byte[] qualifier,
                     final byte[] value) {
-    this(table, key, family, qualifier, value, RowLock.NO_LOCK);
+    this(table, key, family, qualifier, value,
+         KeyValue.TIMESTAMP_NOW, RowLock.NO_LOCK);
+  }
+
+  /**
+   * Constructor.
+   * <strong>These byte arrays will NOT be copied.</strong>
+   * <p>
+   * Note: If you want to set your own timestamp, use
+   * {@link #PutRequest(byte[], KeyValue)} instead.
+   * @param table The table to edit.
+   * @param key The key of the row to edit in that table.
+   * @param family The column family to edit in that table.
+   * @param qualifier The column qualifier to edit in that family.
+   * @param value The value to store.
+   * @param timestamp The timestamp to set on this edit.
+   * @since 1.2
+   */
+  public PutRequest(final byte[] table,
+                    final byte[] key,
+                    final byte[] family,
+                    final byte[] qualifier,
+                    final byte[] value,
+                    final long timestamp) {
+    this(table, key, family, qualifier, value, timestamp, RowLock.NO_LOCK);
   }
 
   /**
@@ -97,7 +121,33 @@ public final class PutRequest extends BatchableRpc
                     final byte[] qualifier,
                     final byte[] value,
                     final RowLock lock) {
-    this(table, key, family, qualifier, value, lock.id());
+    this(table, key, family, qualifier, value,
+         KeyValue.TIMESTAMP_NOW, lock.id());
+  }
+
+  /**
+   * Constructor.
+   * <strong>These byte arrays will NOT be copied.</strong>
+   * <p>
+   * Note: If you want to set your own timestamp, use
+   * {@link #PutRequest(byte[], KeyValue, RowLock)} instead.
+   * @param table The table to edit.
+   * @param key The key of the row to edit in that table.
+   * @param family The column family to edit in that table.
+   * @param qualifier The column qualifier to edit in that family.
+   * @param value The value to store.
+   * @param timestamp The timestamp to set on this edit.
+   * @param lock An explicit row lock to use with this request.
+   * @since 1.2
+   */
+  public PutRequest(final byte[] table,
+                    final byte[] key,
+                    final byte[] family,
+                    final byte[] qualifier,
+                    final byte[] value,
+                    final long timestamp,
+                    final RowLock lock) {
+    this(table, key, family, qualifier, value, timestamp, lock.id());
   }
 
   /**
@@ -117,7 +167,8 @@ public final class PutRequest extends BatchableRpc
                     final String qualifier,
                     final String value) {
     this(table.getBytes(), key.getBytes(), family.getBytes(),
-         qualifier.getBytes(), value.getBytes(), RowLock.NO_LOCK);
+         qualifier.getBytes(), value.getBytes(),
+         KeyValue.TIMESTAMP_NOW, RowLock.NO_LOCK);
   }
 
   /**
@@ -139,7 +190,8 @@ public final class PutRequest extends BatchableRpc
                     final String value,
                     final RowLock lock) {
     this(table.getBytes(), key.getBytes(), family.getBytes(),
-         qualifier.getBytes(), value.getBytes(), lock.id());
+         qualifier.getBytes(), value.getBytes(),
+         KeyValue.TIMESTAMP_NOW, lock.id());
   }
 
   /**
@@ -182,6 +234,7 @@ public final class PutRequest extends BatchableRpc
                      final byte[] family,
                      final byte[] qualifier,
                      final byte[] value,
+                     final long timestamp,
                      final long lockid) {
     super(PUT, table, key, family, lockid);
     KeyValue.checkFamily(family);
@@ -189,7 +242,7 @@ public final class PutRequest extends BatchableRpc
     KeyValue.checkValue(value);
     this.qualifier = qualifier;
     this.value = value;
-    this.timestamp = KeyValue.TIMESTAMP_NOW;
+    this.timestamp = timestamp;
   }
 
   @Override
