@@ -626,6 +626,8 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
         if (!(resp instanceof MultiAction.Response)) {
           if (resp instanceof BatchableRpc) {  // Single-RPC multi-action?
             return null;  // Yes, nothing to do.  See multiPutToSinglePut.
+          } else if (resp instanceof Exception) {
+            return handleException((Exception) resp);
           }
           throw new InvalidResponseException(MultiAction.Response.class, resp);
         }
@@ -654,12 +656,8 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
         // responsible for retrying.
         return null;
       }
-      public String toString() {
-        return "multi-action response";
-      }
-    };
-    final class MultiActionErrback implements Callback<Object, Exception> {
-      public Object call(final Exception e) {
+
+      private Object handleException(final Exception e) {
         if (!(e instanceof RecoverableException)) {
           for (final BatchableRpc rpc : request.batch()) {
             rpc.callback(e);
@@ -677,12 +675,12 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
         }
         return null;  // We're retrying, so let's call it a success for now.
       }
+
       public String toString() {
-        return "multi-action errback";
+        return "multi-action response";
       }
     };
-    request.getDeferred().addCallbacks(new MultiActionCallback(),
-                                       new MultiActionErrback());
+    request.getDeferred().addBoth(new MultiActionCallback());
   }
 
   /**
