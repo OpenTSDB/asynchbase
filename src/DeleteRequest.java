@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2010, 2011  StumbleUpon, Inc.  All rights reserved.
+ * Copyright (c) 2010-2012  StumbleUpon, Inc.  All rights reserved.
  * This file is part of Async HBase.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -38,7 +38,7 @@ import org.jboss.netty.buffer.ChannelBuffer;
  * <h1>A note on passing {@code String}s in argument</h1>
  * All strings are assumed to use the platform's default charset.
  */
-public final class DeleteRequest extends HBaseRpc
+public final class DeleteRequest extends BatchableRpc
   implements HBaseRpc.HasTable, HBaseRpc.HasKey,
              HBaseRpc.HasFamily, HBaseRpc.HasQualifiers {
 
@@ -46,13 +46,17 @@ public final class DeleteRequest extends HBaseRpc
     'd', 'e', 'l', 'e', 't', 'e'
   };
 
+  /** Code type used for serialized `Delete' objects.  */
+  static final byte CODE = 31;
+
   /** Special value for {@link #qualifiers} when deleting a whole family.  */
   private static final byte[][] DELETE_FAMILY_MARKER =
     new byte[][] { HBaseClient.EMPTY_ARRAY };
 
-  private final byte[] family;     // TODO(tsuna): Handle multiple families?
+  /** Special value for {@link #family} when deleting a whole row.  */
+  static final byte[] WHOLE_ROW = new byte[0];
+
   private final byte[][] qualifiers;
-  private final long lockid;
 
   /**
    * Constructor to delete an entire row.
@@ -218,11 +222,10 @@ public final class DeleteRequest extends HBaseRpc
                         final byte[] family,
                         final byte[][] qualifiers,
                         final long lockid) {
-    super(DELETE, table, key);
+    super(DELETE, table, key, family == null ? WHOLE_ROW : family, lockid);
     if (family != null) {
       KeyValue.checkFamily(family);
     }
-    this.family = family;
 
     if (qualifiers != null) {
       if (family == null) {
@@ -237,11 +240,9 @@ public final class DeleteRequest extends HBaseRpc
       this.qualifiers = qualifiers;
     } else {
       // No specific qualifier to delete: delete the entire family.  Not that
-      // if `family == null', we'll delete and setting this is harmless.
+      // if `family == null', we'll delete the whole row anyway.
       this.qualifiers = DELETE_FAMILY_MARKER;
     }
-
-    this.lockid = lockid;
   }
 
   @Override
@@ -252,11 +253,6 @@ public final class DeleteRequest extends HBaseRpc
   @Override
   public byte[] key() {
     return key;
-  }
-
-  @Override
-  public byte[] family() {
-    return family;
   }
 
   @Override
@@ -271,6 +267,40 @@ public final class DeleteRequest extends HBaseRpc
   // ---------------------- //
   // Package private stuff. //
   // ---------------------- //
+
+  @Override
+  byte version() {
+    // Versions are:
+    //   1: Before 0.92.0.
+    //   2: HBASE-3921 in 0.92.0 added "attributes" at the end.
+    //   3: HBASE-3961 in 0.92.0 allowed skipping the WAL.
+    return 3;  // 3 because we allow skipping the WAL.
+  }
+
+  @Override
+  byte code() {
+    return CODE;
+  }
+
+  @Override
+  int numKeyValues() {
+    return qualifiers.length;
+  }
+
+  @Override
+  void serializePayload(final ChannelBuffer buf) {
+    if (family == null) {
+      return;  // No payload when deleting whole rows.
+    }
+    // Are we deleting a whole family at once or just a bunch of columns?
+    final byte type = (qualifiers == DELETE_FAMILY_MARKER
+                       ? KeyValue.DELETE_FAMILY : KeyValue.DELETE_COLUMN);
+    // Write the KeyValues
+    for (final byte[] qualifier : qualifiers) {
+      KeyValue.serialize(buf, type, Long.MAX_VALUE,
+                         key, family, qualifier, null);
+    }
+  }
 
   /**
    * Predicts a lower bound on the serialized size of this RPC.
@@ -300,11 +330,15 @@ public final class DeleteRequest extends HBaseRpc
     }
     size += family.length;  // The column family.
     size += 4;  // int:  Number of KeyValues for this family.
-    return size + sizeOfKeyValues();
+    return size + payloadSize();
   }
 
   /** Returns the serialized size of all the {@link KeyValue}s in this RPC.  */
-  private int sizeOfKeyValues() {
+  @Override
+  int payloadSize() {
+    if (family == WHOLE_ROW) {
+      return 0;  // No payload when deleting whole rows.
+    }
     int size = 0;
     size += 4;  // int:  Total length of the whole KeyValue.
     size += 4;  // int:  Total length of the key part of the KeyValue.
@@ -332,15 +366,15 @@ public final class DeleteRequest extends HBaseRpc
     writeHBaseByteArray(buf, region.name());
 
     // 2nd param: Delete object.
-    buf.writeByte(31);   // Code for a `Delete' parameter.
-    buf.writeByte(31);   // Code again (see HBASE-2877).
-    buf.writeByte(1);    // Delete#DELETE_VERSION.  Undocumented versioning.
+    buf.writeByte(CODE); // Code for a `Delete' parameter.
+    buf.writeByte(CODE); // Code again (see HBASE-2877).
+    buf.writeByte(1);    // Delete#DELETE_VERSION.  Stick to v1 here for now.
     writeByteArray(buf, key);
     buf.writeLong(Long.MAX_VALUE);  // Maximum timestamp.
     buf.writeLong(lockid);  // Lock ID.
 
     // Families.
-    if (family == null) {
+    if (family == WHOLE_ROW) {
       buf.writeInt(0);  // Number of families that follow.
       return buf;
     }
@@ -349,15 +383,7 @@ public final class DeleteRequest extends HBaseRpc
     // Each family is then written like so:
     writeByteArray(buf, family);  // Column family name.
     buf.writeInt(qualifiers.length);  // How many KeyValues for this family?
-
-    // Are we deleting a whole family at once or just a bunch of columns?
-    final byte type = (qualifiers == DELETE_FAMILY_MARKER
-                       ? KeyValue.DELETE_FAMILY : KeyValue.DELETE_COLUMN);
-    // Write the KeyValues
-    for (final byte[] qualifier : qualifiers) {
-      KeyValue.serialize(buf, type, Long.MAX_VALUE,
-                         key, family, qualifier, null);
-    }
+    serializePayload(buf);
     return buf;
   }
 

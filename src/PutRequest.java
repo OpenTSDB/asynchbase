@@ -43,6 +43,9 @@ public final class PutRequest extends BatchableRpc
 
   private static final byte[] PUT = new byte[] { 'p', 'u', 't' };
 
+  /** Code type used for serialized `Put' objects.  */
+  static final byte CODE = 35;
+
   /**
    * A put with all fields set to a 1-byte array containing a zero.
    * This is useful for loops that need to start with a valid-looking edit.
@@ -280,6 +283,24 @@ public final class PutRequest extends BatchableRpc
   // ---------------------- //
 
   @Override
+  byte version() {
+    // Versions are:
+    //   1: Before 0.92.0.
+    //   2: HBASE-3921 in 0.92.0 added "attributes" at the end.
+    return 2;  // We don't serialize attributes so keep using 1 for now.
+  }
+
+  @Override
+  byte code() {
+    return CODE;
+  }
+
+  @Override
+  int numKeyValues() {
+    return 1;
+  }
+
+  @Override
   int payloadSize() {
     return KeyValue.predictSerializedSize(key, family, qualifier, value);
   }
@@ -336,9 +357,9 @@ public final class PutRequest extends BatchableRpc
     writeHBaseByteArray(buf, region.name());
 
     // 2nd param: Put object
-    buf.writeByte(35);   // Code for a `Put' parameter.
-    buf.writeByte(35);   // Code again (see HBASE-2877).
-    buf.writeByte(1);    // Put#PUT_VERSION.  Undocumented versioning of Put.
+    buf.writeByte(CODE); // Code for a `Put' parameter.
+    buf.writeByte(CODE); // Code again (see HBASE-2877).
+    buf.writeByte(1);    // Put#PUT_VERSION.  Stick to v1 here for now.
     writeByteArray(buf, key);  // The row key.
 
     buf.writeLong(timestamp);  // Timestamp.

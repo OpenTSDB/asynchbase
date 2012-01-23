@@ -137,9 +137,13 @@ final class MultiAction extends HBaseRpc {
       final byte[] region_name = rpc.getRegion().name();
       final boolean new_region = !Bytes.equals(prev.getRegion().name(),
                                                region_name);
-      final boolean new_key = new_region || !Bytes.equals(prev.key, rpc.key);
+      final byte[] family = rpc.family();
+      final boolean new_key = (new_region
+                               || prev.code() != rpc.code()
+                               || !Bytes.equals(prev.key, rpc.key)
+                               || family == DeleteRequest.WHOLE_ROW);
       final boolean new_family = new_key || !Bytes.equals(prev.family(),
-                                                          rpc.family());
+                                                          family);
 
       if (new_region) {
         size += 3;  // vint: region name length (3 bytes => max length = 32768).
@@ -148,10 +152,10 @@ final class MultiAction extends HBaseRpc {
       }
 
       final int key_length = rpc.key.length;
-      final int family_length = rpc.family().length;
 
       if (new_key) {
         if (use_multi) {
+          size += 4;  // int: Number of "attributes" for the last key (none).
           size += 4;  // Index of this `action'.
           size += 3;  // 3 bytes to serialize `null'.
 
@@ -173,9 +177,11 @@ final class MultiAction extends HBaseRpc {
 
       if (new_family) {
         size += 1;  // vint: Family length (guaranteed on 1 byte).
-        size += family_length;  // The family.
+        size += family.length;  // The family.
         size += 4;  // int:  Number of KeyValues that follow.
-        size += 4;  // int:  Total number of bytes for all those KeyValues.
+        if (rpc.code() == PutRequest.CODE) {
+          size += 4;  // int:  Total number of bytes for all those KeyValues.
+        }
       }
 
       size += rpc.payloadSize();
@@ -229,11 +235,16 @@ final class MultiAction extends HBaseRpc {
       final byte[] region_name = rpc.getRegion().name();
       final boolean new_region = !Bytes.equals(prev.getRegion().name(),
                                                region_name);
-      final boolean new_key = new_region || !Bytes.equals(prev.key, rpc.key);
+      final byte[] family = rpc.family();
+      final boolean new_key = (new_region
+                               || prev.code() != rpc.code()
+                               || !Bytes.equals(prev.key, rpc.key)
+                               || family == DeleteRequest.WHOLE_ROW);
       final boolean new_family = new_key || !Bytes.equals(prev.family(),
-                                                          rpc.family());
+                                                          family);
 
       if (new_key && use_multi && nkeys_index > 0) {
+        buf.writeInt(0);  // Number of "attributes" for the last key (none).
         // Trailing useless junk from `Action'.  After serializing its
         // `action' (which implements an interface awesomely named `Row'),
         // HBase adds the index of the `action' as the server will sort
@@ -281,7 +292,7 @@ final class MultiAction extends HBaseRpc {
 
           // Inside the action, serialize a `Put' object.
           buf.writeByte(64);  // Code for a `Row' object.
-          buf.writeByte(35);  // Code for a `Put' object.
+          buf.writeByte(rpc.code());  // Code this object.
         }
 
         nkeys++;
@@ -289,7 +300,7 @@ final class MultiAction extends HBaseRpc {
         // Right now we only support batching puts.  In the future this part
         // of the code will have to change to also want to allow get/deletes.
         // The follow serializes a `Put'.
-        buf.writeByte(1);    // Undocumented versioning of Put.
+        buf.writeByte(rpc.version());  // Undocumented versioning.
         writeByteArray(buf, key);  // The row key.
 
         // Timestamp.  This timestamp is unused, only the KeyValue-level
@@ -303,25 +314,35 @@ final class MultiAction extends HBaseRpc {
         buf.writeInt(0);  // We'll monkey patch this later.
       }
 
-      final byte[] family = rpc.family();
       if (new_family) {
-        nfamilies++;
-        writeByteArray(buf, family);  // The column family.
-
         // Monkey-patch the number and size of edits for the previous family.
         if (nkeys_per_family_index > 0) {
           buf.setInt(nkeys_per_family_index, nkeys_per_family);
+          if (prev.code() == PutRequest.CODE) {
+            buf.setInt(nkeys_per_family_index + 4, nbytes_per_family);
+          }
           nkeys_per_family = 0;
-          buf.setInt(nkeys_per_family_index + 4, nbytes_per_family);
           nbytes_per_family = 0;
         }
+
+        if (family == DeleteRequest.WHOLE_ROW) {
+          prev = rpc;  // Short circuit.  We have no KeyValue to write.
+          continue;    // So loop again directly.
+        }
+
+        nfamilies++;
+        writeByteArray(buf, family);  // The column family.
+
         nkeys_per_family_index = buf.writerIndex();
         // Number of "KeyValues" that follow.
         buf.writeInt(0);  // We'll monkey patch this later.
-        // Total number of bytes taken by those "KeyValues".
-        buf.writeInt(0);  // We'll monkey patch this later.
+        if (rpc.code() == PutRequest.CODE) {
+          // Total number of bytes taken by those "KeyValues".
+          // This is completely useless and only done for `Put'.
+          buf.writeInt(0);  // We'll monkey patch this later.
+        }
       }
-      nkeys_per_family++;
+      nkeys_per_family += rpc.numKeyValues();
       nrpcs_per_key++;
 
       nbytes_per_family += rpc.payloadSize();
@@ -330,6 +351,7 @@ final class MultiAction extends HBaseRpc {
     }  // Yay, we made it!
 
     if (use_multi) {
+      buf.writeInt(0);  // Number of "attributes" for the last key (none).
       // Trailing junk for the last `Action'.  See comment above.
       buf.writeInt(nrpcs_per_key);
       writeHBaseNull(buf);  // Useless.
@@ -406,6 +428,11 @@ final class MultiAction extends HBaseRpc {
     public int compare(final BatchableRpc a, final BatchableRpc b) {
       int d;
       if ((d = Bytes.memcmp(a.getRegion().name(), b.getRegion().name())) != 0) {
+        return d;
+      } else if ((d = a.code() - b.code()) != 0) {  // Sort by code before key.
+        // Note that DeleteRequest.code() < PutRequest.code() and this matters
+        // as the RegionServer processes deletes before puts, and we want to
+        // send RPCs in the same order as they will be processed.
         return d;
       } else if ((d = Bytes.memcmp(a.key, b.key)) != 0) {
         return d;

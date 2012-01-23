@@ -585,7 +585,7 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
    * elapsed yet.
    * @param request An edit to sent to HBase.
    */
-  private void bufferEdit(final PutRequest request) {
+  private void bufferEdit(final BatchableRpc request) {
     MultiAction batch;
     boolean schedule_flush = false;
 
@@ -625,7 +625,7 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
       public Object call(final Object resp) {
         if (!(resp instanceof MultiAction.Response)) {
           if (resp instanceof BatchableRpc) {  // Single-RPC multi-action?
-            return null;  // Yes, nothing to do.  See multiPutToSinglePut.
+            return null;  // Yes, nothing to do.  See multiActionToSingleAction.
           } else if (resp instanceof Exception) {
             return handleException((Exception) resp);
           }
@@ -669,9 +669,7 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
                     + request.size() + " RPCs individually.", e);
         }
         for (final BatchableRpc rpc : request.batch()) {
-          if (rpc instanceof PutRequest) {
-            retryEdit(rpc, (RecoverableException) e);
-          }
+          retryEdit(rpc, (RecoverableException) e);
         }
         return null;  // We're retrying, so let's call it a success for now.
       }
@@ -705,10 +703,10 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
    * Creates callbacks to handle a single-put and adds them to the request.
    * @param edit The edit for which we must handle the response.
    */
-  private void addSingleEditCallbacks(final PutRequest edit) {
+  private void addSingleEditCallbacks(final BatchableRpc edit) {
     // There's no callback to add on a single put request, because
     // the remote method returns `void', so we only need an errback.
-    final class PutErrback implements Callback<Object, Exception> {
+    final class SingleEditErrback implements Callback<Object, Exception> {
       public Object call(final Exception e) {
         if (!(e instanceof RecoverableException)) {
           return e;  // Can't recover from this error, let it propagate.
@@ -716,10 +714,10 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
         return retryEdit(edit, (RecoverableException) e);
       }
       public String toString() {
-        return "put errback";
+        return "single-edit errback";
       }
     };
-    edit.getDeferred().addErrback(new PutErrback());
+    edit.getDeferred().addErrback(new SingleEditErrback());
   }
 
   /**
@@ -733,8 +731,10 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
    */
   void sendRpc(HBaseRpc rpc) {
     if (chan != null) {
-      if (rpc instanceof PutRequest) {
-        final PutRequest edit = (PutRequest) rpc;
+      if (rpc instanceof BatchableRpc
+          && (server_version >= SERVER_VERSION_092_OR_ABOVE  // Before 0.92,
+              || rpc instanceof PutRequest)) {  // we could only batch "put".
+        final BatchableRpc edit = (BatchableRpc) rpc;
         if (edit.canBuffer() && hbase_client.getFlushInterval() > 0) {
           bufferEdit(edit);
           return;
@@ -744,7 +744,7 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
         // Transform single-edit multi-put into single-put.
         final MultiAction batch = (MultiAction) rpc;
         if (batch.size() == 1) {
-          rpc = multiPutToSinglePut(batch);
+          rpc = multiActionToSingleAction(batch);
         }
       }
       final ChannelBuffer serialized = encode(rpc);
@@ -795,8 +795,8 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
    * Transforms the given single-edit multi-put into a regular single-put.
    * @param multiput The single-edit multi-put to transform.
    */
-  private BatchableRpc multiPutToSinglePut(final MultiAction batch) {
-    final PutRequest rpc = (PutRequest) batch.batch().get(0);
+  private BatchableRpc multiActionToSingleAction(final MultiAction batch) {
+    final BatchableRpc rpc = batch.batch().get(0);
     addSingleEditCallbacks(rpc);
     // Once the single-edit is done, we still need to make sure we're
     // going to run the callback chain of the MultiAction.
