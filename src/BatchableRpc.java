@@ -44,6 +44,9 @@ abstract class BatchableRpc extends HBaseRpc implements HBaseRpc.HasFamily {
   /** Family affected by this RPC.  */
   /*protected*/ final byte[] family;
 
+  /** The timestamp to use for {@link KeyValue}s of this RPC.  */
+  /*protected*/ final long timestamp;
+
   /**
    * Explicit row lock to use, if any.
    * @see RowLock
@@ -69,13 +72,15 @@ abstract class BatchableRpc extends HBaseRpc implements HBaseRpc.HasFamily {
    * @param row The name of the row this RPC is for.
    * @param family The column family to edit in that table.  Subclass must
    * validate, this class doesn't perform any validation on the family.
+   * @param timestamp The timestamp to use for {@link KeyValue}s of this RPC.
    * @param lockid Explicit row lock to use, or {@link RowLock#NO_LOCK}.
    */
   BatchableRpc(final byte[] method, final byte[] table,
                final byte[] key, final byte[] family,
-               final long lockid) {
+               final long timestamp, final long lockid) {
     super(method, table, key);
     this.family = family;
+    this.timestamp = timestamp;
     this.lockid = lockid;
   }
 

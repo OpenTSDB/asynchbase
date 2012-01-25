@@ -303,9 +303,11 @@ final class MultiAction extends HBaseRpc {
         buf.writeByte(rpc.version());  // Undocumented versioning.
         writeByteArray(buf, key);  // The row key.
 
-        // Timestamp.  This timestamp is unused, only the KeyValue-level
-        // timestamp is used.  So we set it to something arbitrary.
-        buf.writeLong(Long.MAX_VALUE);
+        // This timestamp is unused, only the KeyValue-level timestamp is
+        // used, except in one case: whole-row deletes.  In that case only,
+        // this timestamp is used by the RegionServer to create per-family
+        // deletes for that row.  See HRegion.prepareDelete() for more info.
+        buf.writeLong(rpc.timestamp);  // Timestamp.
 
         buf.writeLong(RowLock.NO_LOCK);    // Lock ID.
         buf.writeByte(rpc.durable ? 0x01 : 0x00);  // Use the WAL?

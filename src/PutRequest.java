@@ -36,6 +36,13 @@ import org.jboss.netty.buffer.ChannelBuffer;
  * For more info, please refer to the documentation of {@link HBaseRpc}.
  * <h1>A note on passing {@code String}s in argument</h1>
  * All strings are assumed to use the platform's default charset.
+ * <h1>A note on passing {@code timestamp}s in argument</h1>
+ * Irrespective of the order in which you send RPCs, a {@code PutRequest}
+ * that is created with a specific timestamp in argument may be inserted
+ * "before" existing values in HBase that were previously stored with a
+ * timestamp strictly less than that of this {@code PutRequest}.  It is
+ * strongly recommended to use real UNIX timestamps in milliseconds when
+ * setting them manually, e.g. from {@link System#currentTimeMillis}.
  */
 public final class PutRequest extends BatchableRpc
   implements HBaseRpc.HasTable, HBaseRpc.HasKey, HBaseRpc.HasFamily,
@@ -59,7 +66,6 @@ public final class PutRequest extends BatchableRpc
 
   private final byte[] qualifier;
   private final byte[] value;
-  private final long timestamp;
 
   /**
    * Constructor.
@@ -225,10 +231,9 @@ public final class PutRequest extends BatchableRpc
   private PutRequest(final byte[] table,
                      final KeyValue kv,
                      final long lockid) {
-    super(PUT, table, kv.key(), kv.family(), lockid);
+    super(PUT, table, kv.key(), kv.family(), kv.timestamp(), lockid);
     this.qualifier = kv.qualifier();
     this.value = kv.value();
-    this.timestamp = kv.timestamp();
   }
 
   /** Private constructor.  */
@@ -239,13 +244,12 @@ public final class PutRequest extends BatchableRpc
                      final byte[] value,
                      final long timestamp,
                      final long lockid) {
-    super(PUT, table, key, family, lockid);
+    super(PUT, table, key, family, timestamp, lockid);
     KeyValue.checkFamily(family);
     KeyValue.checkQualifier(qualifier);
     KeyValue.checkValue(value);
     this.qualifier = qualifier;
     this.value = value;
-    this.timestamp = timestamp;
   }
 
   @Override
