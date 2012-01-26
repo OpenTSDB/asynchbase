@@ -287,11 +287,15 @@ public final class PutRequest extends BatchableRpc
   // ---------------------- //
 
   @Override
-  byte version() {
+  byte version(final byte server_version) {
     // Versions are:
-    //   1: Before 0.92.0.
+    //   1: Before 0.92.0, if we're serializing a `multiPut' RPC.
     //   2: HBASE-3921 in 0.92.0 added "attributes" at the end.
-    return 2;  // We don't serialize attributes so keep using 1 for now.
+    if (server_version >= RegionClient.SERVER_VERSION_092_OR_ABOVE) {
+      return 2;
+    } else {
+      return 1;
+    }
   }
 
   @Override

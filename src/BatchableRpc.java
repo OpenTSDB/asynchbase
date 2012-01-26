@@ -131,8 +131,9 @@ abstract class BatchableRpc extends HBaseRpc implements HBaseRpc.HasFamily {
   /**
    * Serialization version for this RPC.
    * Only used when this RPC is serialized as part of a {@link MultiAction}.
+   * @param server_version What RPC protocol version the server is running.
    */
-  abstract byte version();
+  abstract byte version(final byte server_version);
 
   /** HBase code type for this kind of serialized RPC.  */
   abstract byte code();

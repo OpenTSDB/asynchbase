@@ -300,7 +300,7 @@ final class MultiAction extends HBaseRpc {
         // Right now we only support batching puts.  In the future this part
         // of the code will have to change to also want to allow get/deletes.
         // The follow serializes a `Put'.
-        buf.writeByte(rpc.version());  // Undocumented versioning.
+        buf.writeByte(rpc.version(server_version)); // Undocumented versioning.
         writeByteArray(buf, key);  // The row key.
 
         // This timestamp is unused, only the KeyValue-level timestamp is

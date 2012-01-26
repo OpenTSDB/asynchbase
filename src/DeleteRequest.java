@@ -401,9 +401,9 @@ public final class DeleteRequest extends BatchableRpc
   // ---------------------- //
 
   @Override
-  byte version() {
+  byte version(final byte unused_server_version) {
     // Versions are:
-    //   1: Before 0.92.0.
+    //   1: Before 0.92.0.  This method only gets called for 0.92 and above.
     //   2: HBASE-3921 in 0.92.0 added "attributes" at the end.
     //   3: HBASE-3961 in 0.92.0 allowed skipping the WAL.
     return 3;  // 3 because we allow skipping the WAL.
