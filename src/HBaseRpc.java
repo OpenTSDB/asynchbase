@@ -148,7 +148,7 @@ public abstract class HBaseRpc {
    * 4 byte integer value is first written in order to specify how many bytes
    * are in the request (excluding the first 4 bytes themselves).  The size -1
    * is special.  The client uses it to send a "ping" to the server at regular
-   * intervals, and the server specifically ignores any RPC with this ID.  We
+   * intervals, and the server specifically ignores any RPC with size -1.  We
    * don't do this in this client, because it's mostly useless, and we rely on
    * TCP keepalive instead.
    *
@@ -210,7 +210,7 @@ public abstract class HBaseRpc {
    * strings (2-byte length, followed by a UTF-8 string).  The first string is
    * the name of the class of the exception and the second is the message of
    * the exception (which typically includes some of the server-side stack
-   * trace).  Note that the response is NOT framed, so it's not easy to tell
+   * trace).  Note that if the response is NOT framed, it's not easy to tell
    * ahead of time how many bytes to expect or where the next response starts.
    *
    * If the RPC was successful, the remaining of the payload is serialized
@@ -275,12 +275,7 @@ public abstract class HBaseRpc {
    * Notice that this method is package-private, so only classes within this
    * package can use this as a base class.
    *
-   * @param server_version The RPC protocol version of the server this RPC is
-   * going to.  If the version of the server is unknown, this will be -1.  If
-   * this RPC cares a lot about the version of the server (due to backwards
-   * incompatible changes in the RPC serialization), the concrete class should
-   * override {@link #versionSensitive} to make sure it doesn't get -1, as the
-   * version is lazily fetched.
+   * @param server_version What RPC protocol version the server is running.
    */
   abstract ChannelBuffer serialize(byte server_version);
 
@@ -429,16 +424,6 @@ public abstract class HBaseRpc {
   /** Checks whether or not this RPC has a Deferred without creating one.  */
   final boolean hasDeferred() {
     return deferred != null;
-  }
-
-  /**
-   * Is the encoding of this RPC sensitive to the RPC protocol version?.
-   * Override this method to return {@code true} in order to guarantee that
-   * the version of the remote server this RPC is going to will be known by
-   * the time this RPC gets serialized.
-   */
-  boolean versionSensitive() {
-    return false;
   }
 
   public String toString() {

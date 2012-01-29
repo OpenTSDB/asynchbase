@@ -191,10 +191,6 @@ public final class GetRequest extends HBaseRpc
   // Package private stuff. //
   // ---------------------- //
 
-  boolean versionSensitive() {
-    return true;  // Sad.  HBASE-3174 broke backwards compatibilty!@#$%^  :(
-  }
-
   /**
    * Predicts a lower bound on the serialized size of this RPC.
    * This is to avoid using a dynamic buffer, to avoid re-sizing the buffer.
