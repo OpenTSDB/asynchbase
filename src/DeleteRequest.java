@@ -199,7 +199,7 @@ public final class DeleteRequest extends BatchableRpc
   }
 
   /**
-   * Constructor to delete a specific cell.
+   * Constructor to delete a specific cell with an explicit row lock.
    * <strong>These byte arrays will NOT be copied.</strong>
    * @param table The table to edit.
    * @param key The key of the row to edit in that table.
@@ -219,7 +219,7 @@ public final class DeleteRequest extends BatchableRpc
   }
 
   /**
-   * Constructor to delete a specific cell.
+   * Constructor to delete a specific cell with an explicit row lock.
    * <strong>These byte arrays will NOT be copied.</strong>
    * @param table The table to edit.
    * @param key The key of the row to edit in that table.
@@ -262,7 +262,7 @@ public final class DeleteRequest extends BatchableRpc
   }
 
   /**
-   * Constructor to delete a specific number of cells in a row.
+   * Constructor to delete a specific number of cells in a row with a row lock.
    * <strong>These byte arrays will NOT be copied.</strong>
    * @param table The table to edit.
    * @param key The key of the row to edit in that table.
@@ -328,7 +328,7 @@ public final class DeleteRequest extends BatchableRpc
   }
 
   /**
-   * Constructor to delete a specific cell.
+   * Constructor to delete a specific cell with an explicit row lock.
    * @param table The table to edit.
    * @param key The key of the row to edit in that table.
    * @param family The column family to edit in that table.
@@ -345,6 +345,35 @@ public final class DeleteRequest extends BatchableRpc
     this(table.getBytes(), key.getBytes(), family.getBytes(),
          qualifier == null ? null : new byte[][] { qualifier.getBytes() },
          KeyValue.TIMESTAMP_NOW, lock.id());
+  }
+
+  /**
+   * Constructor to delete a specific cell.
+   * @param table The table to edit.
+   * @param kv The specific {@link KeyValue} to delete.  Note that if this
+   * {@link KeyValue} specifies a timestamp, then this specific timestamp only
+   * will be deleted.
+   * @since 1.2
+   */
+  public DeleteRequest(final byte[] table, final KeyValue kv) {
+    this(table, kv.key(), kv.family(), new byte[][] { kv.qualifier() },
+         kv.timestamp(), RowLock.NO_LOCK);
+  }
+
+  /**
+   * Constructor to delete a specific cell with an explicit row lock.
+   * @param table The table to edit.
+   * @param kv The specific {@link KeyValue} to delete.  Note that if this
+   * {@link KeyValue} specifies a timestamp, then this specific timestamp only
+   * will be deleted.
+   * @param lock An explicit row lock to use with this request.
+   * @since 1.2
+   */
+  public DeleteRequest(final byte[] table,
+                       final KeyValue kv,
+                       final RowLock lock) {
+    this(table, kv.key(), kv.family(), new byte[][] { kv.qualifier() },
+         kv.timestamp(), lock.id());
   }
 
   /** Private constructor.  */
