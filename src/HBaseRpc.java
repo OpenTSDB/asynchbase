@@ -127,6 +127,15 @@ public abstract class HBaseRpc {
     public byte[] value();
   }
 
+  /**
+   * An RPC from which you can get a timestamp.
+   * @since 1.2
+   */
+  public interface HasTimestamp {
+    /** Returns the strictly positive timestamp contained in this RPC.  */
+    public long timestamp();
+  }
+
   /*
    * This class, although it's part of the public API, is mostly here to make
    * it easier for this library to manipulate the HBase RPC protocol.

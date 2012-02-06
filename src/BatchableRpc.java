@@ -34,7 +34,8 @@ import org.jboss.netty.buffer.ChannelBuffer;
  * This class is internal only and doesn't provide any user-facing API other
  * than guaranteeing that the RPC has a family.
  */
-abstract class BatchableRpc extends HBaseRpc implements HBaseRpc.HasFamily {
+abstract class BatchableRpc extends HBaseRpc
+  implements HBaseRpc.HasFamily, HBaseRpc.HasTimestamp {
 
   // Attributes should have `protected' visibility, but doing so exposes
   // them as part of the public API and in Javadoc, which we don't want.
@@ -115,6 +116,11 @@ abstract class BatchableRpc extends HBaseRpc implements HBaseRpc.HasFamily {
   @Override
   public final byte[] family() {
     return family;
+  }
+
+  @Override
+  public final long timestamp() {
+    return timestamp;
   }
 
   // ---------------------- //
