@@ -941,7 +941,6 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
                               final ExceptionEvent event) {
     final Throwable e = event.getCause();
     final Channel c = event.getChannel();
-    final SocketAddress remote = c.getRemoteAddress();
 
     if (e instanceof RejectedExecutionException) {
       LOG.warn("RPC rejected by the executor,"

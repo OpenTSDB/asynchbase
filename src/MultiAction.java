@@ -558,7 +558,6 @@ final class MultiAction extends HBaseRpc {
     final int nrpcs = batch.size();
     final Object[] resps = new Object[nrpcs];
 
-    BatchableRpc prev = PutRequest.EMPTY_PUT;
     int n = 0;  // Index in `batch'.
     for (int i = 0; i < nregions; i++) {
       final byte[] region_name = HBaseRpc.readByteArray(buf);

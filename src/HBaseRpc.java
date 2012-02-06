@@ -442,7 +442,6 @@ public abstract class HBaseRpc {
       + 6 + (key == null ? 4 : key.length * 2)      // Assumption: binary => *2
       + 9 + (region == null ? 4 : region.stringSizeHint())
       + 10 + 1 + 1);
-    final int c = buf.capacity();
     buf.append("HBaseRpc(method=");
     Bytes.pretty(buf, method);
     buf.append(", table=");
