@@ -47,9 +47,6 @@ import org.slf4j.LoggerFactory;
  * one instance may also unexpectedly affect others.
  */
 public final class KeyValue implements Comparable<KeyValue> {
-  /*
-   * We don't support versions for simplicity, but this can be added.
-   */
 
   /**
    * Timestamp value to let the server set the timestamp at processing time.
@@ -90,6 +87,7 @@ public final class KeyValue implements Comparable<KeyValue> {
    * @param value The value, the contents of the cell.
    * @throws IllegalArgumentException if any argument is invalid (e.g. array
    * size is too long) or if the timestamp is negative.
+   * @since 1.2
    */
   public KeyValue(final byte[] key,
                   final byte[] family, final byte[] qualifier,

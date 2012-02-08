@@ -37,12 +37,24 @@ import org.jboss.netty.buffer.ChannelBuffer;
  * <h1>A note on passing {@code String}s in argument</h1>
  * All strings are assumed to use the platform's default charset.
  * <h1>A note on passing {@code timestamp}s in argument</h1>
- * Irrespective of the order in which you send RPCs, a {@code PutRequest}
- * that is created with a specific timestamp in argument may be inserted
- * "before" existing values in HBase that were previously stored with a
- * timestamp strictly less than that of this {@code PutRequest}.  It is
+ * HBase orders all the writes based on timestamps from {@code PutRequest}
+ * irrespective of the actual order in which they're received or stored by
+ * a RegionServer.  In other words, if you send a first {@code PutRequest}
+ * with timestamp T, and then later send another one for the same table,
+ * key, family and qualifier, but with timestamp T - 1, then the second
+ * write will look like it was applied before the first one when you read
+ * this cell back from HBase.  When manually setting timestamps, it is thus
  * strongly recommended to use real UNIX timestamps in milliseconds when
  * setting them manually, e.g. from {@link System#currentTimeMillis}.
+ * <p>
+ * If you want to let HBase apply a timestamp on a write at the time it's
+ * applied within the RegionServer, then use {@link KeyValue#TIMESTAMP_NOW}
+ * as a timestamp.  Note however that this has a subtle consequence: if a
+ * write succeeds from the server's point of view, but fails from the client's
+ * point of view (maybe because the client got disconnected from the server
+ * before the server could acknowledge the write), then if the client retries
+ * the write it will create another version of the cell with a different
+ * timestamp.
  */
 public final class PutRequest extends BatchableRpc
   implements HBaseRpc.HasTable, HBaseRpc.HasKey, HBaseRpc.HasFamily,
@@ -68,11 +80,13 @@ public final class PutRequest extends BatchableRpc
   private final byte[] value;
 
   /**
-   * Constructor.
+   * Constructor using current time.
    * <strong>These byte arrays will NOT be copied.</strong>
    * <p>
    * Note: If you want to set your own timestamp, use
-   * {@link #PutRequest(byte[], KeyValue)} instead.
+   * {@link #PutRequest(byte[], byte[], byte[], byte[], byte[], long)}
+   * instead.  This constructor will use {@link System#currentTimeMillis}
+   * at the time of construction to timestamp the request.
    * @param table The table to edit.
    * @param key The key of the row to edit in that table.
    * @param family The column family to edit in that table.
@@ -89,11 +103,8 @@ public final class PutRequest extends BatchableRpc
   }
 
   /**
-   * Constructor.
+   * Constructor for a specific timestamp.
    * <strong>These byte arrays will NOT be copied.</strong>
-   * <p>
-   * Note: If you want to set your own timestamp, use
-   * {@link #PutRequest(byte[], KeyValue)} instead.
    * @param table The table to edit.
    * @param key The key of the row to edit in that table.
    * @param family The column family to edit in that table.
@@ -112,11 +123,13 @@ public final class PutRequest extends BatchableRpc
   }
 
   /**
-   * Constructor.
+   * Constructor using an explicit row lock.
    * <strong>These byte arrays will NOT be copied.</strong>
    * <p>
    * Note: If you want to set your own timestamp, use
-   * {@link #PutRequest(byte[], KeyValue, RowLock)} instead.
+   * {@link #PutRequest(byte[], byte[], byte[], byte[], byte[], long, RowLock)}
+   * instead.  This constructor will use {@link System#currentTimeMillis}
+   * at the time of construction to timestamp the request.
    * @param table The table to edit.
    * @param key The key of the row to edit in that table.
    * @param family The column family to edit in that table.
@@ -135,11 +148,8 @@ public final class PutRequest extends BatchableRpc
   }
 
   /**
-   * Constructor.
+   * Constructor using current time and an explicit row lock.
    * <strong>These byte arrays will NOT be copied.</strong>
-   * <p>
-   * Note: If you want to set your own timestamp, use
-   * {@link #PutRequest(byte[], KeyValue, RowLock)} instead.
    * @param table The table to edit.
    * @param key The key of the row to edit in that table.
    * @param family The column family to edit in that table.
@@ -160,10 +170,12 @@ public final class PutRequest extends BatchableRpc
   }
 
   /**
-   * Constructor.
+   * Convenience constructor from strings (higher overhead).
    * <p>
    * Note: If you want to set your own timestamp, use
-   * {@link #PutRequest(byte[], KeyValue)} instead.
+   * {@link #PutRequest(byte[], byte[], byte[], byte[], byte[], long)}
+   * instead.  This constructor will use {@link System#currentTimeMillis}
+   * at the time of construction to timestamp the request.
    * @param table The table to edit.
    * @param key The key of the row to edit in that table.
    * @param family The column family to edit in that table.
@@ -181,10 +193,12 @@ public final class PutRequest extends BatchableRpc
   }
 
   /**
-   * Constructor.
+   * Convenience constructor with explicit row lock (higher overhead).
    * <p>
    * Note: If you want to set your own timestamp, use
-   * {@link #PutRequest(byte[], KeyValue, RowLock)} instead.
+   * {@link #PutRequest(byte[], byte[], byte[], byte[], byte[], long, RowLock)}
+   * instead.  This constructor will use {@link System#currentTimeMillis}
+   * at the time of construction to timestamp the request.
    * @param table The table to edit.
    * @param key The key of the row to edit in that table.
    * @param family The column family to edit in that table.
@@ -204,7 +218,7 @@ public final class PutRequest extends BatchableRpc
   }
 
   /**
-   * Constructor.
+   * Constructor from a {@link KeyValue}.
    * @param table The table to edit.
    * @param kv The {@link KeyValue} to store.
    * @since 1.1
@@ -215,7 +229,7 @@ public final class PutRequest extends BatchableRpc
   }
 
   /**
-   * Constructor.
+   * Constructor from a {@link KeyValue} with an explicit row lock.
    * @param table The table to edit.
    * @param kv The {@link KeyValue} to store.
    * @param lock An explicit row lock to use with this request.

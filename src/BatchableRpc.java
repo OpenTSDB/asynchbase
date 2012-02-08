@@ -32,7 +32,7 @@ import org.jboss.netty.buffer.ChannelBuffer;
  * An intermediate abstract class for all RPC requests that can be batched.
  * <p>
  * This class is internal only and doesn't provide any user-facing API other
- * than guaranteeing that the RPC has a family.
+ * than guaranteeing that the RPC has a family and a timestamp.
  */
 abstract class BatchableRpc extends HBaseRpc
   implements HBaseRpc.HasFamily, HBaseRpc.HasTimestamp {
