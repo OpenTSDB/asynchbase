@@ -174,25 +174,6 @@ import com.stumbleupon.async.Deferred;
  */
 public final class HBaseClient {
   /*
-   * Internal implementation documentation
-   * -------------------------------------
-   *
-   * This class is the heart of the HBase client.  Being an HBase client
-   * essentially boils down to keeping track of where regions are and
-   * sending RPCs to the right RegionServer.  RegionServers don't know
-   * much about tables, they only care about regions.  In order to be
-   * efficient (read: usable), a good HBase client *must* cache where
-   * each region is found to be (until this knowledge is invalidated).
-   *
-   * As the user of this class uses HBaseClient with different tables and
-   * different rows, this HBaseClient will slowly build a local cached copy
-   * of the -ROOT- and .META. tables.  It's like for virtual memory: the
-   * first time you access a page, there's a TLB miss, and you need to go
-   * through (typically) a 2-layer page table to find the actual address,
-   * which is then cached in the TLB before the faulty instruction gets
-   * restarted.  Well, we do pretty much the same thing here, except at
-   * an abstraction level that's a bazillion light years away from the TLB.
-   *
    * TODO(tsuna): Address the following.
    *
    * - Properly handle disconnects.
@@ -200,17 +181,7 @@ public final class HBaseClient {
    *      network blip.
    *    - If the -ROOT- region is unavailable when we start, we should
    *      put a watch in ZK instead of polling it every second.
-   * - Use a global Timer (Netty's HashedWheelTimer is good) to handle all
-   *   the timed tasks.
-   *     - Exponential backoff for things like reconnecting, retrying to
-   *       talk to ZK to find the -ROOT- region and such.
-   *     - Handling RPC timeouts.
-   * - Proper retry logic in various places:
-   *     - Retry to find -ROOT- when -ROOT- is momentarily dead.
-   *     - Don't retry to find a region forever, if there's a hole in .META.
-   *       we'll simply never find that region.
-   *     - I don't think NSREs are properly handled everywhere, e.g. when
-   *       opening a scanner.
+   * - Handling RPC timeouts.
    * - Stats:
    *     - QPS per RPC type.
    *     - Latency histogram per RPC type (requires open-sourcing the SU Java
@@ -243,7 +214,7 @@ public final class HBaseClient {
    * other classes in this package.
    * TODO(tsuna): Get it through the ctor to share it with others.
    */
-  final Timer timer = new HashedWheelTimer(20, MILLISECONDS);
+  final HashedWheelTimer timer = new HashedWheelTimer(20, MILLISECONDS);
 
   /** Up to how many milliseconds can we buffer an edit on the client side.  */
   private volatile short flush_interval = 1000;  // ms
@@ -523,6 +494,23 @@ public final class HBaseClient {
     } finally {
       this.flush_interval = flush_interval;
     }
+  }
+
+  /**
+   * Returns the timer used by this client.
+   * <p>
+   * All timeouts, retries and other things that need to "sleep
+   * asynchronously" use this timer.  This method is provided so
+   * that you can also schedule your own timeouts using this timer,
+   * if you wish to share this client's timer instead of creating
+   * your own.
+   * <p>
+   * The precision of this timer is implementation-defined but is
+   * guaranteed to be no greater than 20ms.
+   * @since 1.2
+   */
+  public Timer getTimer() {
+    return timer;
   }
 
   /**

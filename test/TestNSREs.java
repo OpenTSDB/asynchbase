@@ -33,8 +33,8 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentSkipListMap;
 import java.util.concurrent.TimeUnit;
 
+import org.jboss.netty.util.HashedWheelTimer;
 import org.jboss.netty.util.Timeout;
-import org.jboss.netty.util.Timer;
 import org.jboss.netty.util.TimerTask;
 
 import com.stumbleupon.async.Deferred;
@@ -332,7 +332,7 @@ final class TestNSREs {
    * A fake {@link Timer} implementation that fires up tasks immediately.
    * Tasks are called immediately from the current thread.
    */
-  static final class FakeTimer implements Timer {
+  static final class FakeTimer extends HashedWheelTimer {
     @Override
     public Timeout newTimeout(final TimerTask task,
                               final long delay,
