@@ -123,7 +123,6 @@ final class Test {
     System.out.println("Starting shutdown...");
     LOG.debug("Shutdown returned " + client.shutdown().joinUninterruptibly());
     System.out.println("Exiting...");
-    System.exit(0);
   }
 
   private static interface Cmd {

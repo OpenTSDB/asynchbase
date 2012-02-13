@@ -390,7 +390,13 @@ public final class HBaseClient {
    * -ROOT- region.
    */
   public HBaseClient(final String quorum_spec, final String base_path) {
-    this(quorum_spec, base_path, Executors.newCachedThreadPool());
+    this(quorum_spec, base_path, defaultChannelFactory());
+  }
+
+  /** Creates a default channel factory in case we haven't been given one.  */
+  private static NioClientSocketChannelFactory defaultChannelFactory() {
+    final Executor executor = Executors.newCachedThreadPool();
+    return new NioClientSocketChannelFactory(executor, executor);
   }
 
   /**
