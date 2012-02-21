@@ -359,10 +359,15 @@ final class MultiAction extends HBaseRpc {
       writeHBaseNull(buf);  // Useless.
     }
 
-    // Monkey-patch everything for the last set of edits.
-    buf.setInt(nkeys_per_family_index, nkeys_per_family);
-    if (prev.code() == PutRequest.CODE) {
-      buf.setInt(nkeys_per_family_index + 4, nbytes_per_family);
+    // Note: the only case where nkeys_per_family_index remained -1 throughout
+    // this whole ordeal is where we didn't have any KV to serialize because
+    // every RPC was a `DeleteRequest.WHOLE_ROW'.
+    if (nkeys_per_family_index > 0) {
+      // Monkey-patch everything for the last set of edits.
+      buf.setInt(nkeys_per_family_index, nkeys_per_family);
+      if (prev.code() == PutRequest.CODE) {
+        buf.setInt(nkeys_per_family_index + 4, nbytes_per_family);
+      }
     }
     buf.setInt(nfamilies_index, nfamilies);
     buf.setInt(nkeys_index, nkeys);
