@@ -1069,14 +1069,15 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
     /**
      * Handles a KeyValue.
      */
-    protected void handle(final KeyValue kv) {
+    protected boolean keep(final KeyValue kv) {
       try {
         if (rpc.invokeFilter(kv) == null) {
-          return;
+          return false;
         }
       } catch (Throwable t) {
         throwable = t;
       }
+      return true;
     }
 
 
@@ -1140,8 +1141,10 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
      * whether to include it or not.
      */
     protected void handle(final KeyValue kv) {
-      // do the callback if there is one
-      super.handle(kv);
+      // run the filter
+      if (!keep(kv)) {
+        return;
+      }
 
       if (values == null) {
         values = new ArrayList<KeyValue>(10);
@@ -1222,8 +1225,10 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
      * Handles a new KeyValue by adding it to the current row.
      */
     protected void handle(final KeyValue kv) {
-      // do the callback if there is one
-      super.handle(kv);
+      // run the filter
+      if (!keep(kv)) {
+        return;
+      }
 
       if (rowPending) {
         if (values == null) {
