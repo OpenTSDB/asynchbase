@@ -1,6 +1,6 @@
 HBase Async - User visible changes.
 
-* Version 1.2.0 (2012-??-??) [???????]
+* Version 1.2.0 (2012-02-21) [a7ae238]
 
 Noteworthy changes:
   - Add support for HBase 0.92, as the on-wire RPC format underwent
@@ -17,6 +17,9 @@ New public APIs:
   - KeyValue now supports timestamps.
   - HBaseClient now accepts a custom socket factory or executor, which can
     be used to share an existing thread pool instead of having its own.
+  - The Netty Timer used by asynchbase is now available through an API, so
+    that code dependent on asynchbase can re-use the existing Timer thread
+    instead of having to create its own.
 
 
 * Version 1.1.0 (2011-12-22) [1272a9e]
