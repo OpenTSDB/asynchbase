@@ -1739,7 +1739,8 @@ public final class HBaseClient {
         }
         if (reject) {
           rpc.callback(new PleaseThrottleException(size + " RPCs waiting on "
-            + Bytes.pretty(region_name) + " to come back online", e, rpc));
+            + Bytes.pretty(region_name) + " to come back online", e, rpc,
+            exists_rpc.getDeferred()));
         }
         return;  // This NSRE is already known and being handled.
       }
