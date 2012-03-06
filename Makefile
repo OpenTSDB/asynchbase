@@ -31,14 +31,14 @@ include third_party/include.mk
 JAVA := java
 PACKAGE_BUGREPORT := opentsdb@googlegroups.com
 
-top_builddir = build
-package = org.hbase.async
-spec_title = Asynchronous HBase Client
-spec_vendor = StumbleUpon, Inc.
+top_builddir := build
+package := org.hbase.async
+spec_title := Asynchronous HBase Client
+spec_vendor := StumbleUpon, Inc.
 # Semantic Versioning (see http://semver.org/).
-spec_version = 1.2.1-SNAPSHOT
+spec_version := 1.2.1-SNAPSHOT
 jar := $(top_builddir)/asynchbase-$(spec_version).jar
-asynchbase_SOURCES = \
+asynchbase_SOURCES := \
 	src/AtomicIncrementRequest.java	\
 	src/BatchableRpc.java	\
 	src/BrokenMetaException.java	\
@@ -78,8 +78,8 @@ asynchbase_LIBADD := \
 	$(ZOOKEEPER)	\
 	$(SUASYNC)	\
 
-test_SOURCES = test/Test.java
-unittest_SRC = \
+test_SOURCES := test/Test.java
+unittest_SRC := \
 	test/TestNSREs.java
 
 test_LIBADD := \
@@ -94,8 +94,8 @@ test_LIBADD := \
         $(jar)
 
 package_dir := $(subst .,/,$(package))
-AM_JAVACFLAGS = -Xlint
-JVM_ARGS =
+AM_JAVACFLAGS := -Xlint
+JVM_ARGS :=
 classes := $(asynchbase_SOURCES:src/%.java=$(top_builddir)/$(package_dir)/%.class)
 test_classes := $(test_SOURCES:test/%.java=$(top_builddir)/%.class)
 UNITTESTS := $(unittest_SRC:test/%.java=$(package_dir)/%.class)
