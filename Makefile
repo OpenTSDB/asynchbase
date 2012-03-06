@@ -182,7 +182,7 @@ clean:
 
 distclean: clean
 	rm -f $(jar)
-	rm -rf $(top_builddir)/api
+	rm -rf $(top_builddir)/api target
 	test ! -d $(top_builddir) || rmdir $(top_builddir)
 
 pom.xml: pom.xml.in Makefile
