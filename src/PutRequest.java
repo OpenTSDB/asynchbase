@@ -58,7 +58,7 @@ import org.jboss.netty.buffer.ChannelBuffer;
  */
 public final class PutRequest extends BatchableRpc
   implements HBaseRpc.HasTable, HBaseRpc.HasKey, HBaseRpc.HasFamily,
-             HBaseRpc.HasQualifier, HBaseRpc.HasValue {
+             HBaseRpc.HasQualifiers, HBaseRpc.HasValues {
 
   private static final byte[] PUT = new byte[] { 'p', 'u', 't' };
 
@@ -72,12 +72,13 @@ public final class PutRequest extends BatchableRpc
   static final PutRequest EMPTY_PUT;
   static {
     final byte[] zero = new byte[] { 0 };
-    EMPTY_PUT = new PutRequest(zero, zero, zero, zero, zero);
+    final byte[][] zeros = new byte[][] { zero };
+    EMPTY_PUT = new PutRequest(zero, zero, zero, zeros, zeros);
     EMPTY_PUT.setRegion(new RegionInfo(zero, zero, zero));
   }
 
-  private final byte[] qualifier;
-  private final byte[] value;
+  private final byte[][] qualifiers;
+  private final byte[][] values;
 
   /**
    * Constructor using current time.
@@ -90,15 +91,15 @@ public final class PutRequest extends BatchableRpc
    * @param table The table to edit.
    * @param key The key of the row to edit in that table.
    * @param family The column family to edit in that table.
-   * @param qualifier The column qualifier to edit in that family.
+   * @param qualifiers The column qualifiers to edit in that family.
    * @param value The value to store.
    */
   public PutRequest(final byte[] table,
                     final byte[] key,
                     final byte[] family,
-                    final byte[] qualifier,
-                    final byte[] value) {
-    this(table, key, family, qualifier, value,
+                    final byte[][] qualifiers,
+                    final byte[][] values) {
+    this(table, key, family, qualifiers, values,
          KeyValue.TIMESTAMP_NOW, RowLock.NO_LOCK);
   }
 
@@ -108,18 +109,18 @@ public final class PutRequest extends BatchableRpc
    * @param table The table to edit.
    * @param key The key of the row to edit in that table.
    * @param family The column family to edit in that table.
-   * @param qualifier The column qualifier to edit in that family.
-   * @param value The value to store.
+   * @param qualifiers The column qualifier to edit in that family.
+   * @param values The value to store.
    * @param timestamp The timestamp to set on this edit.
    * @since 1.2
    */
   public PutRequest(final byte[] table,
                     final byte[] key,
                     final byte[] family,
-                    final byte[] qualifier,
-                    final byte[] value,
+                    final byte[][] qualifiers,
+                    final byte[][] values,
                     final long timestamp) {
-    this(table, key, family, qualifier, value, timestamp, RowLock.NO_LOCK);
+    this(table, key, family, qualifiers, values, timestamp, RowLock.NO_LOCK);
   }
 
   /**
@@ -133,17 +134,17 @@ public final class PutRequest extends BatchableRpc
    * @param table The table to edit.
    * @param key The key of the row to edit in that table.
    * @param family The column family to edit in that table.
-   * @param qualifier The column qualifier to edit in that family.
-   * @param value The value to store.
+   * @param qualifiers The column qualifier to edit in that family.
+   * @param values The value to store.
    * @param lock An explicit row lock to use with this request.
    */
   public PutRequest(final byte[] table,
                     final byte[] key,
                     final byte[] family,
-                    final byte[] qualifier,
-                    final byte[] value,
+                    final byte[][] qualifiers,
+                    final byte[][] values,
                     final RowLock lock) {
-    this(table, key, family, qualifier, value,
+    this(table, key, family, qualifiers, values,
          KeyValue.TIMESTAMP_NOW, lock.id());
   }
 
@@ -153,8 +154,8 @@ public final class PutRequest extends BatchableRpc
    * @param table The table to edit.
    * @param key The key of the row to edit in that table.
    * @param family The column family to edit in that table.
-   * @param qualifier The column qualifier to edit in that family.
-   * @param value The value to store.
+   * @param qualifiers The column qualifier to edit in that family.
+   * @param values The value to store.
    * @param timestamp The timestamp to set on this edit.
    * @param lock An explicit row lock to use with this request.
    * @since 1.2
@@ -162,11 +163,11 @@ public final class PutRequest extends BatchableRpc
   public PutRequest(final byte[] table,
                     final byte[] key,
                     final byte[] family,
-                    final byte[] qualifier,
-                    final byte[] value,
+                    final byte[][] qualifiers,
+                    final byte[][] values,
                     final long timestamp,
                     final RowLock lock) {
-    this(table, key, family, qualifier, value, timestamp, lock.id());
+    this(table, key, family, qualifiers, values, timestamp, lock.id());
   }
 
   /**
@@ -188,7 +189,8 @@ public final class PutRequest extends BatchableRpc
                     final String qualifier,
                     final String value) {
     this(table.getBytes(), key.getBytes(), family.getBytes(),
-         qualifier.getBytes(), value.getBytes(),
+         new byte[][] { qualifier.getBytes() },
+         new byte[][] { value.getBytes() },
          KeyValue.TIMESTAMP_NOW, RowLock.NO_LOCK);
   }
 
@@ -213,7 +215,8 @@ public final class PutRequest extends BatchableRpc
                     final String value,
                     final RowLock lock) {
     this(table.getBytes(), key.getBytes(), family.getBytes(),
-         qualifier.getBytes(), value.getBytes(),
+         new byte[][] { qualifier.getBytes() },
+         new byte[][] { value.getBytes() },
          KeyValue.TIMESTAMP_NOW, lock.id());
   }
 
@@ -246,24 +249,29 @@ public final class PutRequest extends BatchableRpc
                      final KeyValue kv,
                      final long lockid) {
     super(PUT, table, kv.key(), kv.family(), kv.timestamp(), lockid);
-    this.qualifier = kv.qualifier();
-    this.value = kv.value();
+    this.qualifiers = new byte[][] { kv.qualifier() };
+    this.values = new byte[][] { kv.value() };
   }
 
   /** Private constructor.  */
   private PutRequest(final byte[] table,
                      final byte[] key,
                      final byte[] family,
-                     final byte[] qualifier,
-                     final byte[] value,
+                     final byte[][] qualifiers,
+                     final byte[][] values,
                      final long timestamp,
                      final long lockid) {
     super(PUT, table, key, family, timestamp, lockid);
     KeyValue.checkFamily(family);
-    KeyValue.checkQualifier(qualifier);
-    KeyValue.checkValue(value);
-    this.qualifier = qualifier;
-    this.value = value;
+    if (qualifiers.length != values.length ) {
+      throw new IllegalArgumentException("Invalid qualifiers and values.");
+    }
+    for (int i=0; i<qualifiers.length; i++) {
+      KeyValue.checkQualifier(qualifiers[i]);
+      KeyValue.checkValue(values[i]);
+    }
+    this.qualifiers = qualifiers;
+    this.values = values;
   }
 
   @Override
@@ -277,20 +285,19 @@ public final class PutRequest extends BatchableRpc
   }
 
   @Override
-  public byte[] qualifier() {
-    return qualifier;
+  public byte[][] qualifiers() {
+    return qualifiers;
   }
 
   @Override
-  public byte[] value() {
-    return value;
+  public byte[][] values() {
+    return values;
   }
 
   public String toString() {
     return super.toStringWithQualifier("PutRequest",
-                                       family, qualifier,
-                                       ", value=" + Bytes.pretty(value)
-                                       + ", timestamp=" + timestamp
+                                       family, qualifiers, values,
+                                       ", timestamp=" + timestamp
                                        + ", lockid=" + lockid
                                        + ", durable=" + durable
                                        + ", bufferable=" + super.bufferable);
@@ -319,18 +326,28 @@ public final class PutRequest extends BatchableRpc
 
   @Override
   int numKeyValues() {
-    return 1;
+    return qualifiers.length;
   }
 
   @Override
   int payloadSize() {
-    return KeyValue.predictSerializedSize(key, family, qualifier, value);
+    int size = 0;
+    for (int i=0; i<numKeyValues(); i++) {
+      size += payloadSize(key, family, qualifiers[i], values[i]);
+    }
+    return size;
+  }
+
+  int payloadSize(byte[] k, byte[] f, byte[] q, byte[] v) {
+    return KeyValue.predictSerializedSize(k, f, q, v);
   }
 
   @Override
   void serializePayload(final ChannelBuffer buf) {
-    KeyValue.serialize(buf, KeyValue.PUT, timestamp, key, family,
-                       qualifier, value);
+    for (int i=0; i<numKeyValues(); i++) {
+      KeyValue.serialize(buf, KeyValue.PUT, timestamp, key, family,
+                         qualifiers[i], values[i]);
+    }
   }
 
   /**
@@ -347,6 +364,13 @@ public final class PutRequest extends BatchableRpc
     size += 3;  // vint: region name length (3 bytes => max length = 32768).
     size += region.name().length;  // The region name.
 
+    size += predictPutRequestSize(); 
+
+    return size;
+  }
+
+  int predictPutRequestSize() {
+    int size = 0;
     size += 1;  // byte: Type of the 2nd parameter.
     size += 1;  // byte: Type again (see HBASE-2877).
 
@@ -364,7 +388,6 @@ public final class PutRequest extends BatchableRpc
     size += 4;  // int:  Total number of bytes for all those KeyValues.
 
     size += payloadSize();
-
     return size;
   }
 
@@ -379,6 +402,12 @@ public final class PutRequest extends BatchableRpc
     writeHBaseByteArray(buf, region.name());
 
     // 2nd param: Put object
+    serializePutRequest(buf);
+    
+    return buf;
+  }
+
+  void serializePutRequest(ChannelBuffer buf) {
     buf.writeByte(CODE); // Code for a `Put' parameter.
     buf.writeByte(CODE); // Code again (see HBASE-2877).
     buf.writeByte(1);    // Put#PUT_VERSION.  Stick to v1 here for now.
@@ -392,10 +421,9 @@ public final class PutRequest extends BatchableRpc
     buf.writeInt(1);  // Number of families that follow.
     writeByteArray(buf, family);  // The column family.
 
-    buf.writeInt(1);  // Number of "KeyValues" that follow.
+    buf.writeInt(numKeyValues());  // Number of "KeyValues" that follow.
     buf.writeInt(payloadSize());  // Size of the KV that follows.
     serializePayload(buf);
-    return buf;
   }
 
 }

@@ -148,40 +148,15 @@ public final class CheckAndPutRequest extends HBaseRpc
         size += 3; // vint: check data length (3 bytes => max length = 32768).
         size += value.length; // The check data.
 
-        size += 1; // byte: Type of the 6th parameter.
-        size += 1; // byte: Type again (see HBASE-2877).
-
-        size += 1; // byte: Version of Put.
-        size += 3; // vint: row key length (3 bytes => max length = 32768).
-        size += put.key.length; // The row key.
-        size += 8; // long: Timestamp.
-        size += 8; // long: Lock ID.
-        size += 1; // bool: Whether or not to write to the WAL.
-        size += 4; // int: Number of families for which we have edits.
-
-        size += 1; // vint: Family length (guaranteed on 1 byte).
-        size += put.family().length; // The family.
-        size += 4; // int: Number of KeyValues that follow.
-        size += 4; // int: Total number of bytes for all those KeyValues.
-
-        size += 4; // int: Key + value length.
-        size += 4; // int: Key length.
-        size += 4; // int: Value length.
-        size += 2; // short: Row length.
-        size += put.key.length; // The row key (again!).
-        size += 1; // byte: Family length.
-        size += put.family().length; // The family (again!).
-        size += put.qualifier().length; // The qualifier.
-        size += 8; // long: Timestamp (again!).
-        size += 1; // byte: Type of edit.
-        size += put.value().length;
+        // 6th parameter : put request
+        size += put.predictPutRequestSize(); 
 
         return size;
     }
 
     @Override
-    ChannelBuffer serialize(byte unused_server_version) {
-        final ChannelBuffer buf = newBuffer(predictSerializedSize());
+    ChannelBuffer serialize(byte server_version) {
+        final ChannelBuffer buf = newBuffer(server_version, predictSerializedSize());
         buf.writeInt(6); // Number of parameters.
 
         // 1st param: byte array containing region name
@@ -200,26 +175,7 @@ public final class CheckAndPutRequest extends HBaseRpc
         writeHBaseByteArray(buf, value);
 
         // 6th param: Put object
-        buf.writeByte(35); // Code for a `Put' parameter.
-        buf.writeByte(35); // Code again (see HBASE-2877).
-        buf.writeByte(1); // Put#PUT_VERSION. Undocumented versioning of Put.
-        writeByteArray(buf, put.key); // The row key.
-
-        // Timestamp. We always set it to Long.MAX_VALUE, which means "unset".
-        // The RegionServer will set it for us, right before writing to the WAL
-        // (or to the Memstore if we're not using the WAL).
-        buf.writeLong(Long.MAX_VALUE);
-
-        buf.writeLong(put.lockid()); // Lock ID.
-        buf.writeByte(put.durable() ? 0x01 : 0x00); // Whether or not to use the
-                                                    // WAL.
-
-        buf.writeInt(1); // Number of families that follow.
-        writeByteArray(buf, put.family()); // The column family.
-
-        buf.writeInt(1); // Number of "KeyValues" that follow.
-        buf.writeInt(put.kv().predictSerializedSize()); // Size of the KV that follows.
-        put.kv().serialize(buf, KeyValue.PUT);
+        put.serializePutRequest(buf); 
         return buf;
     }
 

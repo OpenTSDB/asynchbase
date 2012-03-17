@@ -128,6 +128,19 @@ public abstract class HBaseRpc {
   }
 
   /**
+   * An RPC from which you can get multiple values.
+   * @since 1.1
+   */
+  public interface HasValues {
+    /**
+     * Returns the value contained in this RPC.
+     * <p>
+     * <strong>DO NOT MODIFY THE CONTENTS OF THE ARRAY RETURNED.</strong>
+     */
+    public byte[][] values();
+  }
+
+  /**
    * An RPC from which you can get a timestamp.
    * @since 1.2
    */
@@ -528,6 +541,49 @@ public abstract class HBaseRpc {
     buf.append(fields);
     buf.append(", attempt=").append(attempt)
       .append(", region=");
+    if (region == null) {
+      buf.append("null");
+    } else {
+      region.toStringbuf(buf);
+    }
+    buf.append(')');
+    return buf.toString();
+  }
+
+  /**
+   * Helper for subclass's {@link #toString} implementations.
+   * <p>
+   * This is used by subclasses such as {@link DeleteRequest}
+   * or {@link GetRequest}, to avoid code duplication.
+   * @param classname The name of the class of the caller.
+   * @param family A possibly null family name.
+   * @param qualifier A possibly null column qualifier.
+   * @param fields Additional fields to include in the output.
+   */
+  final String toStringWithQualifier(final String classname,
+                                     final byte[] family,
+                                     final byte[][] qualifiers,
+                                     final byte[][] values,
+                                     final String fields) {
+    final StringBuilder buf = new StringBuilder(256  // min=181
+                                                + fields.length());
+    buf.append(classname).append("(table=");
+    Bytes.pretty(buf, table);
+    buf.append(", key=");
+    Bytes.pretty(buf, key);
+    buf.append(", family=");
+    Bytes.pretty(buf, family);
+    buf.append(", {");
+    for (int i=0; i<qualifiers.length; i++) {
+        buf.append("(qualifier=");
+        Bytes.pretty(buf, qualifiers[i]);
+        buf.append(", value=");
+        Bytes.pretty(buf, values[i]);
+        buf.append(")");
+    }
+    buf.append("}").append(fields)
+       .append(", attempt=").append(attempt)
+       .append(", region=");
     if (region == null) {
       buf.append("null");
     } else {
