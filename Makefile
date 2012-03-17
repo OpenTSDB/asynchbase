@@ -41,6 +41,7 @@ jar := $(top_builddir)/asynchbase-$(spec_version).jar
 asynchbase_SOURCES := \
 	src/AtomicIncrementRequest.java	\
 	src/BatchableRpc.java	\
+	src/CheckAndPutRequest.java	\
 	src/BrokenMetaException.java	\
 	src/Bytes.java	\
 	src/ConnectionResetException.java	\
