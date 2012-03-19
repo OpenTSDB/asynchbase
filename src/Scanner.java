@@ -278,6 +278,8 @@ public final class Scanner {
 
   private static final byte[] ROWFILTER = Bytes.ISO88591("org.apache.hadoop"
     + ".hbase.filter.RowFilter");
+  private static final byte[] PREFIXFILTER = Bytes.ISO88591("org.apache.hadoop"
+    + ".hbase.filter.PrefixFilter");
   private static final byte[] REGEXSTRINGCOMPARATOR = Bytes.ISO88591("org.apache.hadoop"
     + ".hbase.filter.RegexStringComparator");
   private static final byte[] EQUAL = new byte[] { 'E', 'Q', 'U', 'A', 'L' };
@@ -326,6 +328,30 @@ public final class Scanner {
     // writeUTF the charset
     buf.writeShort(chars.length);                               // 2
     buf.writeBytes(chars);                                      // chars.length
+  }
+
+  /**
+   * Sets a binary prefix to filter results based on the row key.
+   * <p>
+   * Very fast comparisons, compares the rowkey bytes up to the length of the
+   * @param prefix to see if it matches. Useful for when your rowkeys are not strings
+   * and are written as compressed form bytes. Sets start key to prefix.
+   */
+  public void setBinaryPrefix(final byte[] prefix) {
+    setStartKey(prefix);
+
+    filter = new byte[(1 + 43 + 1 + prefix.length)];
+
+    final ChannelBuffer buf = ChannelBuffers.wrappedBuffer(filter);
+    buf.clear();  // Set the writerIndex to 0.
+
+    // prefix filter
+    buf.writeByte((byte)PREFIXFILTER.length);                    // 1
+    buf.writeBytes(PREFIXFILTER);                                // 43
+
+    // write the bytes of the prefix
+    buf.writeByte((byte)prefix.length);                          // 1
+    buf.writeBytes(prefix);                                      // prefix.length
   }
 
   /**
