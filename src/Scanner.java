@@ -417,8 +417,11 @@ public final class Scanner {
   }
 
   /**
-   * Sets the minimum timestamp to return columns
-   * Use with {@link setMaxTimestamp} to make a range
+   * Sets the minimum timestamp to return columns.
+   * Use with {@link #setMaxTimestamp(long)} to make a range.
+   * @param min_timestamp The earliest timestamp to accept.
+   * @throws IllegalArgumentException if the timestamp isn't between {@code 0} and {@code Long.MAX_VALUE}.
+   * @see #setMaxTimestamp(long)
    */
   public void setMinTimestamp(final long min_timestamp) {
     if (min_timestamp < 0) {
@@ -428,8 +431,11 @@ public final class Scanner {
   }
 
   /**
-   * Sets the maximum timestamp to return columns
-   * Use with {@link setMinTimestamp} to make a range
+   * Sets the maximum timestamp to return columns.
+   * Use with {@link #setMinTimestamp(long)} to make a range.
+   * @param max_timestamp The latest timestamp to accept.
+   * @throws IllegalArgumentException if the timestamp isn't between {@code 0}  and {@code Long.MAX_VALUE}.
+   * @see #setMinTimestamp(long)
    */
   public void setMaxTimestamp(final long max_timestamp) {
     if (max_timestamp < 0) {
