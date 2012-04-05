@@ -40,7 +40,6 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentSkipListMap;
 import java.util.concurrent.Executor;
 import java.util.concurrent.Executors;
-import java.util.concurrent.atomic.AtomicLong;
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
 
 import org.apache.zookeeper.AsyncCallback;
@@ -228,7 +227,7 @@ public final class HBaseClient {
   private final ZKClient zkclient;
 
   /** How many {@code -ROOT-} lookups were made.  */
-  private final AtomicLong root_lookups = new AtomicLong();
+  private final Counter root_lookups = new Counter();
 
   /**
    * The client currently connected to the -ROOT- region.
@@ -281,10 +280,10 @@ public final class HBaseClient {
     new ConcurrentHashMap<RegionInfo, RegionClient>();
 
   /** How many {@code .META.} lookups were made (with a permit).  */
-  private final AtomicLong meta_lookups_with_permit = new AtomicLong();
+  private final Counter meta_lookups_with_permit = new Counter();
 
   /** How many {@code .META.} lookups were made (without a permit).  */
-  private final AtomicLong meta_lookups_wo_permit = new AtomicLong();
+  private final Counter meta_lookups_wo_permit = new Counter();
 
   /**
    * Maps a client connected to a RegionServer to the list of regions we know
@@ -1189,9 +1188,9 @@ public final class HBaseClient {
             }
           };
           d.addBoth(new ReleaseMetaLookupPermit());
-          meta_lookups_with_permit.incrementAndGet();
+          meta_lookups_with_permit.increment();
         } else {
-          meta_lookups_wo_permit.incrementAndGet();
+          meta_lookups_wo_permit.increment();
         }
         // This errback needs to run *after* the callback above.
         return d.addErrback(newLocateRegionErrback(table, key));
@@ -1211,7 +1210,7 @@ public final class HBaseClient {
     final byte[] root_key = createRegionSearchKey(META, meta_key);
     final RegionInfo root_region = new RegionInfo(ROOT, ROOT_REGION,
                                                   EMPTY_ARRAY);
-    root_lookups.incrementAndGet();
+    root_lookups.increment();
     return rootregion.getClosestRowBefore(root_region, ROOT, root_key, INFO)
       .addCallback(root_lookup_done)
       // This errback needs to run *after* the callback above.
