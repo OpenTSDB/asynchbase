@@ -44,12 +44,13 @@ asynchbase_SOURCES := \
 	src/BrokenMetaException.java	\
 	src/Bytes.java	\
 	src/ConnectionResetException.java	\
+	src/Counter.java	\
 	src/DeleteRequest.java	\
 	src/GetRequest.java	\
-	src/HasFailedRpcException.java	\
 	src/HBaseClient.java	\
 	src/HBaseException.java	\
 	src/HBaseRpc.java	\
+	src/HasFailedRpcException.java	\
 	src/InvalidResponseException.java	\
 	src/KeyValue.java	\
 	src/MultiAction.java	\
@@ -71,6 +72,8 @@ asynchbase_SOURCES := \
 	src/UnknownRowLockException.java	\
 	src/UnknownScannerException.java	\
 	src/VersionMismatchException.java	\
+	src/jsr166e/LongAdder.java	\
+	src/jsr166e/Striped64.java	\
 
 asynchbase_LIBADD := \
 	$(NETTY)	\
@@ -166,7 +169,8 @@ SUASYNC_JAVADOC=http://tsunanet.net/~tsuna/async/api
 JAVADOCS = $(JDK_JAVADOC) $(NETTY_JAVADOC) $(SUASYNC_JAVADOC)
 $(top_builddir)/api/index.html: $(asynchbase_SOURCES)
 	javadoc -d $(top_builddir)/api -classpath $(get_dep_classpath) \
-          `echo $(JAVADOCS) | sed 's/\([^ ]*\)/-link \1/g'` $(asynchbase_SOURCES)
+          `echo $(JAVADOCS) | sed 's/\([^ ]*\)/-link \1/g'` $(asynchbase_SOURCES) \
+	  `find src -name package-info.java`
 
 clean:
 	@rm -f $(top_builddir)/.javac-stamp

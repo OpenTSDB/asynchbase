@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2010-2012  The Async HBase Authors.  All rights reserved.
+ * Copyright (C) 2012  The Async HBase Authors.  All rights reserved.
  * This file is part of Async HBase.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -24,9 +24,28 @@
  * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
  * POSSIBILITY OF SUCH DAMAGE.
  */
+package org.hbase.async;
+
+import org.hbase.async.jsr166e.LongAdder;
 
 /**
- * <h1>This package is not part of asynchbase's public interface.</h1>
- * Use {@link org.hbase.async.Counter} instead.
+ * An atomic counter to replace {@link java.util.concurrent.atomic.AtomicLong}.
+ * <p>
+ * This is based on JSR 166e's sharded counter, which is slated for JDK8.
+ * This class is part of the public interface of asynchbase, and code
+ * depending on asynchbase is encouraged to use it for their concurrent
+ * counter needs.
+ * @since 1.3
  */
-package org.hbase.async.jsr166e;
+public final class Counter extends LongAdder {
+
+  /**
+   * Returns the current value of the counter.
+   */
+  public final long get() {
+    return super.sum();
+  }
+
+  private static final long serialVersionUID = 1333661542;
+
+}
