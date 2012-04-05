@@ -1,0 +1,14 @@
+The contents of this directory contains code from JSR 166e.
+** THIS IS NOT PART OF THE PUBLIC INTERFACE OF ASYNCHBASE **
+
+Code was downloaded from:
+  http://gee.cs.oswego.edu/cgi-bin/viewcvs.cgi/jsr166/src/jsr166e/
+
+The code was released to the public domain, as explained at
+  http://creativecommons.org/publicdomain/zero/1.0/
+
+The code is bundled in asynchbase as it is not available until JDK8
+becomes a reality, which is expected to take years (at time of writing).
+Ideally another library, such as Google Guava, would provide this
+code until JDK8 becomes the norm.  But in the mean time it's here
+for asynchbase's internal use.

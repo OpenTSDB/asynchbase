@@ -175,6 +175,7 @@ clean:
 	cd $(top_builddir) || exit 0 \
 	  && test -d $(package_dir) || exit 0 \
 	  && dir=$(package_dir) \
+	  && rmdir $(package_dir)/*/ \
 	  && while test x"$$dir" != x"$${dir%/*}"; do \
 	       rmdir "$$dir" && dir=$${dir%/*} || break; \
 	     done \
