@@ -9,6 +9,7 @@ New public APIs:
 
 Noteworthy changes:
   - Upgraded to Netty 3.4.3.
+  - asynchbase now depends on Google's Guava library (v12.0).
 
 
 * Version 1.2.0 (2012-02-21) [a7ae238]
