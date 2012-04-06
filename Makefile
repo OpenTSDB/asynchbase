@@ -44,6 +44,7 @@ asynchbase_SOURCES := \
 	src/BrokenMetaException.java	\
 	src/Bytes.java	\
 	src/ConnectionResetException.java	\
+	src/CompareAndSetRequest.java	\
 	src/DeleteRequest.java	\
 	src/GetRequest.java	\
 	src/HasFailedRpcException.java	\
