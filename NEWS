@@ -6,6 +6,8 @@ New public APIs:
   - PleaseThrottleException can now give you a Deferred.
   - There is now a `Counter' class that provides a highly concurrent
     replacement for AtomicLong from jsr166e's LongAdder.
+  - HBaseClient now has a `bufferAtomicIncrement' method used to
+    coalesce atomic counter increments.
 
 Noteworthy changes:
   - Upgraded to Netty 3.4.3, suasync to 1.2.0.

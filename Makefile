@@ -42,6 +42,7 @@ asynchbase_SOURCES := \
 	src/AtomicIncrementRequest.java	\
 	src/BatchableRpc.java	\
 	src/BrokenMetaException.java	\
+	src/BufferedIncrement.java	\
 	src/Bytes.java	\
 	src/ConnectionResetException.java	\
 	src/Counter.java	\
