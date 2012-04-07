@@ -83,7 +83,10 @@ asynchbase_LIBADD := \
 	$(SUASYNC)	\
 	$(GUAVA)	\
 
-test_SOURCES := test/Test.java
+test_SOURCES := \
+	test/Test.java	\
+	test/TestIncrementCoalescing.java	\
+
 unittest_SRC := \
 	test/TestNSREs.java
 
@@ -125,8 +128,12 @@ $(UNITTESTS): $(jar) $(unittest_SRC) $(test_LIBADD)
 classes_with_nested_classes := $(classes:$(top_builddir)/%.class=%*.class)
 test_classes_with_nested_classes := $(UNITTESTS:.class=*.class)
 
-cli: $(test_classes)
-	$(JAVA) -ea -esa $(JVM_ARGS) -cp "$(get_runtime_dep_classpath):$(top_builddir)" Test $(ARGS)
+run: $(test_classes)
+	@test -n "$(CLASS)" || { echo 'usage: $(MAKE) run CLASS=<name>'; exit 1; }
+	$(JAVA) -ea -esa $(JVM_ARGS) -cp "$(get_runtime_dep_classpath):$(top_builddir)" $(CLASS) $(ARGS)
+
+cli:
+	$(MAKE) run CLASS=Test
 
 # Little sed script to make a pretty-ish banner.
 BANNER := sed 's/^.*/  &  /;h;s/./=/g;p;x;p;x'
@@ -215,4 +222,4 @@ pom.xml: pom.xml.in Makefile
 	} >$@-t
 	mv $@-t $@
 
-.PHONY: all jar clean cli distclean doc check
+.PHONY: all jar clean cli distclean doc check run
