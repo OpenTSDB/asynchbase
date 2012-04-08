@@ -11,6 +11,8 @@ New public APIs:
   - A new method, `stats()', provides detailed statistics on the client's
     activities (number of calls for various RPCs, number of connections
     created, etc.)
+  - `HBaseClient' has a new `compareAndSet(PutRequests, byte[])' method
+    for atomic Compare-And-Set (CAS) operation.
 
 Deprecated public APIs:
   - In HBaseClient, the methods `rootLookupCount()',

@@ -70,6 +70,9 @@ final class Test {
     final delete delete = new delete();  // delete delete delete!!
     commands.put("delete", delete);
     commands.put("ldelete", delete);
+    final cas cas = new cas();  // cas cas cas!!
+    commands.put("cas", cas);
+    commands.put("lcas", cas);
   }
 
   private static void printUsage() {
@@ -81,10 +84,12 @@ final class Test {
                        + "  put <table> <key> <family> <qualifier> <value>\n"
                        + "  delete <table> <key> [<family> [<qualifier>]]\n"
                        + "  scan <table> [start] [family] [qualifier] [stop] [regexp]\n"
+                       + "  cas <table> <key> <family> <qualifier> <expected> <value>\n"
                        + "Variants that acquire an explicit row-lock:\n"
                        + "  lget <table> <key> [family] [qualifiers ...]\n"
                        + "  lput <table> <key> <family> <qualifier> <value>\n"
                        + "  ldelete <table> <key> <family> <qualifier>\n"
+                       + "  lcas <table> <key> <family> <qualifier> <expected> <value>\n"
                       );
   }
 
@@ -270,6 +275,35 @@ final class Test {
         }
       } catch (Exception e) {
         LOG.error("Scan failed", e);
+      }
+    }
+  }
+
+  private static final class cas implements Cmd {
+    public void execute(final HBaseClient client, String[] args) throws Exception {
+      ensureArguments(args, 8, 8);
+      RowLock lock = null;
+      if (args[1].charAt(0) == 'l') {  // locked version of the command
+        final RowLockRequest rlr = new RowLockRequest(args[2], args[3]);
+        lock = client.lockRow(rlr).joinUninterruptibly();
+        LOG.info("Acquired explicit row lock: " + lock);
+      }
+      final PutRequest put = lock == null
+        ? new PutRequest(args[2], args[3], args[4], args[5], args[7])
+        : new PutRequest(args[2], args[3], args[4], args[5], args[7], lock);
+      final String expected = args[6];
+      args = null;
+      try {
+        final boolean ok = client.compareAndSet(put, expected).joinUninterruptibly();
+        LOG.info("CAS "
+                 + (ok ? "succeeded" : "failed: value wasn't " + expected));
+      } catch (Exception e) {
+        LOG.error("CAS failed", e);
+      } finally {
+        if (lock != null) {
+          client.unlockRow(lock).joinUninterruptibly();
+          LOG.info("Released explicit row lock: " + lock);
+        }
       }
     }
   }

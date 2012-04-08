@@ -347,6 +347,13 @@ public final class PutRequest extends BatchableRpc
     size += 3;  // vint: region name length (3 bytes => max length = 32768).
     size += region.name().length;  // The region name.
 
+    size += predictPutSize();
+    return size;
+  }
+
+  /** The raw size of the underlying `Put'.  */
+  int predictPutSize() {
+    int size = 0;
     size += 1;  // byte: Type of the 2nd parameter.
     size += 1;  // byte: Type again (see HBASE-2877).
 
@@ -379,6 +386,13 @@ public final class PutRequest extends BatchableRpc
     writeHBaseByteArray(buf, region.name());
 
     // 2nd param: Put object
+    serializeInto(buf);
+
+    return buf;
+  }
+
+  /** Serialize the raw underlying `Put' into the given buffer.  */
+  void serializeInto(final ChannelBuffer buf) {
     buf.writeByte(CODE); // Code for a `Put' parameter.
     buf.writeByte(CODE); // Code again (see HBASE-2877).
     buf.writeByte(1);    // Put#PUT_VERSION.  Stick to v1 here for now.
@@ -395,7 +409,6 @@ public final class PutRequest extends BatchableRpc
     buf.writeInt(1);  // Number of "KeyValues" that follow.
     buf.writeInt(payloadSize());  // Size of the KV that follows.
     serializePayload(buf);
-    return buf;
   }
 
 }

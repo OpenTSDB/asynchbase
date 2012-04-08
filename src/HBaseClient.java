@@ -554,7 +554,8 @@ public final class HBaseClient {
           // adding new RPCs that change data in HBase.  Not good.
           if (rpc instanceof PutRequest
               || rpc instanceof AtomicIncrementRequest
-              || rpc instanceof DeleteRequest) {
+              || rpc instanceof DeleteRequest
+              || rpc instanceof CompareAndSetRequest) {
             d.add(rpc.getDeferred());
           }
         }
@@ -1257,6 +1258,96 @@ public final class HBaseClient {
     num_puts.increment();
     return sendRpcToRegion(request);
   }
+
+  /**
+   * Atomic Compare-And-Set (CAS) on a single cell.
+   * <p>
+   * Note that edits sent through this method <b>cannot be batched</b>, and
+   * won't be subject to the {@link #setFlushInterval flush interval}.  This
+   * entails that write throughput will be lower with this method as edits
+   * have to be sent out to the wire one by one.
+   * <p>
+   * This request enables you to atomically update the value of an existing
+   * cell in HBase using a CAS operation.  It's like a {@link PutRequest}
+   * except that you also pass an expected value.  If the last version of the
+   * cell identified by your {@code PutRequest} matches the expected value,
+   * HBase will atomically update it to the new value.
+   * <p>
+   * If the expected value is the empty byte array, HBase will atomically
+   * create the cell provided that it doesn't exist already. This can be used
+   * to ensure that your RPC doesn't overwrite an existing value.  Note
+   * however that this trick cannot be used the other way around to delete
+   * an expected value atomically.
+   * @param edit The new value to write.
+   * @param expected The expected value of the cell to compare against.
+   * <strong>This byte array will NOT be copied.</strong>
+   * @return A deferred boolean, if {@code true} the CAS succeeded, otherwise
+   * the CAS failed because the value in HBase didn't match the expected value
+   * of the CAS request.
+   * @since 1.3
+   */
+  public Deferred<Boolean> compareAndSet(final PutRequest edit,
+                                         final byte[] expected) {
+    return sendRpcToRegion(new CompareAndSetRequest(edit, expected))
+      .addCallback(CAS_CB);
+  }
+
+  /**
+   * Atomic Compare-And-Set (CAS) on a single cell.
+   * <p>
+   * Note that edits sent through this method <b>cannot be batched</b>.
+   * @see #compareAndSet(PutRequest, byte[])
+   * @param edit The new value to write.
+   * @param expected The expected value of the cell to compare against.
+   * This string is assumed to use the platform's default charset.
+   * @return A deferred boolean, if {@code true} the CAS succeeded, otherwise
+   * the CAS failed because the value in HBase didn't match the expected value
+   * of the CAS request.
+   * @since 1.3
+   */
+  public Deferred<Boolean> compareAndSet(final PutRequest edit,
+                                         final String expected) {
+    return compareAndSet(edit, expected.getBytes());
+  }
+
+  /**
+   * Atomically insert a new cell in HBase.
+   * <p>
+   * Note that edits sent through this method <b>cannot be batched</b>.
+   * <p>
+   * This is equivalent to calling
+   * {@link #compareAndSet(PutRequest, byte[]) compareAndSet}{@code (edit,
+   * EMPTY_ARRAY)}
+   * @see #compareAndSet(PutRequest, byte[])
+   * @param edit The new value to insert.
+   * @return A deferred boolean, {@code true} if the edit got atomically
+   * inserted in HBase, {@code false} if there was already a value in the
+   * given cell.
+   * @since 1.3
+   */
+  public Deferred<Boolean> atomicCreate(final PutRequest edit) {
+    return compareAndSet(edit, EMPTY_ARRAY);
+  }
+
+  /** Callback to type-check responses of {@link CompareAndSetRequest}.  */
+  private static final class CompareAndSetCB implements Callback<Boolean, Object> {
+
+    public Boolean call(final Object response) {
+      if (response instanceof Boolean) {
+        return (Boolean)response;
+      } else {
+        throw new InvalidResponseException(Boolean.class, response);
+      }
+    }
+
+    public String toString() {
+      return "type compareAndSet response";
+    }
+
+  }
+
+  /** Singleton callback for responses of {@link CompareAndSetRequest}.  */
+  private static final CompareAndSetCB CAS_CB = new CompareAndSetCB();
 
   /**
    * Acquires an explicit row lock.

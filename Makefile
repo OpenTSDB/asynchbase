@@ -45,6 +45,7 @@ asynchbase_SOURCES := \
 	src/BufferedIncrement.java	\
 	src/Bytes.java	\
 	src/ClientStats.java	\
+	src/CompareAndSetRequest.java	\
 	src/ConnectionResetException.java	\
 	src/Counter.java	\
 	src/DeleteRequest.java	\
