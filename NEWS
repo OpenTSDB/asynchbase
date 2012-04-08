@@ -8,7 +8,7 @@ New public APIs:
     replacement for AtomicLong from jsr166e's LongAdder.
 
 Noteworthy changes:
-  - Upgraded to Netty 3.4.3.
+  - Upgraded to Netty 3.4.3, suasync to 1.2.0.
   - asynchbase now depends on Google's Guava library (v12.0).
 
 
