@@ -8,6 +8,15 @@ New public APIs:
     replacement for AtomicLong from jsr166e's LongAdder.
   - HBaseClient now has a `bufferAtomicIncrement' method used to
     coalesce atomic counter increments.
+  - A new method, `stats()', provides detailed statistics on the client's
+    activities (number of calls for various RPCs, number of connections
+    created, etc.)
+
+Deprecated public APIs:
+  - In HBaseClient, the methods `rootLookupCount()',
+    `uncontendedMetaLookupCount()', and `contendedMetaLookupCount()' are
+    deprecated in favor of the new `stats()' API.  These methods will be
+    removed in the 2.0 release.
 
 Noteworthy changes:
   - Upgraded to Netty 3.4.3, suasync to 1.2.0.

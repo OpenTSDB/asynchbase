@@ -42,7 +42,6 @@ import java.util.concurrent.Executor;
 import java.util.concurrent.Executors;
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
 
-import com.google.common.cache.CacheStats;
 import com.google.common.cache.LoadingCache;
 
 import org.apache.zookeeper.AsyncCallback;
@@ -243,9 +242,6 @@ public final class HBaseClient {
   /** Watcher to keep track of the -ROOT- region in ZooKeeper.  */
   private final ZKClient zkclient;
 
-  /** How many {@code -ROOT-} lookups were made.  */
-  private final Counter root_lookups = new Counter();
-
   /**
    * The client currently connected to the -ROOT- region.
    * If this is {@code null} then we currently don't know where the -ROOT-
@@ -295,12 +291,6 @@ public final class HBaseClient {
    */
   private final ConcurrentHashMap<RegionInfo, RegionClient> region2client =
     new ConcurrentHashMap<RegionInfo, RegionClient>();
-
-  /** How many {@code .META.} lookups were made (with a permit).  */
-  private final Counter meta_lookups_with_permit = new Counter();
-
-  /** How many {@code .META.} lookups were made (without a permit).  */
-  private final Counter meta_lookups_wo_permit = new Counter();
 
   /**
    * Maps a client connected to a RegionServer to the list of regions we know
@@ -372,6 +362,55 @@ public final class HBaseClient {
    * @see #setupIncrementCoalescing
    */
   private volatile LoadingCache<BufferedIncrement, BufferedIncrement.Amount> increment_buffer;
+
+  // ------------------------ //
+  // Client usage statistics. //
+  // ------------------------ //
+
+  /** Number of connections created by {@link #newClient}.  */
+  private final Counter num_connections_created = new Counter();
+
+  /** How many {@code -ROOT-} lookups were made.  */
+  private final Counter root_lookups = new Counter();
+
+  /** How many {@code .META.} lookups were made (with a permit).  */
+  private final Counter meta_lookups_with_permit = new Counter();
+
+  /** How many {@code .META.} lookups were made (without a permit).  */
+  private final Counter meta_lookups_wo_permit = new Counter();
+
+  /** Number of calls to {@link #flush}.  */
+  private final Counter num_flushes = new Counter();
+
+  /** Number of NSREs handled by {@link #handleNSRE}.  */
+  private final Counter num_nsres = new Counter();
+
+  /** Number of RPCs delayed by {@link #handleNSRE}.  */
+  private final Counter num_nsre_rpcs = new Counter();
+
+  /** Number of {@link MultiAction} sent to the network.  */
+  final Counter num_multi_rpcs = new Counter();
+
+  /** Number of calls to {@link #get}.  */
+  private final Counter num_gets = new Counter();
+
+  /** Number of calls to {@link #openScanner}.  */
+  private final Counter num_scanners_opened = new Counter();
+
+  /** Number of calls to {@link #scanNextRows}.  */
+  private final Counter num_scans = new Counter();
+
+  /** Number calls to {@link #put}.  */
+  private final Counter num_puts = new Counter();
+
+  /** Number calls to {@link #lockRow}.  */
+  private final Counter num_row_locks = new Counter();
+
+  /** Number calls to {@link #delete}.  */
+  private final Counter num_deletes = new Counter();
+
+  /** Number of {@link AtomicIncrementRequest} sent.  */
+  private final Counter num_atomic_increments = new Counter();
 
   /**
    * Constructor.
@@ -459,12 +498,40 @@ public final class HBaseClient {
   }
 
   /**
+   * Returns a snapshot of usage statistics for this client.
+   * @since 1.3
+   */
+  public ClientStats stats() {
+    final LoadingCache<BufferedIncrement, BufferedIncrement.Amount> cache =
+      increment_buffer;
+    return new ClientStats(
+      num_connections_created.get(),
+      root_lookups.get(),
+      meta_lookups_with_permit.get(),
+      meta_lookups_wo_permit.get(),
+      num_flushes.get(),
+      num_nsres.get(),
+      num_nsre_rpcs.get(),
+      num_multi_rpcs.get(),
+      num_gets.get(),
+      num_scanners_opened.get(),
+      num_scans.get(),
+      num_puts.get(),
+      num_row_locks.get(),
+      num_deletes.get(),
+      num_atomic_increments.get(),
+      cache != null ? cache.stats() : BufferedIncrement.ZERO_STATS
+    );
+  }
+
+  /**
    * Flushes to HBase any buffered client-side write operation.
    * <p>
    * @return A {@link Deferred}, whose callback chain will be invoked when
    * everything that was buffered at the time of the call has been flushed.
    */
   public Deferred<Object> flush() {
+    num_flushes.increment();
     {
       final LoadingCache<BufferedIncrement, BufferedIncrement.Amount> buf =
         increment_buffer;  // Single volatile-read.
@@ -614,16 +681,6 @@ public final class HBaseClient {
    */
   public int getIncrementBufferSize() {
     return increment_buffer_size;
-  }
-
-  /**
-   * Returns statistics from the buffer used to coalesce increments.
-   * @since 1.3
-   */
-  public CacheStats incrementBufferStats() {
-    final LoadingCache<BufferedIncrement, BufferedIncrement.Amount> cache =
-      increment_buffer;
-    return cache != null ? cache.stats() : BufferedIncrement.ZERO_STATS;
   }
 
   /**
@@ -854,6 +911,7 @@ public final class HBaseClient {
    * @return A deferred list of key-values that matched the get request.
    */
   public Deferred<ArrayList<KeyValue>> get(final GetRequest request) {
+    num_gets.increment();
     return sendRpcToRegion(request).addCallbacks(got, Callback.PASSTHROUGH);
   }
 
@@ -899,6 +957,7 @@ public final class HBaseClient {
    * @return A deferred scanner ID.
    */
   Deferred<Long> openScanner(final Scanner scanner) {
+    num_scanners_opened.increment();
     return sendRpcToRegion(scanner.getOpenRequest()).addCallbacks(
       scanner_opened,
       new Callback<Object, Object>() {
@@ -948,6 +1007,7 @@ public final class HBaseClient {
       final Deferred<Object> d = (Deferred) scanner.nextRows();
       return d;  // ... this will re-open it ______.^
     }
+    num_scans.increment();
     final HBaseRpc next_request = scanner.getNextRowsRequest();
     final Deferred<Object> d = next_request.getDeferred();
     client.sendRpc(next_request);
@@ -988,6 +1048,7 @@ public final class HBaseClient {
    * @return The deferred {@code long} value that results from the increment.
    */
   public Deferred<Long> atomicIncrement(final AtomicIncrementRequest request) {
+    num_atomic_increments.increment();
     return sendRpcToRegion(request).addCallbacks(icv_done,
                                                  Callback.PASSTHROUGH);
   }
@@ -1193,6 +1254,7 @@ public final class HBaseClient {
    * TODO(tsuna): Document failures clients are expected to handle themselves.
    */
   public Deferred<Object> put(final PutRequest request) {
+    num_puts.increment();
     return sendRpcToRegion(request);
   }
 
@@ -1205,6 +1267,7 @@ public final class HBaseClient {
    * @see #unlockRow
    */
   public Deferred<RowLock> lockRow(final RowLockRequest request) {
+    num_row_locks.increment();
     return sendRpcToRegion(request).addCallbacks(
       new Callback<RowLock, Object>() {
         public RowLock call(final Object response) {
@@ -1263,6 +1326,7 @@ public final class HBaseClient {
    * at least an errback to this {@code Deferred} to handle failures.
    */
   public Deferred<Object> delete(final DeleteRequest request) {
+    num_deletes.increment();
     return sendRpcToRegion(request);
   }
 
@@ -1330,7 +1394,11 @@ public final class HBaseClient {
    * the {@code -ROOT-} region itself is located.  This happens even more
    * rarely and a message is logged at the INFO whenever it does.
    * @since 1.1
+   * @deprecated This method will be removed in release 2.0.  Use
+   * {@link #stats}{@code .}{@link ClientStats#rootLookups rootLookups()}
+   * instead.
    */
+  @Deprecated
   public long rootLookupCount() {
     return root_lookups.get();
   }
@@ -1343,7 +1411,12 @@ public final class HBaseClient {
    * the thread was able to acquire a "permit" to do a {@code .META.} lookup.
    * The majority of the {@code .META.} lookups should fall in this category.
    * @since 1.1
+   * @deprecated This method will be removed in release 2.0.  Use
+   * {@link #stats}{@code
+   * .}{@link ClientStats#uncontendedMetaLookups uncontendedMetaLookups()}
+   * instead.
    */
+  @Deprecated
   public long uncontendedMetaLookupCount() {
     return meta_lookups_with_permit.get();
   }
@@ -1359,7 +1432,12 @@ public final class HBaseClient {
    * back-pressure on the caller, to avoid creating {@code .META.} storms.
    * The minority of the {@code .META.} lookups should fall in this category.
    * @since 1.1
+   * @deprecated This method will be removed in release 2.0.  Use
+   * {@link #stats}{@code
+   * .}{@link ClientStats#contendedMetaLookups contendedMetaLookups()}
+   * instead.
    */
+  @Deprecated
   public long contendedMetaLookupCount() {
     return meta_lookups_wo_permit.get();
   }
@@ -1898,6 +1976,7 @@ public final class HBaseClient {
   void handleNSRE(HBaseRpc rpc,
                   final byte[] region_name,
                   final NotServingRegionException e) {
+    num_nsre_rpcs.increment();
     final boolean can_retry_rpc = !cannotRetryRequest(rpc);
     boolean known_nsre = true;  // We already aware of an NSRE for this region?
     ArrayList<HBaseRpc> nsred_rpcs = got_nsre.get(region_name);
@@ -2005,6 +2084,7 @@ public final class HBaseClient {
       }
     }
 
+    num_nsres.increment();
     // Mark this region as being NSRE'd in our regions_cache.
     invalidateRegionCache(region_name, true, (known_nsre ? "still " : "")
                           + "seems to be splitting or closing it.");
@@ -2167,6 +2247,7 @@ public final class HBaseClient {
       chan = channel_factory.newChannel(pipeline);
       ip2client.put(hostport, client);  // This is guaranteed to return null.
     }
+    num_connections_created.increment();
     // Configure and connect the channel without locking ip2client.
     final SocketChannelConfig config = chan.getConfig();
     config.setConnectTimeoutMillis(5000);

@@ -44,6 +44,7 @@ asynchbase_SOURCES := \
 	src/BrokenMetaException.java	\
 	src/BufferedIncrement.java	\
 	src/Bytes.java	\
+	src/ClientStats.java	\
 	src/ConnectionResetException.java	\
 	src/Counter.java	\
 	src/DeleteRequest.java	\

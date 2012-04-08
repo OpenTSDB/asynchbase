@@ -745,6 +745,8 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
         final MultiAction batch = (MultiAction) rpc;
         if (batch.size() == 1) {
           rpc = multiActionToSingleAction(batch);
+        } else {
+          hbase_client.num_multi_rpcs.increment();
         }
       }
       final ChannelBuffer serialized = encode(rpc);
