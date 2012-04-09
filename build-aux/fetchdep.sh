@@ -59,7 +59,7 @@ validate_checksum() {
 }
 
 # Don't re-download if we happen to have the right file already.
-test -f "$2" && validate_checksum "$2" && touch "$2" && exit
+test -f "$2" && validate_checksum "$2" && touch "$2" && rm -f "$2-t" && exit
 
 rm -f "$2"
 $MKDIR_P "$d"
