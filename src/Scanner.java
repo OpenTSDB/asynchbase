@@ -132,6 +132,12 @@ public final class Scanner {
   /** Pre-serialized filter to apply on the scanner.  */
   private byte[] filter;
 
+  /** Minimum {@link KeyValue} timestamp to scan.  */
+  private long min_timestamp = 0;
+
+  /** Maximum {@link KeyValue} timestamp to scan.  */
+  private long max_timestamp = Long.MAX_VALUE;
+
   /** @see #setServerBlockCache  */
   private boolean populate_blockcache = true;
 
@@ -410,6 +416,98 @@ public final class Scanner {
     }
     checkScanningNotStarted();
     this.max_num_kvs = max_num_kvs;
+  }
+
+  /**
+   * Sets the minimum timestamp to scan (inclusive).
+   * <p>
+   * {@link KeyValue}s that have a timestamp strictly less than this one
+   * will not be returned by the scanner.  HBase has internal optimizations to
+   * avoid loading in memory data filtered out in some cases.
+   * @param timestamp The minimum timestamp to scan (inclusive).
+   * @throws IllegalArgumentException if {@code timestamp < 0}.
+   * @throws IllegalArgumentException if {@code timestamp > getMaxTimestamp()}.
+   * @see #setTimeRange
+   * @since 1.3
+   */
+  public void setMinTimestamp(final long timestamp) {
+    if (timestamp < 0) {
+      throw new IllegalArgumentException("Negative timestamp: " + timestamp);
+    } else if (timestamp > max_timestamp) {
+      throw new IllegalArgumentException("New minimum timestamp (" + timestamp
+                                         + ") is greater than the maximum"
+                                         + " timestamp: " + max_timestamp);
+    }
+    min_timestamp = timestamp;
+  }
+
+  /**
+   * Returns the minimum timestamp to scan (inclusive).
+   * @return A positive integer.
+   * @since 1.3
+   */
+  public long getMinTimestamp() {
+    return min_timestamp;
+  }
+
+  /**
+   * Sets the maximum timestamp to scan (exclusive).
+   * <p>
+   * {@link KeyValue}s that have a timestamp greater than or equal to this one
+   * will not be returned by the scanner.  HBase has internal optimizations to
+   * avoid loading in memory data filtered out in some cases.
+   * @param timestamp The maximum timestamp to scan (exclusive).
+   * @throws IllegalArgumentException if {@code timestamp < 0}.
+   * @throws IllegalArgumentException if {@code timestamp < getMinTimestamp()}.
+   * @see #setTimeRange
+   * @since 1.3
+   */
+  public void setMaxTimestamp(final long timestamp) {
+    if (timestamp < 0) {
+      throw new IllegalArgumentException("Negative timestamp: " + timestamp);
+    } else if (timestamp < min_timestamp) {
+      throw new IllegalArgumentException("New maximum timestamp (" + timestamp
+                                         + ") is greater than the minimum"
+                                         + " timestamp: " + min_timestamp);
+    }
+    max_timestamp = timestamp;
+  }
+
+  /**
+   * Returns the maximum timestamp to scan (exclusive).
+   * @return A positive integer.
+   * @since 1.3
+   */
+  public long getMaxTimestamp() {
+    return max_timestamp;
+  }
+
+  /**
+   * Sets the time range to scan.
+   * <p>
+   * {@link KeyValue}s that have a timestamp that do not fall in the range
+   * {@code [min_timestamp; max_timestamp[} will not be returned by the
+   * scanner.  HBase has internal optimizations to avoid loading in memory
+   * data filtered out in some cases.
+   * @param min_timestamp The minimum timestamp to scan (inclusive).
+   * @param max_timestamp The maximum timestamp to scan (exclusive).
+   * @throws IllegalArgumentException if {@code min_timestamp < 0}
+   * @throws IllegalArgumentException if {@code max_timestamp < 0}
+   * @throws IllegalArgumentException if {@code min_timestamp > max_timestamp}
+   * @since 1.3
+   */
+  public void setTimeRange(final long min_timestamp, final long max_timestamp) {
+    if (min_timestamp > max_timestamp) {
+      throw new IllegalArgumentException("New minimum timestamp (" + min_timestamp
+                                         + ") is greater than the new maximum"
+                                         + " timestamp: " + max_timestamp);
+    } else if (min_timestamp < 0) {
+      throw new IllegalArgumentException("Negative minimum timestamp: "
+                                         + min_timestamp);
+    }
+    // We now have the guarantee that max_timestamp >= 0, no need to check it.
+    this.min_timestamp = min_timestamp;
+    this.max_timestamp = max_timestamp;
   }
 
   /**
@@ -847,11 +945,11 @@ public final class Scanner {
       }
 
       // TimeRange
-      buf.writeLong(0);               // Minimum timestamp.
-      buf.writeLong(Long.MAX_VALUE);  // Maximum timestamp.
-      buf.writeByte(0x01);            // Boolean: "all time".
-      // The "all time" boolean indicates whether or not this time range covers
-      // all possible times.  Not sure why it's part of the serialized RPC...
+      buf.writeLong(min_timestamp);  // Minimum timestamp.
+      buf.writeLong(max_timestamp);  // Maximum timestamp.
+      // Boolean: "all time".
+      buf.writeByte(min_timestamp != 0 || max_timestamp != Long.MAX_VALUE
+                    ? 0x00 : 0x01);
 
       // Families.
       buf.writeInt(family != null ? 1 : 0);  // Number of families that follow.

@@ -13,6 +13,7 @@ New public APIs:
     created, etc.)
   - `HBaseClient' has a new `compareAndSet(PutRequests, byte[])' method
     for atomic Compare-And-Set (CAS) operation.
+  - The Scanner has new methods to allow specifying a time range to scan.
 
 Deprecated public APIs:
   - In HBaseClient, the methods `rootLookupCount()',
