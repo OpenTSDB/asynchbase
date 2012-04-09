@@ -187,7 +187,7 @@ $(top_builddir)/api/index.html: $(asynchbase_SOURCES)
 clean:
 	@rm -f $(top_builddir)/.javac-stamp
 	rm -f $(top_builddir)/manifest
-	cd $(top_builddir) || exit 0 && rm -f $(classes_with_nested_classes) $(test_classes_with_nested_classes)
+	cd $(top_builddir) || exit 0 && rm -f $(classes_with_nested_classes) $(test_classes_with_nested_classes) *.class
 	cd $(top_builddir) || exit 0 \
 	  && test -d $(package_dir) || exit 0 \
 	  && dir=$(package_dir) \
