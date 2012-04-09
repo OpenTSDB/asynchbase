@@ -132,6 +132,10 @@ public final class Scanner {
   /** Pre-serialized filter to apply on the scanner.  */
   private byte[] filter;
 
+  /** Min/max timestamp for scanner */
+  private long min_timestamp = 0;
+  private long max_timestamp = Long.MAX_VALUE;
+
   /** @see #setServerBlockCache  */
   private boolean populate_blockcache = true;
 
@@ -410,6 +414,34 @@ public final class Scanner {
     }
     checkScanningNotStarted();
     this.max_num_kvs = max_num_kvs;
+  }
+
+  /**
+   * Sets the minimum timestamp to return columns.
+   * Use with {@link #setMaxTimestamp(long)} to make a range.
+   * @param min_timestamp The earliest timestamp to accept.
+   * @throws IllegalArgumentException if the timestamp isn't between {@code 0} and {@code Long.MAX_VALUE}.
+   * @see #setMaxTimestamp(long)
+   */
+  public void setMinTimestamp(final long min_timestamp) {
+    if (min_timestamp < 0) {
+      throw new IllegalArgumentException("min timestamp must be defined in [0,Long.MAX_VALUE]");
+    }
+    this.min_timestamp = min_timestamp;
+  }
+
+  /**
+   * Sets the maximum timestamp to return columns.
+   * Use with {@link #setMinTimestamp(long)} to make a range.
+   * @param max_timestamp The latest timestamp to accept.
+   * @throws IllegalArgumentException if the timestamp isn't between {@code 0}  and {@code Long.MAX_VALUE}.
+   * @see #setMinTimestamp(long)
+   */
+  public void setMaxTimestamp(final long max_timestamp) {
+    if (max_timestamp < 0) {
+      throw new IllegalArgumentException("max timestamp must be defined in [0,Long.MAX_VALUE]");
+    }
+    this.max_timestamp = max_timestamp;
   }
 
   /**
@@ -847,11 +879,16 @@ public final class Scanner {
       }
 
       // TimeRange
-      buf.writeLong(0);               // Minimum timestamp.
-      buf.writeLong(Long.MAX_VALUE);  // Maximum timestamp.
-      buf.writeByte(0x01);            // Boolean: "all time".
-      // The "all time" boolean indicates whether or not this time range covers
-      // all possible times.  Not sure why it's part of the serialized RPC...
+      buf.writeLong(min_timestamp);  // Minimum timestamp.
+      buf.writeLong(max_timestamp);  // Maximum timestamp.
+
+      if (min_timestamp != 0 || max_timestamp != Long.MAX_VALUE) {
+        buf.writeByte(0x00);
+      } else {
+        buf.writeByte(0x01);            // Boolean: "all time".
+        // The "all time" boolean indicates whether or not this time range covers
+        // all possible times.  Not sure why it's part of the serialized RPC...
+      }
 
       // Families.
       buf.writeInt(family != null ? 1 : 0);  // Number of families that follow.
