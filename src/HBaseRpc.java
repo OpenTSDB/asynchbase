@@ -128,6 +128,19 @@ public abstract class HBaseRpc {
   }
 
   /**
+   * An RPC from which you can get multiple values.
+   * @since 1.3
+   */
+  public interface HasValues {
+    /**
+     * Returns the values contained in this RPC.
+     * <p>
+     * <strong>DO NOT MODIFY THE CONTENTS OF THE ARRAY RETURNED.</strong>
+     */
+    public byte[][] values();
+  }
+
+  /**
    * An RPC from which you can get a timestamp.
    * @since 1.2
    */
@@ -471,7 +484,28 @@ public abstract class HBaseRpc {
   final String toStringWithQualifiers(final String classname,
                                       final byte[] family,
                                       final byte[][] qualifiers) {
-    final StringBuilder buf = new StringBuilder(256);  // min=182
+    return toStringWithQualifiers(classname, family, qualifiers, null, "");
+  }
+
+
+  /**
+   * Helper for subclass's {@link #toString} implementations.
+   * <p>
+   * This is used by subclasses such as {@link DeleteRequest}
+   * or {@link GetRequest}, to avoid code duplication.
+   * @param classname The name of the class of the caller.
+   * @param family A possibly null family name.
+   * @param qualifiers A non-empty list of qualifiers or null.
+   * @param values A non-empty list of values or null.
+   * @param fields Additional fields to include in the output.
+   */
+  final String toStringWithQualifiers(final String classname,
+                                      final byte[] family,
+                                      final byte[][] qualifiers,
+                                      final byte[][] values,
+                                      final String fields) {
+    final StringBuilder buf = new StringBuilder(256  // min=182
+                                                + fields.length());
     buf.append(classname).append("(table=");
     Bytes.pretty(buf, table);
     buf.append(", key=");
@@ -479,17 +513,12 @@ public abstract class HBaseRpc {
     buf.append(", family=");
     Bytes.pretty(buf, family);
     buf.append(", qualifiers=");
-    if (qualifiers == null) {
-      buf.append("null");
-    } else {
-      buf.append('[');
-      for (final byte[] qualifier : qualifiers) {
-        Bytes.pretty(buf, qualifier);
-        buf.append(", ");
-      }
-      buf.setLength(buf.length() - 2);  // Remove the last ", "
-      buf.append(']');
+    Bytes.pretty(buf, qualifiers);
+    if (values != null) {
+      buf.append(", values=");
+      Bytes.pretty(buf, values);
     }
+    buf.append(fields);
     buf.append(", attempt=").append(attempt)
       .append(", region=");
     if (region == null) {
