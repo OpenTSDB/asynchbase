@@ -14,6 +14,9 @@ New public APIs:
   - `HBaseClient' has a new `compareAndSet(PutRequests, byte[])' method
     for atomic Compare-And-Set (CAS) operation.
   - The Scanner has new methods to allow specifying a time range to scan.
+  - `PutRequest' has extra constructors so as to be able to affect multiple
+    columns in a row.  This is required to be able to atomically CAS more
+    than one column at a time on a given row.
 
 Deprecated public APIs:
   - In HBaseClient, the methods `rootLookupCount()',
