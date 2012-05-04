@@ -48,6 +48,7 @@ public final class GetRequest extends HBaseRpc
   private byte[] family;     // TODO(tsuna): Handle multiple families?
   private byte[][] qualifiers;
   private long lockid = RowLock.NO_LOCK;
+  private int maxVersions = 1;
 
   /**
    * Constructor.
@@ -161,6 +162,17 @@ public final class GetRequest extends HBaseRpc
     lockid = lock.id();
     return this;
   }
+  
+  /** Specifies the maximum number of versions to return. */
+  public GetRequest withMaxVersions(final int maxVersions) {
+    this.maxVersions = maxVersions;
+    return this;
+  }
+  
+  /** Gets the maximum number of versions to return. */
+  public int maxVersions() {
+    return maxVersions;
+  }
 
   @Override
   public byte[] table() {
@@ -253,7 +265,7 @@ public final class GetRequest extends HBaseRpc
     buf.writeByte(1);    // Get#GET_VERSION.  Undocumented versioning of Get.
     writeByteArray(buf, key);
     buf.writeLong(lockid);  // Lock ID.
-    buf.writeInt(1);     // Max number of versions to return.
+    buf.writeInt(maxVersions);     // Max number of versions to return.
     buf.writeByte(0x00); // boolean (false): whether or not to use a filter.
     // If the previous boolean was true:
     //   writeByteArray(buf, filter name as byte array);
