@@ -1,6 +1,6 @@
 HBase Async - User visible changes.
 
-* Version 1.3.0 (2012-??-??) [???????]
+* Version 1.3.0 (2012-05-06) [bb9168c]
 
 New public APIs:
   - PleaseThrottleException can now give you a Deferred.
