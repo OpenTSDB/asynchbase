@@ -90,6 +90,7 @@ test_SOURCES := \
 	test/TestIncrementCoalescing.java	\
 
 unittest_SRC := \
+	test/TestMETALookup.java	\
 	test/TestNSREs.java
 
 test_LIBADD := \
