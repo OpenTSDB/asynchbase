@@ -1,5 +1,13 @@
 HBase Async - User visible changes.
 
+* Version 1.3.1 (2012-06-16) [7ea151b]
+
+  - Critical bug fix of issue #27 that makes some keys unusable
+    given certain region boundaries, in rare circumstances.
+  - `ensureTableFamilyExists' and `ensureTableExists' are cheaper
+    as they partially work around HBASE-3170.
+
+
 * Version 1.3.0 (2012-05-06) [bb9168c]
 
 New public APIs:
