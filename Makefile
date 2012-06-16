@@ -145,7 +145,8 @@ check: $(top_builddir)/.javac-test-stamp $(UNITTESTS)
         && tests=0 && failures=0 \
         && cp="$(get_runtime_dep_classpath):$(top_builddir)" && \
         for i in $$classes; do \
-          case $$i in (*[$$]*) continue;; esac; \
+          case $$i in (*[$$]*) continue;; (*/Test*) :;; (*) continue;; esac; \
+	  case $$i in (*$(TESTS)*) :;; (*) continue;; esac; \
           tests=$$((tests + 1)); \
           echo "Running tests for `basename $$i .class`" | $(BANNER); \
           $(JAVA) -ea -esa $(JVM_ARGS) -cp "$$cp" org.junit.runner.JUnitCore `echo $${i%.class} | tr / .` $(ARGS) \
