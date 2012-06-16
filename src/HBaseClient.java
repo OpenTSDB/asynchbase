@@ -860,12 +860,14 @@ public final class HBaseClient {
                                                   final byte[] family) {
     // Just "fault in" the first region of the table.  Not the most optimal or
     // useful thing to do but gets the job done for now.  TODO(tsuna): Improve.
-    final GetRequest dummy = new GetRequest(table, EMPTY_ARRAY);
-    if (family != EMPTY_ARRAY) {
-      dummy.family(family);
+    final HBaseRpc dummy;
+    if (family == EMPTY_ARRAY) {
+      dummy = GetRequest.exists(table, EMPTY_ARRAY);
+    } else {
+      dummy = GetRequest.exists(table, EMPTY_ARRAY, family);
     }
     @SuppressWarnings("unchecked")
-    final Deferred<Object> d = (Deferred) get(dummy);
+    final Deferred<Object> d = (Deferred) sendRpcToRegion(dummy);
     return d;
   }
 
