@@ -58,10 +58,14 @@ final class TestMETALookup {
     assertGreater("table,a,,c,1234567890", "table,a,,b,1234567890");
     // If keys are equal, then start code should break the tie.
     assertGreater("table,foo,1234567891", "table,foo,1234567890");
+    // Make sure that a start code being a prefix of another is handled.
+    assertGreater("table,foo,1234567890", "table,foo,123456789");
     // If both are start keys, then start code should break the tie.
     assertGreater("table,,1234567891", "table,,1234567890");
     // The value `:' is always greater than any start code.
     assertGreater("table,foo,:", "table,foo,9999999999");
+    // Issue 27: searching for key "8,\001" and region key is "8".
+    assertGreater("table,8,\001,:", "table,8,1339667458224");
   }
 
   /** Ensures that {@code sa > sb} in the META cache.  */
