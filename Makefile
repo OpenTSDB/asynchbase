@@ -108,7 +108,7 @@ AM_JAVACFLAGS := -Xlint
 JVM_ARGS :=
 classes := $(asynchbase_SOURCES:src/%.java=$(top_builddir)/$(package_dir)/%.class)
 test_classes := $(test_SOURCES:test/%.java=$(top_builddir)/%.class)
-UNITTESTS := $(unittest_SRC:test/%.java=$(package_dir)/%.class)
+UNITTESTS := $(unittest_SRC:test/%.java=$(top_builddir)/$(package_dir)/%.class)
 
 jar: $(jar)
 
@@ -123,12 +123,12 @@ get_runtime_dep_classpath = `echo $(test_LIBADD) | tr ' ' ':'`
 $(test_classes): $(jar) $(test_SOURCES) $(test_LIBADD)
 	javac $(AM_JAVACFLAGS) -cp $(get_runtime_dep_classpath) \
 	  -d $(top_builddir) $(test_SOURCES)
-$(UNITTESTS): $(jar) $(unittest_SRC) $(test_LIBADD)
+$(top_builddir)/.javac-test-stamp: $(jar) $(unittest_SRC) $(test_LIBADD)
 	javac $(AM_JAVACFLAGS) -cp $(get_runtime_dep_classpath) \
 	  -d $(top_builddir) $(unittest_SRC)
 
 classes_with_nested_classes := $(classes:$(top_builddir)/%.class=%*.class)
-test_classes_with_nested_classes := $(UNITTESTS:.class=*.class)
+test_classes_with_nested_classes := $(UNITTESTS:$(top_builddir)/%.class=%*.class)
 
 run: $(test_classes)
 	@test -n "$(CLASS)" || { echo 'usage: $(MAKE) run CLASS=<name>'; exit 1; }
@@ -137,9 +137,10 @@ run: $(test_classes)
 cli:
 	$(MAKE) run CLASS=Test
 
+
 # Little sed script to make a pretty-ish banner.
 BANNER := sed 's/^.*/  &  /;h;s/./=/g;p;x;p;x'
-check: $(UNITTESTS)
+check: $(top_builddir)/.javac-test-stamp $(UNITTESTS)
 	classes=`cd $(top_builddir) && echo $(test_classes_with_nested_classes)` \
         && tests=0 && failures=0 \
         && cp="$(get_runtime_dep_classpath):$(top_builddir)" && \
@@ -155,6 +156,7 @@ check: $(UNITTESTS)
         else \
           echo "$$failures out of $$tests failed, please send a report to $(PACKAGE_BUGREPORT)" | $(BANNER); \
         fi
+	@touch $(top_builddir)/.javac-test-stamp
 
 pkg_version = \
   `git rev-list --pretty=format:%h HEAD --max-count=1 | sed 1d || echo unknown`
@@ -185,7 +187,7 @@ $(top_builddir)/api/index.html: $(asynchbase_SOURCES)
 	  `find src -name package-info.java`
 
 clean:
-	@rm -f $(top_builddir)/.javac-stamp
+	@rm -f $(top_builddir)/.javac*-stamp
 	rm -f $(top_builddir)/manifest
 	cd $(top_builddir) || exit 0 && rm -f $(classes_with_nested_classes) $(test_classes_with_nested_classes) *.class
 	cd $(top_builddir) || exit 0 \
