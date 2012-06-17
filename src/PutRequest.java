@@ -44,12 +44,13 @@ import org.jboss.netty.buffer.ChannelBuffer;
  * key, family and qualifier, but with timestamp T - 1, then the second
  * write will look like it was applied before the first one when you read
  * this cell back from HBase.  When manually setting timestamps, it is thus
- * strongly recommended to use real UNIX timestamps in milliseconds when
- * setting them manually, e.g. from {@link System#currentTimeMillis}.
+ * strongly recommended to use real UNIX timestamps in milliseconds, e.g.
+ * from {@link System#currentTimeMillis}.
  * <p>
- * If you want to let HBase apply a timestamp on a write at the time it's
+ * If you want to let HBase set the timestamp on a write at the time it's
  * applied within the RegionServer, then use {@link KeyValue#TIMESTAMP_NOW}
- * as a timestamp.  Note however that this has a subtle consequence: if a
+ * as a timestamp.  The timestamp is set right before being written to the WAL
+ * (Write Ahead Log).  Note however that this has a subtle consequence: if a
  * write succeeds from the server's point of view, but fails from the client's
  * point of view (maybe because the client got disconnected from the server
  * before the server could acknowledge the write), then if the client retries
@@ -92,8 +93,9 @@ public final class PutRequest extends BatchableRpc
    * <p>
    * Note: If you want to set your own timestamp, use
    * {@link #PutRequest(byte[], byte[], byte[], byte[], byte[], long)}
-   * instead.  This constructor will use {@link System#currentTimeMillis}
-   * at the time of construction to timestamp the request.
+   * instead.  This constructor will let the RegionServer assign the timestamp
+   * to this write at the time using {@link System#currentTimeMillis} right
+   * before the write is persisted to the WAL.
    * @param table The table to edit.
    * @param key The key of the row to edit in that table.
    * @param family The column family to edit in that table.
@@ -115,8 +117,9 @@ public final class PutRequest extends BatchableRpc
    * <p>
    * Note: If you want to set your own timestamp, use
    * {@link #PutRequest(byte[], byte[], byte[], byte[][], byte[][], long)}
-   * instead.  This constructor will use {@link System#currentTimeMillis}
-   * at the time of construction to timestamp the request.
+   * instead.  This constructor will let the RegionServer assign the timestamp
+   * to this write at the time using {@link System#currentTimeMillis} right
+   * before the write is persisted to the WAL.
    * @param table The table to edit.
    * @param key The key of the row to edit in that table.
    * @param family The column family to edit in that table.
@@ -183,8 +186,9 @@ public final class PutRequest extends BatchableRpc
    * <p>
    * Note: If you want to set your own timestamp, use
    * {@link #PutRequest(byte[], byte[], byte[], byte[], byte[], long, RowLock)}
-   * instead.  This constructor will use {@link System#currentTimeMillis}
-   * at the time of construction to timestamp the request.
+   * instead.  This constructor will let the RegionServer assign the timestamp
+   * to this write at the time using {@link System#currentTimeMillis} right
+   * before the write is persisted to the WAL.
    * @param table The table to edit.
    * @param key The key of the row to edit in that table.
    * @param family The column family to edit in that table.
@@ -253,8 +257,9 @@ public final class PutRequest extends BatchableRpc
    * <p>
    * Note: If you want to set your own timestamp, use
    * {@link #PutRequest(byte[], byte[], byte[], byte[], byte[], long)}
-   * instead.  This constructor will use {@link System#currentTimeMillis}
-   * at the time of construction to timestamp the request.
+   * instead.  This constructor will let the RegionServer assign the timestamp
+   * to this write at the time using {@link System#currentTimeMillis} right
+   * before the write is persisted to the WAL.
    * @param table The table to edit.
    * @param key The key of the row to edit in that table.
    * @param family The column family to edit in that table.
@@ -276,8 +281,9 @@ public final class PutRequest extends BatchableRpc
    * <p>
    * Note: If you want to set your own timestamp, use
    * {@link #PutRequest(byte[], byte[], byte[], byte[], byte[], long, RowLock)}
-   * instead.  This constructor will use {@link System#currentTimeMillis}
-   * at the time of construction to timestamp the request.
+   * instead.  This constructor will let the RegionServer assign the timestamp
+   * to this write at the time using {@link System#currentTimeMillis} right
+   * before the write is persisted to the WAL.
    * @param table The table to edit.
    * @param key The key of the row to edit in that table.
    * @param family The column family to edit in that table.
