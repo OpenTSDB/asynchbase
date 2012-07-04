@@ -342,7 +342,7 @@ public final class KeyValue implements Comparable<KeyValue> {
    * @throws IllegalArgumentException if the timestamp is zero or negative.
    */
   static void checkTimestamp(final long timestamp) {
-    if (timestamp <= 0) {
+    if (timestamp < 0) {
       throw new IllegalArgumentException("Negative timestamp: " + timestamp);
     }
   }
