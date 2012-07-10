@@ -1,6 +1,8 @@
 HBase Async - User visible changes.
 
-* Version 1.3.2 (2012-07-10) [???????]
+* Version 1.4.0 (2012-??-??) [???????]
+
+* Version 1.3.2 (2012-07-10) [2af9f55]
 
 Noteworthy changes:
   - Upgraded to Netty 3.5.2.
