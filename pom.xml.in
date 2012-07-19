@@ -122,19 +122,24 @@
 
   <dependencies>
     <dependency>
-      <groupId>org.jboss.netty</groupId>
+      <groupId>com.google.guava</groupId>
+      <artifactId>guava</artifactId>
+      <version>@GUAVA_VERSION@</version>
+    </dependency>
+    <dependency>
+      <groupId>io.netty</groupId>
       <artifactId>netty</artifactId>
-      <version>[@NETTY_VERSION@,)</version>
+      <version>@NETTY_VERSION@</version>
     </dependency>
     <dependency>
       <groupId>com.stumbleupon</groupId>
       <artifactId>async</artifactId>
-      <version>[@SUASYNC_VERSION@,)</version>
+      <version>@SUASYNC_VERSION@</version>
     </dependency>
     <dependency>
       <groupId>org.apache.zookeeper</groupId>
       <artifactId>zookeeper</artifactId>
-      <version>[@ZOOKEEPER_VERSION@,)</version>
+      <version>@ZOOKEEPER_VERSION@</version>
       <exclusions>
         <exclusion>
           <groupId>log4j</groupId>
@@ -157,20 +162,20 @@
     <dependency>
       <groupId>org.slf4j</groupId>
       <artifactId>slf4j-api</artifactId>
-      <version>[@SLF4J_API_VERSION@,)</version>
+      <version>@SLF4J_API_VERSION@</version>
     </dependency>
 
     <!-- runtime dependencies -->
     <dependency>
       <groupId>org.slf4j</groupId>
       <artifactId>log4j-over-slf4j</artifactId>
-      <version>[@LOG4J_OVER_SLF4J_VERSION@,)</version>
+      <version>@LOG4J_OVER_SLF4J_VERSION@</version>
       <scope>runtime</scope>
     </dependency>
     <dependency>
       <groupId>org.slf4j</groupId>
       <artifactId>jcl-over-slf4j</artifactId>
-      <version>[@JCL_OVER_SLF4J_VERSION@,)</version>
+      <version>@JCL_OVER_SLF4J_VERSION@</version>
       <scope>runtime</scope>
     </dependency>
 

@@ -36,20 +36,24 @@ package := org.hbase.async
 spec_title := Asynchronous HBase Client
 spec_vendor := StumbleUpon, Inc.
 # Semantic Versioning (see http://semver.org/).
-spec_version := 1.2.1.1-jbaldassari-SNAPSHOT
+spec_version := 1.4.0-jbaldassari-SNAPSHOT
 jar := $(top_builddir)/asynchbase-$(spec_version).jar
 asynchbase_SOURCES := \
 	src/AtomicIncrementRequest.java	\
 	src/BatchableRpc.java	\
 	src/BrokenMetaException.java	\
+	src/BufferedIncrement.java	\
 	src/Bytes.java	\
+	src/ClientStats.java	\
+	src/CompareAndSetRequest.java	\
 	src/ConnectionResetException.java	\
+	src/Counter.java	\
 	src/DeleteRequest.java	\
 	src/GetRequest.java	\
-	src/HasFailedRpcException.java	\
 	src/HBaseClient.java	\
 	src/HBaseException.java	\
 	src/HBaseRpc.java	\
+	src/HasFailedRpcException.java	\
 	src/InvalidResponseException.java	\
 	src/KeyValue.java	\
 	src/MultiAction.java	\
@@ -71,15 +75,22 @@ asynchbase_SOURCES := \
 	src/UnknownRowLockException.java	\
 	src/UnknownScannerException.java	\
 	src/VersionMismatchException.java	\
+	src/jsr166e/LongAdder.java	\
+	src/jsr166e/Striped64.java	\
 
 asynchbase_LIBADD := \
 	$(NETTY)	\
 	$(SLF4J_API)	\
 	$(ZOOKEEPER)	\
 	$(SUASYNC)	\
+	$(GUAVA)	\
 
-test_SOURCES := test/Test.java
+test_SOURCES := \
+	test/Test.java	\
+	test/TestIncrementCoalescing.java	\
+
 unittest_SRC := \
+	test/TestMETALookup.java	\
 	test/TestNSREs.java
 
 test_LIBADD := \
@@ -98,7 +109,7 @@ AM_JAVACFLAGS := -Xlint
 JVM_ARGS :=
 classes := $(asynchbase_SOURCES:src/%.java=$(top_builddir)/$(package_dir)/%.class)
 test_classes := $(test_SOURCES:test/%.java=$(top_builddir)/%.class)
-UNITTESTS := $(unittest_SRC:test/%.java=$(package_dir)/%.class)
+UNITTESTS := $(unittest_SRC:test/%.java=$(top_builddir)/$(package_dir)/%.class)
 
 jar: $(jar)
 
@@ -113,24 +124,30 @@ get_runtime_dep_classpath = `echo $(test_LIBADD) | tr ' ' ':'`
 $(test_classes): $(jar) $(test_SOURCES) $(test_LIBADD)
 	javac $(AM_JAVACFLAGS) -cp $(get_runtime_dep_classpath) \
 	  -d $(top_builddir) $(test_SOURCES)
-$(UNITTESTS): $(jar) $(unittest_SRC) $(test_LIBADD)
+$(top_builddir)/.javac-test-stamp: $(jar) $(unittest_SRC) $(test_LIBADD)
 	javac $(AM_JAVACFLAGS) -cp $(get_runtime_dep_classpath) \
 	  -d $(top_builddir) $(unittest_SRC)
 
 classes_with_nested_classes := $(classes:$(top_builddir)/%.class=%*.class)
-test_classes_with_nested_classes := $(UNITTESTS:.class=*.class)
+test_classes_with_nested_classes := $(UNITTESTS:$(top_builddir)/%.class=%*.class)
 
-cli: $(test_classes)
-	$(JAVA) -ea -esa $(JVM_ARGS) -cp "$(get_runtime_dep_classpath):$(top_builddir)" Test $(ARGS)
+run: $(test_classes)
+	@test -n "$(CLASS)" || { echo 'usage: $(MAKE) run CLASS=<name>'; exit 1; }
+	$(JAVA) -ea -esa $(JVM_ARGS) -cp "$(get_runtime_dep_classpath):$(top_builddir)" $(CLASS) $(ARGS)
+
+cli:
+	$(MAKE) run CLASS=Test
+
 
 # Little sed script to make a pretty-ish banner.
 BANNER := sed 's/^.*/  &  /;h;s/./=/g;p;x;p;x'
-check: $(UNITTESTS)
+check: $(top_builddir)/.javac-test-stamp $(UNITTESTS)
 	classes=`cd $(top_builddir) && echo $(test_classes_with_nested_classes)` \
         && tests=0 && failures=0 \
         && cp="$(get_runtime_dep_classpath):$(top_builddir)" && \
         for i in $$classes; do \
-          case $$i in (*[$$]*) continue;; esac; \
+          case $$i in (*[$$]*) continue;; (*/Test*) :;; (*) continue;; esac; \
+	  case $$i in (*$(TESTS)*) :;; (*) continue;; esac; \
           tests=$$((tests + 1)); \
           echo "Running tests for `basename $$i .class`" | $(BANNER); \
           $(JAVA) -ea -esa $(JVM_ARGS) -cp "$$cp" org.junit.runner.JUnitCore `echo $${i%.class} | tr / .` $(ARGS) \
@@ -141,6 +158,7 @@ check: $(UNITTESTS)
         else \
           echo "$$failures out of $$tests failed, please send a report to $(PACKAGE_BUGREPORT)" | $(BANNER); \
         fi
+	@touch $(top_builddir)/.javac-test-stamp
 
 pkg_version = \
   `git rev-list --pretty=format:%h HEAD --max-count=1 | sed 1d || echo unknown`
@@ -160,21 +178,24 @@ $(jar): $(top_builddir)/manifest $(top_builddir)/.javac-stamp $(classes)
 
 doc: $(top_builddir)/api/index.html
 
-JDK_JAVADOC=http://download.oracle.com/javase/6/docs/api
-NETTY_JAVADOC=http://docs.jboss.org/netty/3.2/api
-SUASYNC_JAVADOC=http://tsunanet.net/~tsuna/async/api
-JAVADOCS = $(JDK_JAVADOC) $(NETTY_JAVADOC) $(SUASYNC_JAVADOC)
+JDK_JAVADOC := http://download.oracle.com/javase/6/docs/api
+NETTY_JAVADOC := http://docs.jboss.org/netty/3.2/api
+SUASYNC_JAVADOC := http://tsunanet.net/~tsuna/async/api
+GUAVA_JAVADOC := http://docs.guava-libraries.googlecode.com/git/javadoc
+JAVADOCS = $(JDK_JAVADOC) $(NETTY_JAVADOC) $(SUASYNC_JAVADOC) $(GUAVA_JAVADOC)
 $(top_builddir)/api/index.html: $(asynchbase_SOURCES)
 	javadoc -d $(top_builddir)/api -classpath $(get_dep_classpath) \
-          `echo $(JAVADOCS) | sed 's/\([^ ]*\)/-link \1/g'` $(asynchbase_SOURCES)
+          `echo $(JAVADOCS) | sed 's/\([^ ]*\)/-link \1/g'` $(asynchbase_SOURCES) \
+	  `find src -name package-info.java`
 
 clean:
-	@rm -f $(top_builddir)/.javac-stamp
+	@rm -f $(top_builddir)/.javac*-stamp
 	rm -f $(top_builddir)/manifest
-	cd $(top_builddir) || exit 0 && rm -f $(classes_with_nested_classes) $(test_classes_with_nested_classes)
+	cd $(top_builddir) || exit 0 && rm -f $(classes_with_nested_classes) $(test_classes_with_nested_classes) *.class
 	cd $(top_builddir) || exit 0 \
 	  && test -d $(package_dir) || exit 0 \
 	  && dir=$(package_dir) \
+	  && rmdir $(package_dir)/*/ \
 	  && while test x"$$dir" != x"$${dir%/*}"; do \
 	       rmdir "$$dir" && dir=$${dir%/*} || break; \
 	     done \
@@ -189,6 +210,7 @@ pom.xml: pom.xml.in Makefile
 	{ \
 	  echo '<!-- Generated by Makefile on '`date`' -->'; \
 	  sed <$< \
+	    -e 's/@GUAVA_VERSION@/$(GUAVA_VERSION)/' \
 	    -e 's/@JAVASSIST_VERSION@/$(JAVASSIST_VERSION)/' \
 	    -e 's/@JCL_OVER_SLF4J_VERSION@/$(JCL_OVER_SLF4J_VERSION)/' \
 	    -e 's/@JUNIT_VERSION@/$(JUNIT_VERSION)/' \
@@ -206,4 +228,4 @@ pom.xml: pom.xml.in Makefile
 	} >$@-t
 	mv $@-t $@
 
-.PHONY: all jar clean cli distclean doc check
+.PHONY: all jar clean cli distclean doc check run

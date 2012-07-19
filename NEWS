@@ -1,6 +1,48 @@
 HBase Async - User visible changes.
 
-* Version 1.2.1 (2012-??-??) [???????]
+* Version 1.4.0 (2012-??-??) [???????]
+
+* Version 1.3.2 (2012-07-10) [2af9f55]
+
+Noteworthy changes:
+  - Upgraded to Netty 3.5.2.
+  - KeyValue now allows a timestamp of 0.
+
+* Version 1.3.1 (2012-06-16) [7ea151b]
+
+  - Critical bug fix of issue #27 that makes some keys unusable
+    given certain region boundaries, in rare circumstances.
+  - `ensureTableFamilyExists' and `ensureTableExists' are cheaper
+    as they partially work around HBASE-3170.
+
+
+* Version 1.3.0 (2012-05-06) [bb9168c]
+
+New public APIs:
+  - PleaseThrottleException can now give you a Deferred.
+  - There is now a `Counter' class that provides a highly concurrent
+    replacement for AtomicLong from jsr166e's LongAdder.
+  - HBaseClient now has a `bufferAtomicIncrement' method used to
+    coalesce atomic counter increments.
+  - A new method, `stats()', provides detailed statistics on the client's
+    activities (number of calls for various RPCs, number of connections
+    created, etc.)
+  - `HBaseClient' has a new `compareAndSet(PutRequests, byte[])' method
+    for atomic Compare-And-Set (CAS) operation.
+  - The Scanner has new methods to allow specifying a time range to scan.
+  - `PutRequest' has extra constructors so as to be able to affect multiple
+    columns in a row.  This is required to be able to atomically CAS more
+    than one column at a time on a given row.
+
+Deprecated public APIs:
+  - In HBaseClient, the methods `rootLookupCount()',
+    `uncontendedMetaLookupCount()', and `contendedMetaLookupCount()' are
+    deprecated in favor of the new `stats()' API.  These methods will be
+    removed in the 2.0 release.
+
+Noteworthy changes:
+  - Upgraded to Netty 3.4.3, suasync to 1.2.0.
+  - asynchbase now depends on Google's Guava library (v12.0).
 
 
 * Version 1.2.0 (2012-02-21) [a7ae238]

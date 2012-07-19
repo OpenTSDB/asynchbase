@@ -40,8 +40,9 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentSkipListMap;
 import java.util.concurrent.Executor;
 import java.util.concurrent.Executors;
-import java.util.concurrent.atomic.AtomicLong;
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
+
+import com.google.common.cache.LoadingCache;
 
 import org.apache.zookeeper.AsyncCallback;
 import org.apache.zookeeper.KeeperException.Code;
@@ -220,15 +221,26 @@ public final class HBaseClient {
   private volatile short flush_interval = 1000;  // ms
 
   /**
+   * How many different counters do we want to keep in memory for buffering.
+   * Each entry requires storing the table name, row key, family name and
+   * column qualifier, plus 4 small objects.
+   *
+   * Assuming an average table name of 10 bytes, average key of 20 bytes,
+   * average family name of 10 bytes and average qualifier of 8 bytes, this
+   * would require 65535 * (10 + 20 + 10 + 8 + 4 * 32) / 1024 / 1024 = 11MB
+   * of RAM, which isn't too excessive for a default value.  Of course this
+   * might bite people with large keys or qualifiers, but then it's normal
+   * to expect they'd tune this value to cater to their unusual requirements.
+   */
+  private volatile int increment_buffer_size = 65535;
+
+  /**
    * Factory through which we will create all its channels / sockets.
    */
   private final ClientSocketChannelFactory channel_factory;
 
   /** Watcher to keep track of the -ROOT- region in ZooKeeper.  */
   private final ZKClient zkclient;
-
-  /** How many {@code -ROOT-} lookups were made.  */
-  private final AtomicLong root_lookups = new AtomicLong();
 
   /**
    * The client currently connected to the -ROOT- region.
@@ -279,12 +291,6 @@ public final class HBaseClient {
    */
   private final ConcurrentHashMap<RegionInfo, RegionClient> region2client =
     new ConcurrentHashMap<RegionInfo, RegionClient>();
-
-  /** How many {@code .META.} lookups were made (with a permit).  */
-  private final AtomicLong meta_lookups_with_permit = new AtomicLong();
-
-  /** How many {@code .META.} lookups were made (without a permit).  */
-  private final AtomicLong meta_lookups_wo_permit = new AtomicLong();
 
   /**
    * Maps a client connected to a RegionServer to the list of regions we know
@@ -343,6 +349,68 @@ public final class HBaseClient {
    */
   private final ConcurrentSkipListMap<byte[], ArrayList<HBaseRpc>> got_nsre =
     new ConcurrentSkipListMap<byte[], ArrayList<HBaseRpc>>(RegionInfo.REGION_NAME_CMP);
+
+  /**
+   * Buffer for atomic increment coalescing.
+   * This buffer starts out null, and remains so until the first time we need
+   * to buffer an increment.  Once lazily initialized, this buffer will never
+   * become null again.
+   * <p>
+   * We do this so that we can lazily schedule the flush timer only if we ever
+   * have buffered increments.  Applications without buffered increments don't
+   * need to pay any memory for the buffer or any CPU time for a useless timer.
+   * @see #setupIncrementCoalescing
+   */
+  private volatile LoadingCache<BufferedIncrement, BufferedIncrement.Amount> increment_buffer;
+
+  // ------------------------ //
+  // Client usage statistics. //
+  // ------------------------ //
+
+  /** Number of connections created by {@link #newClient}.  */
+  private final Counter num_connections_created = new Counter();
+
+  /** How many {@code -ROOT-} lookups were made.  */
+  private final Counter root_lookups = new Counter();
+
+  /** How many {@code .META.} lookups were made (with a permit).  */
+  private final Counter meta_lookups_with_permit = new Counter();
+
+  /** How many {@code .META.} lookups were made (without a permit).  */
+  private final Counter meta_lookups_wo_permit = new Counter();
+
+  /** Number of calls to {@link #flush}.  */
+  private final Counter num_flushes = new Counter();
+
+  /** Number of NSREs handled by {@link #handleNSRE}.  */
+  private final Counter num_nsres = new Counter();
+
+  /** Number of RPCs delayed by {@link #handleNSRE}.  */
+  private final Counter num_nsre_rpcs = new Counter();
+
+  /** Number of {@link MultiAction} sent to the network.  */
+  final Counter num_multi_rpcs = new Counter();
+
+  /** Number of calls to {@link #get}.  */
+  private final Counter num_gets = new Counter();
+
+  /** Number of calls to {@link #openScanner}.  */
+  private final Counter num_scanners_opened = new Counter();
+
+  /** Number of calls to {@link #scanNextRows}.  */
+  private final Counter num_scans = new Counter();
+
+  /** Number calls to {@link #put}.  */
+  private final Counter num_puts = new Counter();
+
+  /** Number calls to {@link #lockRow}.  */
+  private final Counter num_row_locks = new Counter();
+
+  /** Number calls to {@link #delete}.  */
+  private final Counter num_deletes = new Counter();
+
+  /** Number of {@link AtomicIncrementRequest} sent.  */
+  private final Counter num_atomic_increments = new Counter();
 
   /**
    * Constructor.
@@ -430,12 +498,47 @@ public final class HBaseClient {
   }
 
   /**
+   * Returns a snapshot of usage statistics for this client.
+   * @since 1.3
+   */
+  public ClientStats stats() {
+    final LoadingCache<BufferedIncrement, BufferedIncrement.Amount> cache =
+      increment_buffer;
+    return new ClientStats(
+      num_connections_created.get(),
+      root_lookups.get(),
+      meta_lookups_with_permit.get(),
+      meta_lookups_wo_permit.get(),
+      num_flushes.get(),
+      num_nsres.get(),
+      num_nsre_rpcs.get(),
+      num_multi_rpcs.get(),
+      num_gets.get(),
+      num_scanners_opened.get(),
+      num_scans.get(),
+      num_puts.get(),
+      num_row_locks.get(),
+      num_deletes.get(),
+      num_atomic_increments.get(),
+      cache != null ? cache.stats() : BufferedIncrement.ZERO_STATS
+    );
+  }
+
+  /**
    * Flushes to HBase any buffered client-side write operation.
    * <p>
    * @return A {@link Deferred}, whose callback chain will be invoked when
    * everything that was buffered at the time of the call has been flushed.
    */
   public Deferred<Object> flush() {
+    num_flushes.increment();
+    {
+      final LoadingCache<BufferedIncrement, BufferedIncrement.Amount> buf =
+        increment_buffer;  // Single volatile-read.
+      if (buf != null) {
+        flushBufferedIncrements(buf);
+      }
+    }
     final ArrayList<Deferred<Object>> d =
       new ArrayList<Deferred<Object>>(client2regions.size()
                                       + got_nsre.size() * 8);
@@ -451,7 +554,8 @@ public final class HBaseClient {
           // adding new RPCs that change data in HBase.  Not good.
           if (rpc instanceof PutRequest
               || rpc instanceof AtomicIncrementRequest
-              || rpc instanceof DeleteRequest) {
+              || rpc instanceof DeleteRequest
+              || rpc instanceof CompareAndSetRequest) {
             d.add(rpc.getDeferred());
           }
         }
@@ -486,14 +590,55 @@ public final class HBaseClient {
    * @throws IllegalArgumentException if {@code flush_interval < 0}.
    */
   public short setFlushInterval(final short flush_interval) {
+    // Note: if we have buffered increments, they'll pick up the new flush
+    // interval next time the current timer fires.
     if (flush_interval < 0) {
       throw new IllegalArgumentException("Negative: " + flush_interval);
     }
-    try {
-      return this.flush_interval;
-    } finally {
-      this.flush_interval = flush_interval;
+    final short prev = this.flush_interval;
+    this.flush_interval = flush_interval;
+    return prev;
+  }
+
+  /**
+   * Changes the size of the increment buffer.
+   * <p>
+   * <b>NOTE:</b> because there is no way to resize the existing buffer,
+   * this method will flush the existing buffer and create a new one.
+   * This side effect might be unexpected but is unfortunately required.
+   * <p>
+   * This determines the maximum number of counters this client will keep
+   * in-memory to allow increment coalescing through
+   * {@link #bufferAtomicIncrement}.
+   * <p>
+   * The greater this number, the more memory will be used to buffer
+   * increments, and the more efficient increment coalescing can be
+   * if you have a high-throughput application with a large working
+   * set of counters.
+   * <p>
+   * If your application has excessively large keys or qualifiers, you might
+   * consider using a lower number in order to reduce memory usage.
+   * @param increment_buffer_size The new size of the buffer.
+   * @return The previous size of the buffer.
+   * @throws IllegalArgumentException if {@code increment_buffer_size < 0}.
+   * @since 1.3
+   */
+  public int setIncrementBufferSize(final int increment_buffer_size) {
+    if (increment_buffer_size < 0) {
+      throw new IllegalArgumentException("Negative: " + increment_buffer_size);
     }
+    final int current = this.increment_buffer_size;
+    if (current == increment_buffer_size) {
+      return current;
+    }
+    this.increment_buffer_size = increment_buffer_size;
+    final LoadingCache<BufferedIncrement, BufferedIncrement.Amount> prev =
+      increment_buffer;  // Volatile-read.
+    if (prev != null) {  // Need to resize.
+      makeIncrementBuffer();  // Volatile-write.
+      flushBufferedIncrements(prev);
+    }
+    return current;
   }
 
   /**
@@ -518,10 +663,25 @@ public final class HBaseClient {
    * <p>
    * The default value is an unspecified and implementation dependant, but is
    * guaranteed to be non-zero.
+   * <p>
+   * A return value of 0 indicates that edits are sent directly to HBase
+   * without being buffered.
    * @see #setFlushInterval
    */
   public short getFlushInterval() {
     return flush_interval;
+  }
+
+  /**
+   * Returns the capacity of the increment buffer.
+   * <p>
+   * Note this returns the <em>capacity</em> of the buffer, not the number of
+   * items currently in it.  There is currently no API to get the current
+   * number of items in it.
+   * @since 1.3
+   */
+  public int getIncrementBufferSize() {
+    return increment_buffer_size;
   }
 
   /**
@@ -700,12 +860,14 @@ public final class HBaseClient {
                                                   final byte[] family) {
     // Just "fault in" the first region of the table.  Not the most optimal or
     // useful thing to do but gets the job done for now.  TODO(tsuna): Improve.
-    final GetRequest dummy = new GetRequest(table, EMPTY_ARRAY);
-    if (family != EMPTY_ARRAY) {
-      dummy.family(family);
+    final HBaseRpc dummy;
+    if (family == EMPTY_ARRAY) {
+      dummy = GetRequest.exists(table, EMPTY_ARRAY);
+    } else {
+      dummy = GetRequest.exists(table, EMPTY_ARRAY, family);
     }
     @SuppressWarnings("unchecked")
-    final Deferred<Object> d = (Deferred) get(dummy);
+    final Deferred<Object> d = (Deferred) sendRpcToRegion(dummy);
     return d;
   }
 
@@ -752,6 +914,7 @@ public final class HBaseClient {
    * @return A deferred list of key-values that matched the get request.
    */
   public Deferred<ArrayList<KeyValue>> get(final GetRequest request) {
+    num_gets.increment();
     return sendRpcToRegion(request).addCallbacks(got, Callback.PASSTHROUGH);
   }
 
@@ -797,6 +960,7 @@ public final class HBaseClient {
    * @return A deferred scanner ID.
    */
   Deferred<Long> openScanner(final Scanner scanner) {
+    num_scanners_opened.increment();
     return sendRpcToRegion(scanner.getOpenRequest()).addCallbacks(
       scanner_opened,
       new Callback<Object, Object>() {
@@ -846,6 +1010,7 @@ public final class HBaseClient {
       final Deferred<Object> d = (Deferred) scanner.nextRows();
       return d;  // ... this will re-open it ______.^
     }
+    num_scans.increment();
     final HBaseRpc next_request = scanner.getNextRowsRequest();
     final Deferred<Object> d = next_request.getDeferred();
     client.sendRpc(next_request);
@@ -886,8 +1051,166 @@ public final class HBaseClient {
    * @return The deferred {@code long} value that results from the increment.
    */
   public Deferred<Long> atomicIncrement(final AtomicIncrementRequest request) {
+    num_atomic_increments.increment();
     return sendRpcToRegion(request).addCallbacks(icv_done,
                                                  Callback.PASSTHROUGH);
+  }
+
+  /**
+   * Buffers a durable atomic increment for coalescing.
+   * <p>
+   * This increment will be held in memory up to the amount of time allowed
+   * by {@link #getFlushInterval} in order to allow the client to coalesce
+   * increments.
+   * <p>
+   * <strong>Node: This method only works with positive increments.</strong>
+   * Also note that if the amount is greater than or equal to
+   * {@link Short#MAX_VALUE}, the increment cannot be buffered and will be
+   * sent directly.
+   * <p>
+   * Increment coalescing can dramatically reduce the number of RPCs and write
+   * load on HBase if you tend to increment multiple times the same working
+   * set of counters.  This is very common in user-facing serving systems that
+   * use HBase counters to keep track of user actions.
+   * <p>
+   * If client-side buffering is disabled ({@link #getFlushInterval} returns
+   * 0) then this function has the same effect as calling
+   * {@link #atomicIncrement(AtomicIncrementRequest)}.
+   * @param request The increment request.
+   * @return The deferred {@code long} value that results from the increment.
+   * @throws IllegalArgumentException if {@code request.getAmount() < 0}
+   * @since 1.3
+   */
+  public Deferred<Long> bufferAtomicIncrement(final AtomicIncrementRequest request) {
+    final long value = request.getAmount();
+    if (value < 0) {
+      throw new IllegalArgumentException("Cannot buffer atomic increment with"
+                                         + " negative amount: " + request);
+    } else if (value >= Short.MAX_VALUE   // Value to large to safely coalesce.
+               || flush_interval == 0) {  // Client-side buffer disabled.
+      return atomicIncrement(request);
+    }
+
+    final BufferedIncrement incr =
+      new BufferedIncrement(request.table(), request.key(), request.family(),
+                            request.qualifier());
+    final short delta = (short) value;
+    do {
+      BufferedIncrement.Amount amount;
+      // Semi-evil: the very first time we get here, `increment_buffer' will
+      // still be null (we don't initialize it in our constructor) so we catch
+      // the NPE that ensues to allocate the buffer and kick off a timer to
+      // regularly flush it.
+      try {
+        amount = increment_buffer.getUnchecked(incr);
+      } catch (NullPointerException e) {
+        setupIncrementCoalescing();
+        amount = increment_buffer.getUnchecked(incr);
+      }
+      if (amount.addAndGet(delta) < 0) {
+        // Race condition.  We got something out of the buffer, but in the mean
+        // time another thread picked it up and decided to send it to HBase. So
+        // we need to retry, which will create a new entry in the buffer.
+        amount.addAndGet(-delta);  // Undo our previous addAndGet.
+        // Loop again to retry.
+      } else {
+        final Deferred<Long> deferred = new Deferred<Long>();
+        amount.deferred.chain(deferred);
+        return deferred;
+      }
+    } while(true);
+  }
+
+  /**
+   * Called the first time we get a buffered increment.
+   * Lazily creates the increment buffer and sets up a timer to regularly
+   * flush buffered increments.
+   */
+  private synchronized void setupIncrementCoalescing() {
+    // If multiple threads attempt to setup coalescing at the same time, the
+    // first one to get here will make `increment_buffer' non-null, and thus
+    // subsequent ones will return immediately.  This is important to avoid
+    // creating more than one FlushBufferedIncrementsTimer below.
+    if (increment_buffer != null) {
+      return;
+    }
+    makeIncrementBuffer();  // Volatile-write.
+
+    // Start periodic buffered increment flushes.
+    final class FlushBufferedIncrementsTimer implements TimerTask {
+      public void run(final Timeout timeout) {
+        try {
+          flushBufferedIncrements(increment_buffer);
+        } finally {
+          final short interval = flush_interval; // Volatile-read.
+          // Even if we paused or disabled the client side buffer by calling
+          // setFlushInterval(0), we will continue to schedule this timer
+          // forever instead of pausing it.  Pausing it is troublesome because
+          // we don't keep a reference to this timer, so we can't cancel it or
+          // tell if it's running or not.  So let's just KISS and assume that
+          // if we need the timer once, we'll need it forever.  If it's truly
+          // not needed anymore, we'll just cause a bit of extra work to the
+          // timer thread every 100ms, no big deal.
+          timer.newTimeout(new FlushBufferedIncrementsTimer(),
+                           interval > 0 ? interval : 100, MILLISECONDS);
+        }
+      }
+    }
+    final short interval = flush_interval; // Volatile-read.
+    // Handle the extremely unlikely yet possible racy case where:
+    //   flush_interval was > 0
+    //   A buffered increment came in
+    //   It was the first one ever so we landed here
+    //   Meanwhile setFlushInterval(0) to disable buffering
+    // In which case we just flush whatever we have in 1ms.
+    timer.newTimeout(new FlushBufferedIncrementsTimer(),
+                     interval > 0 ? interval : 1, MILLISECONDS);
+  }
+
+  /**
+   * Flushes all buffered increments.
+   * @param increment_buffer The buffer to flush.
+   */
+  private static void flushBufferedIncrements(// JAVA Y U NO HAVE TYPEDEF? F U!
+    final LoadingCache<BufferedIncrement, BufferedIncrement.Amount> increment_buffer) {
+    // Calling this method to clean up before shutting down works solely
+    // because `invalidateAll()' will *synchronously* remove everything.
+    // The Guava documentation says "Discards all entries in the cache,
+    // possibly asynchronously" but in practice the code in `LocalCache'
+    // works as follows:
+    //
+    //   for each segment:
+    //     segment.clear
+    //
+    // Where clearing a segment consists in:
+    //
+    //   lock the segment
+    //   for each active entry:
+    //     add entry to removal queue
+    //   null out the hash table
+    //   unlock the segment
+    //   for each entry in removal queue:
+    //     call the removal listener on that entry
+    //
+    // So by the time the call to `invalidateAll()' returns, every single
+    // buffered increment will have been dealt with, and it is thus safe
+    // to shutdown the rest of the client to let it complete all outstanding
+    // operations.
+    if (LOG.isDebugEnabled()) {
+      LOG.debug("Flushing " + increment_buffer.size() + " buffered increments");
+    }
+    increment_buffer.invalidateAll();
+  }
+
+  /**
+   * Creates the increment buffer according to current configuration.
+   */
+  private void makeIncrementBuffer() {
+    final int size = increment_buffer_size;
+    increment_buffer = BufferedIncrement.newCache(this, size);
+    if (LOG.isDebugEnabled()) {
+      LOG.debug("Created increment buffer of " + size + " entries");
+    }
   }
 
   /** Singleton callback to handle responses of incrementColumnValue RPCs.  */
@@ -934,8 +1257,99 @@ public final class HBaseClient {
    * TODO(tsuna): Document failures clients are expected to handle themselves.
    */
   public Deferred<Object> put(final PutRequest request) {
+    num_puts.increment();
     return sendRpcToRegion(request);
   }
+
+  /**
+   * Atomic Compare-And-Set (CAS) on a single cell.
+   * <p>
+   * Note that edits sent through this method <b>cannot be batched</b>, and
+   * won't be subject to the {@link #setFlushInterval flush interval}.  This
+   * entails that write throughput will be lower with this method as edits
+   * have to be sent out to the wire one by one.
+   * <p>
+   * This request enables you to atomically update the value of an existing
+   * cell in HBase using a CAS operation.  It's like a {@link PutRequest}
+   * except that you also pass an expected value.  If the last version of the
+   * cell identified by your {@code PutRequest} matches the expected value,
+   * HBase will atomically update it to the new value.
+   * <p>
+   * If the expected value is the empty byte array, HBase will atomically
+   * create the cell provided that it doesn't exist already. This can be used
+   * to ensure that your RPC doesn't overwrite an existing value.  Note
+   * however that this trick cannot be used the other way around to delete
+   * an expected value atomically.
+   * @param edit The new value to write.
+   * @param expected The expected value of the cell to compare against.
+   * <strong>This byte array will NOT be copied.</strong>
+   * @return A deferred boolean, if {@code true} the CAS succeeded, otherwise
+   * the CAS failed because the value in HBase didn't match the expected value
+   * of the CAS request.
+   * @since 1.3
+   */
+  public Deferred<Boolean> compareAndSet(final PutRequest edit,
+                                         final byte[] expected) {
+    return sendRpcToRegion(new CompareAndSetRequest(edit, expected))
+      .addCallback(CAS_CB);
+  }
+
+  /**
+   * Atomic Compare-And-Set (CAS) on a single cell.
+   * <p>
+   * Note that edits sent through this method <b>cannot be batched</b>.
+   * @see #compareAndSet(PutRequest, byte[])
+   * @param edit The new value to write.
+   * @param expected The expected value of the cell to compare against.
+   * This string is assumed to use the platform's default charset.
+   * @return A deferred boolean, if {@code true} the CAS succeeded, otherwise
+   * the CAS failed because the value in HBase didn't match the expected value
+   * of the CAS request.
+   * @since 1.3
+   */
+  public Deferred<Boolean> compareAndSet(final PutRequest edit,
+                                         final String expected) {
+    return compareAndSet(edit, expected.getBytes());
+  }
+
+  /**
+   * Atomically insert a new cell in HBase.
+   * <p>
+   * Note that edits sent through this method <b>cannot be batched</b>.
+   * <p>
+   * This is equivalent to calling
+   * {@link #compareAndSet(PutRequest, byte[]) compareAndSet}{@code (edit,
+   * EMPTY_ARRAY)}
+   * @see #compareAndSet(PutRequest, byte[])
+   * @param edit The new value to insert.
+   * @return A deferred boolean, {@code true} if the edit got atomically
+   * inserted in HBase, {@code false} if there was already a value in the
+   * given cell.
+   * @since 1.3
+   */
+  public Deferred<Boolean> atomicCreate(final PutRequest edit) {
+    return compareAndSet(edit, EMPTY_ARRAY);
+  }
+
+  /** Callback to type-check responses of {@link CompareAndSetRequest}.  */
+  private static final class CompareAndSetCB implements Callback<Boolean, Object> {
+
+    public Boolean call(final Object response) {
+      if (response instanceof Boolean) {
+        return (Boolean)response;
+      } else {
+        throw new InvalidResponseException(Boolean.class, response);
+      }
+    }
+
+    public String toString() {
+      return "type compareAndSet response";
+    }
+
+  }
+
+  /** Singleton callback for responses of {@link CompareAndSetRequest}.  */
+  private static final CompareAndSetCB CAS_CB = new CompareAndSetCB();
 
   /**
    * Acquires an explicit row lock.
@@ -946,6 +1360,7 @@ public final class HBaseClient {
    * @see #unlockRow
    */
   public Deferred<RowLock> lockRow(final RowLockRequest request) {
+    num_row_locks.increment();
     return sendRpcToRegion(request).addCallbacks(
       new Callback<RowLock, Object>() {
         public RowLock call(final Object response) {
@@ -1004,6 +1419,7 @@ public final class HBaseClient {
    * at least an errback to this {@code Deferred} to handle failures.
    */
   public Deferred<Object> delete(final DeleteRequest request) {
+    num_deletes.increment();
     return sendRpcToRegion(request);
   }
 
@@ -1071,7 +1487,11 @@ public final class HBaseClient {
    * the {@code -ROOT-} region itself is located.  This happens even more
    * rarely and a message is logged at the INFO whenever it does.
    * @since 1.1
+   * @deprecated This method will be removed in release 2.0.  Use
+   * {@link #stats}{@code .}{@link ClientStats#rootLookups rootLookups()}
+   * instead.
    */
+  @Deprecated
   public long rootLookupCount() {
     return root_lookups.get();
   }
@@ -1084,7 +1504,12 @@ public final class HBaseClient {
    * the thread was able to acquire a "permit" to do a {@code .META.} lookup.
    * The majority of the {@code .META.} lookups should fall in this category.
    * @since 1.1
+   * @deprecated This method will be removed in release 2.0.  Use
+   * {@link #stats}{@code
+   * .}{@link ClientStats#uncontendedMetaLookups uncontendedMetaLookups()}
+   * instead.
    */
+  @Deprecated
   public long uncontendedMetaLookupCount() {
     return meta_lookups_with_permit.get();
   }
@@ -1100,7 +1525,12 @@ public final class HBaseClient {
    * back-pressure on the caller, to avoid creating {@code .META.} storms.
    * The minority of the {@code .META.} lookups should fall in this category.
    * @since 1.1
+   * @deprecated This method will be removed in release 2.0.  Use
+   * {@link #stats}{@code
+   * .}{@link ClientStats#contendedMetaLookups contendedMetaLookups()}
+   * instead.
    */
+  @Deprecated
   public long contendedMetaLookupCount() {
     return meta_lookups_wo_permit.get();
   }
@@ -1189,9 +1619,9 @@ public final class HBaseClient {
             }
           };
           d.addBoth(new ReleaseMetaLookupPermit());
-          meta_lookups_with_permit.incrementAndGet();
+          meta_lookups_with_permit.increment();
         } else {
-          meta_lookups_wo_permit.incrementAndGet();
+          meta_lookups_wo_permit.increment();
         }
         // This errback needs to run *after* the callback above.
         return d.addErrback(newLocateRegionErrback(table, key));
@@ -1211,7 +1641,7 @@ public final class HBaseClient {
     final byte[] root_key = createRegionSearchKey(META, meta_key);
     final RegionInfo root_region = new RegionInfo(ROOT, ROOT_REGION,
                                                   EMPTY_ARRAY);
-    root_lookups.incrementAndGet();
+    root_lookups.increment();
     return rootregion.getClosestRowBefore(root_region, ROOT, root_key, INFO)
       .addCallback(root_lookup_done)
       // This errback needs to run *after* the callback above.
@@ -1639,6 +2069,7 @@ public final class HBaseClient {
   void handleNSRE(HBaseRpc rpc,
                   final byte[] region_name,
                   final NotServingRegionException e) {
+    num_nsre_rpcs.increment();
     final boolean can_retry_rpc = !cannotRetryRequest(rpc);
     boolean known_nsre = true;  // We already aware of an NSRE for this region?
     ArrayList<HBaseRpc> nsred_rpcs = got_nsre.get(region_name);
@@ -1739,12 +2170,14 @@ public final class HBaseClient {
         }
         if (reject) {
           rpc.callback(new PleaseThrottleException(size + " RPCs waiting on "
-            + Bytes.pretty(region_name) + " to come back online", e, rpc));
+            + Bytes.pretty(region_name) + " to come back online", e, rpc,
+            exists_rpc.getDeferred()));
         }
         return;  // This NSRE is already known and being handled.
       }
     }
 
+    num_nsres.increment();
     // Mark this region as being NSRE'd in our regions_cache.
     invalidateRegionCache(region_name, true, (known_nsre ? "still " : "")
                           + "seems to be splitting or closing it.");
@@ -1907,6 +2340,7 @@ public final class HBaseClient {
       chan = channel_factory.newChannel(pipeline);
       ip2client.put(hostport, client);  // This is guaranteed to return null.
     }
+    num_connections_created.increment();
     // Configure and connect the channel without locking ip2client.
     final SocketChannelConfig config = chan.getConfig();
     config.setConnectTimeoutMillis(5000);

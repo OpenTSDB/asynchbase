@@ -103,6 +103,21 @@ public final class GetRequest extends HBaseRpc
   }
 
   /**
+   * Package-private factory method to build an "exists" RPC.
+   * @param table The non-empty name of the table to use.
+   * @param key The row key to get in that table.
+   * @param family The column family to get in the table.
+   * @return An {@link HBaseRpc} that will return a {@link Boolean}
+   * indicating whether or not the given table / key exists.
+   */
+  static HBaseRpc exists(final byte[] table,
+                         final byte[] key, final byte[] family) {
+    final GetRequest rpc = new GetRequest(0F, table, key);
+    rpc.family(family);
+    return rpc;
+  }
+
+  /**
    * Specifies a particular column family to get.
    * @param family The column family.
    * <strong>This byte array will NOT be copied.</strong>

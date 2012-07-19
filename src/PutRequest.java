@@ -44,12 +44,13 @@ import org.jboss.netty.buffer.ChannelBuffer;
  * key, family and qualifier, but with timestamp T - 1, then the second
  * write will look like it was applied before the first one when you read
  * this cell back from HBase.  When manually setting timestamps, it is thus
- * strongly recommended to use real UNIX timestamps in milliseconds when
- * setting them manually, e.g. from {@link System#currentTimeMillis}.
+ * strongly recommended to use real UNIX timestamps in milliseconds, e.g.
+ * from {@link System#currentTimeMillis}.
  * <p>
- * If you want to let HBase apply a timestamp on a write at the time it's
+ * If you want to let HBase set the timestamp on a write at the time it's
  * applied within the RegionServer, then use {@link KeyValue#TIMESTAMP_NOW}
- * as a timestamp.  Note however that this has a subtle consequence: if a
+ * as a timestamp.  The timestamp is set right before being written to the WAL
+ * (Write Ahead Log).  Note however that this has a subtle consequence: if a
  * write succeeds from the server's point of view, but fails from the client's
  * point of view (maybe because the client got disconnected from the server
  * before the server could acknowledge the write), then if the client retries
@@ -58,7 +59,8 @@ import org.jboss.netty.buffer.ChannelBuffer;
  */
 public final class PutRequest extends BatchableRpc
   implements HBaseRpc.HasTable, HBaseRpc.HasKey, HBaseRpc.HasFamily,
-             HBaseRpc.HasQualifier, HBaseRpc.HasValue {
+             HBaseRpc.HasQualifiers, HBaseRpc.HasValues,
+             /* legacy: */ HBaseRpc.HasQualifier, HBaseRpc.HasValue {
 
   private static final byte[] PUT = new byte[] { 'p', 'u', 't' };
 
@@ -72,12 +74,18 @@ public final class PutRequest extends BatchableRpc
   static final PutRequest EMPTY_PUT;
   static {
     final byte[] zero = new byte[] { 0 };
-    EMPTY_PUT = new PutRequest(zero, zero, zero, zero, zero);
+    final byte[][] onezero = new byte[][] { zero };
+    EMPTY_PUT = new PutRequest(zero, zero, zero, onezero, onezero);
     EMPTY_PUT.setRegion(new RegionInfo(zero, zero, zero));
   }
 
-  private final byte[] qualifier;
-  private final byte[] value;
+  /**
+   * Invariants:
+   *   - qualifiers.length == values.length
+   *   - qualifiers.length > 0
+   */
+  private final byte[][] qualifiers;
+  private final byte[][] values;
 
   /**
    * Constructor using current time.
@@ -85,8 +93,9 @@ public final class PutRequest extends BatchableRpc
    * <p>
    * Note: If you want to set your own timestamp, use
    * {@link #PutRequest(byte[], byte[], byte[], byte[], byte[], long)}
-   * instead.  This constructor will use {@link System#currentTimeMillis}
-   * at the time of construction to timestamp the request.
+   * instead.  This constructor will let the RegionServer assign the timestamp
+   * to this write at the time using {@link System#currentTimeMillis} right
+   * before the write is persisted to the WAL.
    * @param table The table to edit.
    * @param key The key of the row to edit in that table.
    * @param family The column family to edit in that table.
@@ -99,6 +108,33 @@ public final class PutRequest extends BatchableRpc
                     final byte[] qualifier,
                     final byte[] value) {
     this(table, key, family, qualifier, value,
+         KeyValue.TIMESTAMP_NOW, RowLock.NO_LOCK);
+  }
+
+  /**
+   * Constructor for multiple columns using current time.
+   * <strong>These byte arrays will NOT be copied.</strong>
+   * <p>
+   * Note: If you want to set your own timestamp, use
+   * {@link #PutRequest(byte[], byte[], byte[], byte[][], byte[][], long)}
+   * instead.  This constructor will let the RegionServer assign the timestamp
+   * to this write at the time using {@link System#currentTimeMillis} right
+   * before the write is persisted to the WAL.
+   * @param table The table to edit.
+   * @param key The key of the row to edit in that table.
+   * @param family The column family to edit in that table.
+   * @param qualifiers The column qualifiers to edit in that family.
+   * @param values The corresponding values to store.
+   * @throws IllegalArgumentException if {@code qualifiers.length == 0}
+   * or if {@code qualifiers.length != values.length}
+   * @since 1.3
+   */
+  public PutRequest(final byte[] table,
+                    final byte[] key,
+                    final byte[] family,
+                    final byte[][] qualifiers,
+                    final byte[][] values) {
+    this(table, key, family, qualifiers, values,
          KeyValue.TIMESTAMP_NOW, RowLock.NO_LOCK);
   }
 
@@ -123,13 +159,36 @@ public final class PutRequest extends BatchableRpc
   }
 
   /**
+   * Constructor for multiple columns with a specific timestamp.
+   * <strong>These byte arrays will NOT be copied.</strong>
+   * @param table The table to edit.
+   * @param key The key of the row to edit in that table.
+   * @param family The column family to edit in that table.
+   * @param qualifiers The column qualifiers to edit in that family.
+   * @param values The corresponding values to store.
+   * @param timestamp The timestamp to set on this edit.
+   * @throws IllegalArgumentException if {@code qualifiers.length == 0}
+   * or if {@code qualifiers.length != values.length}
+   * @since 1.3
+   */
+  public PutRequest(final byte[] table,
+                    final byte[] key,
+                    final byte[] family,
+                    final byte[][] qualifiers,
+                    final byte[][] values,
+                    final long timestamp) {
+    this(table, key, family, qualifiers, values, timestamp, RowLock.NO_LOCK);
+  }
+
+  /**
    * Constructor using an explicit row lock.
    * <strong>These byte arrays will NOT be copied.</strong>
    * <p>
    * Note: If you want to set your own timestamp, use
    * {@link #PutRequest(byte[], byte[], byte[], byte[], byte[], long, RowLock)}
-   * instead.  This constructor will use {@link System#currentTimeMillis}
-   * at the time of construction to timestamp the request.
+   * instead.  This constructor will let the RegionServer assign the timestamp
+   * to this write at the time using {@link System#currentTimeMillis} right
+   * before the write is persisted to the WAL.
    * @param table The table to edit.
    * @param key The key of the row to edit in that table.
    * @param family The column family to edit in that table.
@@ -170,12 +229,37 @@ public final class PutRequest extends BatchableRpc
   }
 
   /**
+   * Constructor for multiple columns with current time and explicit row lock.
+   * <strong>These byte arrays will NOT be copied.</strong>
+   * @param table The table to edit.
+   * @param key The key of the row to edit in that table.
+   * @param family The column family to edit in that table.
+   * @param qualifiers The column qualifiers to edit in that family.
+   * @param values The corresponding values to store.
+   * @param timestamp The timestamp to set on this edit.
+   * @param lock An explicit row lock to use with this request.
+   * @throws IllegalArgumentException if {@code qualifiers.length == 0}
+   * or if {@code qualifiers.length != values.length}
+   * @since 1.3
+   */
+  public PutRequest(final byte[] table,
+                    final byte[] key,
+                    final byte[] family,
+                    final byte[][] qualifiers,
+                    final byte[][] values,
+                    final long timestamp,
+                    final RowLock lock) {
+    this(table, key, family, qualifiers, values, timestamp, lock.id());
+  }
+
+  /**
    * Convenience constructor from strings (higher overhead).
    * <p>
    * Note: If you want to set your own timestamp, use
    * {@link #PutRequest(byte[], byte[], byte[], byte[], byte[], long)}
-   * instead.  This constructor will use {@link System#currentTimeMillis}
-   * at the time of construction to timestamp the request.
+   * instead.  This constructor will let the RegionServer assign the timestamp
+   * to this write at the time using {@link System#currentTimeMillis} right
+   * before the write is persisted to the WAL.
    * @param table The table to edit.
    * @param key The key of the row to edit in that table.
    * @param family The column family to edit in that table.
@@ -197,8 +281,9 @@ public final class PutRequest extends BatchableRpc
    * <p>
    * Note: If you want to set your own timestamp, use
    * {@link #PutRequest(byte[], byte[], byte[], byte[], byte[], long, RowLock)}
-   * instead.  This constructor will use {@link System#currentTimeMillis}
-   * at the time of construction to timestamp the request.
+   * instead.  This constructor will let the RegionServer assign the timestamp
+   * to this write at the time using {@link System#currentTimeMillis} right
+   * before the write is persisted to the WAL.
    * @param table The table to edit.
    * @param key The key of the row to edit in that table.
    * @param family The column family to edit in that table.
@@ -246,8 +331,8 @@ public final class PutRequest extends BatchableRpc
                      final KeyValue kv,
                      final long lockid) {
     super(PUT, table, kv.key(), kv.family(), kv.timestamp(), lockid);
-    this.qualifier = kv.qualifier();
-    this.value = kv.value();
+    this.qualifiers = new byte[][] { kv.qualifier() };
+    this.values = new byte[][] { kv.value() };
   }
 
   /** Private constructor.  */
@@ -258,12 +343,32 @@ public final class PutRequest extends BatchableRpc
                      final byte[] value,
                      final long timestamp,
                      final long lockid) {
+    this(table, key, family, new byte[][] { qualifier }, new byte[][] { value },
+         timestamp, lockid);
+  }
+
+  /** Private constructor.  */
+  private PutRequest(final byte[] table,
+                     final byte[] key,
+                     final byte[] family,
+                     final byte[][] qualifiers,
+                     final byte[][] values,
+                     final long timestamp,
+                     final long lockid) {
     super(PUT, table, key, family, timestamp, lockid);
     KeyValue.checkFamily(family);
-    KeyValue.checkQualifier(qualifier);
-    KeyValue.checkValue(value);
-    this.qualifier = qualifier;
-    this.value = value;
+    if (qualifiers.length != values.length) {
+      throw new IllegalArgumentException("Have " + qualifiers.length
+        + " qualifiers and " + values.length + " values.  Should be equal.");
+    } else if (qualifiers.length == 0) {
+      throw new IllegalArgumentException("Need at least one qualifier/value.");
+    }
+    for (int i = 0; i < qualifiers.length; i++) {
+      KeyValue.checkQualifier(qualifiers[i]);
+      KeyValue.checkValue(values[i]);
+    }
+    this.qualifiers = qualifiers;
+    this.values = values;
   }
 
   @Override
@@ -276,21 +381,46 @@ public final class PutRequest extends BatchableRpc
     return key;
   }
 
+  /**
+   * Returns the first qualifier of the set of edits in this RPC.
+   * {@inheritDoc}
+   */
   @Override
   public byte[] qualifier() {
-    return qualifier;
+    return qualifiers[0];
   }
 
+  /**
+   * {@inheritDoc}
+   * @since 1.3
+   */
+  @Override
+  public byte[][] qualifiers() {
+    return qualifiers;
+  }
+
+  /**
+   * Returns the first value of the set of edits in this RPC.
+   * {@inheritDoc}
+   */
   @Override
   public byte[] value() {
-    return value;
+    return values[0];
+  }
+
+  /**
+   * {@inheritDoc}
+   * @since 1.3
+   */
+  @Override
+  public byte[][] values() {
+    return values;
   }
 
   public String toString() {
-    return super.toStringWithQualifier("PutRequest",
-                                       family, qualifier,
-                                       ", value=" + Bytes.pretty(value)
-                                       + ", timestamp=" + timestamp
+    return super.toStringWithQualifiers("PutRequest",
+                                       family, qualifiers, values,
+                                       ", timestamp=" + timestamp
                                        + ", lockid=" + lockid
                                        + ", durable=" + durable
                                        + ", bufferable=" + super.bufferable);
@@ -319,18 +449,24 @@ public final class PutRequest extends BatchableRpc
 
   @Override
   int numKeyValues() {
-    return 1;
+    return qualifiers.length;
   }
 
   @Override
   int payloadSize() {
-    return KeyValue.predictSerializedSize(key, family, qualifier, value);
+    int size = 0;
+    for (int i = 0; i < qualifiers.length; i++) {
+      size += KeyValue.predictSerializedSize(key, family, qualifiers[i], values[i]);
+    }
+    return size;
   }
 
   @Override
   void serializePayload(final ChannelBuffer buf) {
-    KeyValue.serialize(buf, KeyValue.PUT, timestamp, key, family,
-                       qualifier, value);
+    for (int i = 0; i < qualifiers.length; i++) {
+      KeyValue.serialize(buf, KeyValue.PUT, timestamp, key, family,
+                         qualifiers[i], values[i]);
+    }
   }
 
   /**
@@ -347,6 +483,13 @@ public final class PutRequest extends BatchableRpc
     size += 3;  // vint: region name length (3 bytes => max length = 32768).
     size += region.name().length;  // The region name.
 
+    size += predictPutSize();
+    return size;
+  }
+
+  /** The raw size of the underlying `Put'.  */
+  int predictPutSize() {
+    int size = 0;
     size += 1;  // byte: Type of the 2nd parameter.
     size += 1;  // byte: Type again (see HBASE-2877).
 
@@ -379,6 +522,13 @@ public final class PutRequest extends BatchableRpc
     writeHBaseByteArray(buf, region.name());
 
     // 2nd param: Put object
+    serializeInto(buf);
+
+    return buf;
+  }
+
+  /** Serialize the raw underlying `Put' into the given buffer.  */
+  void serializeInto(final ChannelBuffer buf) {
     buf.writeByte(CODE); // Code for a `Put' parameter.
     buf.writeByte(CODE); // Code again (see HBASE-2877).
     buf.writeByte(1);    // Put#PUT_VERSION.  Stick to v1 here for now.
@@ -392,10 +542,9 @@ public final class PutRequest extends BatchableRpc
     buf.writeInt(1);  // Number of families that follow.
     writeByteArray(buf, family);  // The column family.
 
-    buf.writeInt(1);  // Number of "KeyValues" that follow.
+    buf.writeInt(qualifiers.length);  // Number of "KeyValues" that follow.
     buf.writeInt(payloadSize());  // Size of the KV that follows.
     serializePayload(buf);
-    return buf;
   }
 
 }
