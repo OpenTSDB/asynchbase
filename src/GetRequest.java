@@ -260,7 +260,7 @@ public final class GetRequest extends HBaseRpc
       }
     }
     if (server_version >= RegionClient.SERVER_VERSION_092_OR_ABOVE) {
-      size += 1;  // int: Attributes map.  Always 0.
+      size += 4;  // int: Attributes map.  Always 0.
     }
     return size;
   }
