@@ -199,7 +199,9 @@ public final class AtomicIncrementRequest extends HBaseRpc
     size += 1;  // byte: Type of the 4th parameter.
     size += 3;  // vint: Qualifier length.
     size += qualifier.length;  // The qualifier.
+    size += 1;  // byte: Type of the 5th parameter.
     size += 8;  // long: Amount.
+    size += 1;  // byte: Type of the 6th parameter.
     size += 1;  // bool: Whether or not to write to the WAL.
     return size;
   }
