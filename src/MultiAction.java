@@ -323,6 +323,7 @@ final class MultiAction extends HBaseRpc {
           if (prev.code() == PutRequest.CODE) {
             buf.setInt(nkeys_per_family_index + 4, nbytes_per_family);
           }
+          nkeys_per_family_index = -1;
           nkeys_per_family = 0;
           nbytes_per_family = 0;
         }

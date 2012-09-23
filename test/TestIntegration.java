@@ -84,6 +84,7 @@ final class TestIntegration {
     LOG.info("Starting integration tests");
     putRead(args);
     putReadDeleteRead(args);
+    regression25(args);
   }
 
   /** Ensures the table/family we use for our test exists. */
@@ -162,6 +163,36 @@ final class TestIntegration {
       client.shutdown().join();
     }
     LOG.info("putReadDeleteRead: PASS");
+  }
+
+  /** Regression test for issue #25. */
+  private static void regression25(final String[] args) throws Exception {
+    final HBaseClient client = Common.getOpt(TestIncrementCoalescing.class,
+                                             args);
+    client.setFlushInterval(FAST_FLUSH);
+    try {
+      final String table1 = args[0] + "1";
+      final String table2 = args[0] + "2";
+      final String family = args[1];
+      createOrTruncateTable(client, table1, family);
+      createOrTruncateTable(client, table2, family);
+      for (int i = 0; i < 2; i++) {
+        final PutRequest put;
+        final String key = 'k' + String.valueOf(i);
+        if (i % 2 == 0) {
+          put = new PutRequest(table1, key, "f", "q", "v");
+        } else {
+          put = new PutRequest(table2, key, "f", "q", "v");
+        }
+        final DeleteRequest delete = new DeleteRequest(put.table(), put.key());
+        client.delete(delete);
+        client.put(put);
+      }
+      client.flush().joinUninterruptibly();
+    } finally {
+      client.shutdown().join();
+    }
+    LOG.info("regression25: PASS");
   }
 
   private static void assertEq(final String expect, final byte[] actual) {
