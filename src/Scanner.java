@@ -29,6 +29,8 @@ package org.hbase.async;
 import java.nio.charset.Charset;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
+import java.util.List;
 
 import org.jboss.netty.buffer.ChannelBuffer;
 import org.jboss.netty.buffer.ChannelBuffers;
@@ -104,6 +106,7 @@ public final class Scanner {
   /** Special reference we use to indicate we're done scanning.  */
   private static final RegionInfo DONE =
     new RegionInfo(EMPTY_ARRAY, EMPTY_ARRAY, EMPTY_ARRAY);
+  public static final byte[] UNSET = Bytes.UTF8("UNSET");
 
   private final HBaseClient client;
   private final byte[] table;
@@ -126,8 +129,49 @@ public final class Scanner {
    */
   private byte[] stop_key = EMPTY_ARRAY;
 
-  private byte[] family;     // TODO(tsuna): Handle multiple families?
-  private byte[] qualifier;  // TODO(tsuna): Handle multiple qualifiers?
+  public static class ColumnSpec {
+    byte[] name;
+    byte[][] qualifiers;
+
+    public ColumnSpec(byte[] name, byte[][] qualifiers) {
+      KeyValue.checkFamily(name);
+      this.name = name;
+      if (qualifiers != null)
+        for (byte[] qualifier : qualifiers) {
+          KeyValue.checkQualifier(qualifier);
+        }
+      this.qualifiers = qualifiers;
+    }
+
+    public ColumnSpec(byte[] name) {
+      this(name, null);
+    }
+
+    static byte[] delim = new byte[] {':'};
+
+    byte[][] columnNames() {
+      if (qualifiers == null) {
+        return new byte[][] {name};
+      } else {
+        byte[][] r = new byte[qualifiers.length][];
+        int idx = 0;
+        for (byte[] qualifier : qualifiers) {
+          r[idx++] = Bytes.concat(name, delim, qualifier);
+        }
+        return r;
+      }
+    }
+
+    public static byte[][] asColumns(ColumnSpec[] families) {
+      ArrayList<byte[]> arr = new ArrayList<byte[]>();
+      for (ColumnSpec family : families) {
+        Collections.addAll(arr, family.columnNames());
+      }
+      return arr.toArray(new byte[arr.size()][]);
+    }
+  }
+
+  private ColumnSpec[] families;
 
   /** Pre-serialized filter to apply on the scanner.  */
   private byte[] filter;
@@ -246,12 +290,33 @@ public final class Scanner {
   public void setFamily(final byte[] family) {
     KeyValue.checkFamily(family);
     checkScanningNotStarted();
-    this.family = family;
+    this.families = new ColumnSpec[] {new ColumnSpec(family)};
+  }
+
+  /**
+   * Specifies column families to scan.
+   * @param families array of column families names
+   * <strong>This array of byte arrays will NOT be copied.</strong>
+   * @throws IllegalStateException if scanning already started.
+   */
+  public void setFamilies(final ColumnSpec... families) {
+    checkScanningNotStarted();
+    this.families = families;
   }
 
   /** Specifies a particular column family to scan.  */
   public void setFamily(final String family) {
     setFamily(family.getBytes());
+  }
+
+    /** Specifies column families to scan.  */
+  public void setFamilies(final String ... families) {
+    ColumnSpec[] f = new ColumnSpec[families.length];
+    int idx = 0;
+    for (String family : families) {
+       f[idx++] = new ColumnSpec(Bytes.UTF8(family));
+    }
+    this.families = f;
   }
 
   /**
@@ -263,7 +328,14 @@ public final class Scanner {
   public void setQualifier(final byte[] qualifier) {
     KeyValue.checkQualifier(qualifier);
     checkScanningNotStarted();
-    this.qualifier = qualifier;
+    if (families == null)
+      families = new ColumnSpec[] {new ColumnSpec(UNSET, new byte[][] {qualifier})};
+    else if (families.length == 1) {
+      families[0].qualifiers = new byte[][] {qualifier};
+    } else {
+      throw new IllegalArgumentException("This method in can be used only for once family and one qualifier, " +
+              "use setFamilies");
+    }
   }
 
   /** Specifies a particular column qualifier to scan.  */
@@ -591,7 +663,7 @@ public final class Scanner {
               || (stop_key != EMPTY_ARRAY                              // (2)
                   && Bytes.memcmp(stop_key, region_stop_key) <= 0)) {  // (3)
             get_next_rows_request = null;        // free();
-            family = qualifier = null;           // free();
+            families = null;           // free();
             start_key = stop_key = EMPTY_ARRAY;  // free() but mustn't be null.
             return close()  // Auto-close the scanner.
               .addCallback(new Callback<ArrayList<ArrayList<KeyValue>>, Object>() {
@@ -754,23 +826,20 @@ public final class Scanner {
   public String toString() {
     final String region = this.region == null ? "null"
       : this.region == DONE ? "none" : this.region.toString();
-    final StringBuilder buf = new StringBuilder(14 + 1 + table.length + 1 + 12
-      + 1 + start_key.length + 1 + 1 + stop_key.length + 1
-      + 9 + 1 + (family == null ? 4 : family.length) + 1
-      + 12 + 1 + (qualifier == null ? 4 : qualifier.length) + 1
-      + 22 + 5 + 15 + 5 + 14 + 6
-      + 14 + 1 + region.length() + 1
-      + 13 + 18 + 1);
+    final StringBuilder buf = new StringBuilder();
     buf.append("Scanner(table=");
     Bytes.pretty(buf, table);
     buf.append(", start_key=");
     Bytes.pretty(buf, start_key);
     buf.append(", stop_key=");
     Bytes.pretty(buf, stop_key);
-    buf.append(", family=");
-    Bytes.pretty(buf, family);
-    buf.append(", qualifier=");
-    Bytes.pretty(buf, qualifier);
+    buf.append(", families=");
+    for (ColumnSpec family : families) {
+      Bytes.pretty(buf, family.name);
+      buf.append(":");
+      Bytes.pretty(buf, family.qualifiers);
+      buf.append(" ");
+    }
     buf.append(", populate_blockcache=").append(populate_blockcache)
       .append(", max_num_rows=").append(max_num_rows)
       .append(", max_num_kvs=").append(max_num_kvs)
@@ -897,13 +966,17 @@ public final class Scanner {
       size += 8;  // long: Maximum timestamp.
       size += 1;  // byte: Boolean: "all time".
       size += 4;  // int:  Number of families.
-      if (family != null) {
-        size += 1;  // vint: Family length (guaranteed on 1 byte).
-        size += family.length;  // The family.
-        size += 4;  // int:  How many qualifiers follow?
-        if (qualifier != null) {
-          size += 3;  // vint: Qualifier length.
-          size += qualifier.length;  // The qualifier.
+      if (families != null) {
+        size += families.length;  // vint: Family length (guaranteed on 1 byte) times number of families.
+        for (ColumnSpec family : families) {
+          size += family.name.length;  // The family.
+          size += 4;  // int:  How many qualifiers follow?
+          if (family.qualifiers != null) {
+            size += 3 * family.qualifiers.length;  // vint: Qualifier length times number of qualifiers.
+            for (byte[] qualifier : family.qualifiers) {
+              size += qualifier.length;  // The qualifier.
+            }
+          }
         }
       }
       return size;
@@ -952,16 +1025,25 @@ public final class Scanner {
                     ? 0x00 : 0x01);
 
       // Families.
-      buf.writeInt(family != null ? 1 : 0);  // Number of families that follow.
 
-      if (family != null) {
-        // Each family is then written like so:
-        writeByteArray(buf, family);  // Column family name.
-        buf.writeInt(qualifier == null ? 0 : 1);  // How many qualifiers do we want?
-        if (qualifier != null) {
-          writeByteArray(buf, qualifier);  // Column qualifier name.
+      if (families != null) {
+        buf.writeInt(families.length);  // Number of families that follow.
+        for (ColumnSpec family : families) {
+          // Each family is then written like so:
+          writeByteArray(buf, family.name);  // Column family name.
+          if (family.qualifiers != null) {
+            buf.writeInt(family.qualifiers.length);  // How many qualifiers do we want?
+            for (byte[] qualifier : family.qualifiers) {
+              writeByteArray(buf, qualifier);  // Column qualifier name.
+            }
+          } else {
+            buf.writeInt(0);  // no qualifiers
+          }
         }
+      } else {
+        buf.writeInt(0);  // No families
       }
+
 
       // Save the region in the Scanner.  This kind of a kludge but it really
       // is the easiest way to give the Scanner the RegionInfo it needs.
@@ -980,9 +1062,9 @@ public final class Scanner {
       Bytes.pretty(buf, stop_key);
       buf.append(", max_num_kvs=").append(max_num_kvs)
         .append(", populate_blockcache=").append(populate_blockcache);
-      return super.toStringWithQualifier("OpenScannerRequest",
-                                         family, qualifier,
-                                         buf.toString());
+      return super.toStringWithColumns("OpenScannerRequest",
+              ColumnSpec.asColumns(families),
+              buf.toString());
     }
 
   }
