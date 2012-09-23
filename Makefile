@@ -89,6 +89,7 @@ test_SOURCES := \
 	test/Common.java	\
 	test/Test.java	\
 	test/TestIncrementCoalescing.java	\
+	test/TestIntegration.java	\
 
 unittest_SRC := \
 	test/TestMETALookup.java	\
@@ -139,6 +140,9 @@ run: $(test_classes)
 
 cli:
 	$(MAKE) run CLASS=Test
+
+integration:
+	$(MAKE) run CLASS=TestIntegration
 
 
 # Little sed script to make a pretty-ish banner.
