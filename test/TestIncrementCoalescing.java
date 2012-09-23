@@ -24,18 +24,14 @@
  * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
  * POSSIBILITY OF SUCH DAMAGE.
  */
-// no package
+package org.hbase.async.test;
 
 import java.util.ArrayList;
 import java.util.Random;
 
 import com.google.common.cache.CacheStats;
 
-import org.jboss.netty.logging.InternalLoggerFactory;
-import org.jboss.netty.logging.Slf4JLoggerFactory;
-
 import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 import org.hbase.async.AtomicIncrementRequest;
 import org.hbase.async.Bytes;
@@ -46,6 +42,8 @@ import org.hbase.async.Scanner;
 
 import com.stumbleupon.async.Callback;
 
+import org.hbase.async.test.Common;
+
 /**
  * Integration test for increment coalescing.
  *
@@ -54,30 +52,7 @@ import com.stumbleupon.async.Callback;
 final class TestIncrementCoalescing {
 
   private static final Logger LOG =
-    LoggerFactory.getLogger(TestIncrementCoalescing.class);
-  static {
-    InternalLoggerFactory.setDefaultFactory(new Slf4JLoggerFactory());
-  }
-
-  private static HBaseClient getOpt(final String[] args) {
-    if (args.length < 2) {
-      System.err.println("Usage: TestIncrementCoalescing"
-                         + " <table> <family> [zkquorum] [znode]");
-      System.exit(1);
-    }
-    final String zkquorum;
-    if (args.length > 2) {
-      zkquorum = args[2];
-    } else {
-      zkquorum = "localhost";
-    }
-    final HBaseClient client;
-    if (args.length > 3) {
-      return new HBaseClient(zkquorum, args[3]);
-    } else {
-      return new HBaseClient(zkquorum);  // Default znode
-    }
-  }
+    Common.logger(TestIncrementCoalescing.class);
 
   public static void main(final String[] args) throws Exception {
     if (LOG.isDebugEnabled()) {
@@ -88,7 +63,8 @@ final class TestIncrementCoalescing {
       LOG.error("Use JVM_ARGS='-Xmx2g -Xms2g'.");
       System.exit(3);
     }
-    final HBaseClient client = getOpt(args);
+    final HBaseClient client = Common.getOpt(TestIncrementCoalescing.class,
+                                             args);
     final byte[] table = args[0].getBytes();
     final byte[] family = args[1].getBytes();
     try {

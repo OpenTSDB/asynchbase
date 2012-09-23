@@ -86,6 +86,7 @@ asynchbase_LIBADD := \
 	$(GUAVA)	\
 
 test_SOURCES := \
+	test/Common.java	\
 	test/Test.java	\
 	test/TestIncrementCoalescing.java	\
 
@@ -108,7 +109,7 @@ package_dir := $(subst .,/,$(package))
 AM_JAVACFLAGS := -Xlint
 JVM_ARGS :=
 classes := $(asynchbase_SOURCES:src/%.java=$(top_builddir)/$(package_dir)/%.class)
-test_classes := $(test_SOURCES:test/%.java=$(top_builddir)/%.class)
+test_classes := $(test_SOURCES:test/%.java=$(top_builddir)/$(package_dir)/test/%.class)
 UNITTESTS := $(unittest_SRC:test/%.java=$(top_builddir)/$(package_dir)/%.class)
 
 jar: $(jar)
@@ -129,11 +130,12 @@ $(top_builddir)/.javac-test-stamp: $(jar) $(unittest_SRC) $(test_LIBADD)
 	  -d $(top_builddir) $(unittest_SRC)
 
 classes_with_nested_classes := $(classes:$(top_builddir)/%.class=%*.class)
-test_classes_with_nested_classes := $(UNITTESTS:$(top_builddir)/%.class=%*.class)
+unittest_classes_with_nested_classes := $(UNITTESTS:$(top_builddir)/%.class=%*.class)
+test_classes_with_nested_classes := $(test_classes:$(top_builddir)/%.class=%*.class)
 
 run: $(test_classes)
 	@test -n "$(CLASS)" || { echo 'usage: $(MAKE) run CLASS=<name>'; exit 1; }
-	$(JAVA) -ea -esa $(JVM_ARGS) -cp "$(get_runtime_dep_classpath):$(top_builddir)" $(CLASS) $(ARGS)
+	$(JAVA) -ea -esa $(JVM_ARGS) -cp "$(get_runtime_dep_classpath):$(top_builddir)" $(package).test.$(CLASS) $(ARGS)
 
 cli:
 	$(MAKE) run CLASS=Test
@@ -142,7 +144,7 @@ cli:
 # Little sed script to make a pretty-ish banner.
 BANNER := sed 's/^.*/  &  /;h;s/./=/g;p;x;p;x'
 check: $(top_builddir)/.javac-test-stamp $(UNITTESTS)
-	classes=`cd $(top_builddir) && echo $(test_classes_with_nested_classes)` \
+	classes=`cd $(top_builddir) && echo $(unittest_classes_with_nested_classes)` \
         && tests=0 && failures=0 \
         && cp="$(get_runtime_dep_classpath):$(top_builddir)" && \
         for i in $$classes; do \
@@ -191,7 +193,11 @@ $(top_builddir)/api/index.html: $(asynchbase_SOURCES)
 clean:
 	@rm -f $(top_builddir)/.javac*-stamp
 	rm -f $(top_builddir)/manifest
-	cd $(top_builddir) || exit 0 && rm -f $(classes_with_nested_classes) $(test_classes_with_nested_classes) *.class
+	cd $(top_builddir) || exit 0 \
+	  && rm -f $(classes_with_nested_classes) \
+	           $(unittest_classes_with_nested_classes) \
+	           $(test_classes_with_nested_classes) \
+		   *.class
 	cd $(top_builddir) || exit 0 \
 	  && test -d $(package_dir) || exit 0 \
 	  && dir=$(package_dir) \
