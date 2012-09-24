@@ -26,6 +26,11 @@
  */
 package org.hbase.async.test;
 
+import java.io.BufferedReader;
+import java.io.File;
+import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.io.OutputStream;
 import java.util.ArrayList;
 
 import org.jboss.netty.logging.InternalLoggerFactory;
@@ -43,6 +48,7 @@ import org.hbase.async.GetRequest;
 import org.hbase.async.HBaseClient;
 import org.hbase.async.KeyValue;
 import org.hbase.async.PutRequest;
+import org.hbase.async.TableNotFoundException;
 
 import org.hbase.async.test.Common;
 
@@ -56,6 +62,22 @@ final class TestIntegration {
   private static final Logger LOG = Common.logger(TestIntegration.class);
 
   private static final short FAST_FLUSH = 10;
+  /** Path to HBase home so we can run the HBase shell.  */
+  private static final String HBASE_HOME;
+  static {
+    HBASE_HOME = System.getenv("HBASE_HOME");
+    if (HBASE_HOME == null) {
+      throw new RuntimeException("Please set the HBASE_HOME environment"
+                                 + " variable.");
+    }
+    final File dir = new File(HBASE_HOME);
+    if (!dir.isDirectory()) {
+      throw new RuntimeException("No such directory: " + HBASE_HOME);
+    }
+  }
+  /** Whether or not to truncate existing tables during tests.  */
+  private static final boolean TRUNCATE =
+    System.getenv("TEST_NO_TRUNCATE") == null;
 
   public static void main(final String[] args) throws Exception {
     preFlightTest(args);
@@ -69,9 +91,23 @@ final class TestIntegration {
     final HBaseClient client = Common.getOpt(TestIncrementCoalescing.class,
                                              args);
     try {
-      client.ensureTableFamilyExists(args[0], args[1]).join();
+      createOrTruncateTable(client, args[0], args[1]);
     } finally {
       client.shutdown().join();
+    }
+  }
+
+  /** Creates or truncates the given table name. */
+  private static void createOrTruncateTable(final HBaseClient client,
+                                            final String table,
+                                            final String family)
+    throws Exception {
+    try {
+      client.ensureTableFamilyExists(table, family).join();
+      truncateTable(table);
+    } catch (TableNotFoundException e) {
+      createTable(table, family);
+      createOrTruncateTable(client, table, family);  // Check again.
     }
   }
 
@@ -130,6 +166,60 @@ final class TestIntegration {
 
   private static void assertEq(final String expect, final byte[] actual) {
     assertArrayEquals(expect.getBytes(), actual);
+  }
+
+  private static void createTable(final String table,
+                                  final String family) throws Exception {
+    LOG.info("Creating table " + table + " with family " + family);
+    hbaseShell("create '" + table + "',"
+               + " {NAME => '" + family + "', VERSIONS => 2}");
+  }
+
+  private static void truncateTable(final String table) throws Exception {
+    if (!TRUNCATE) {
+      return;
+    }
+    LOG.warn("Truncating table " + table + "...");
+    for (int i = 3; i >= 0; i--) {
+      LOG.warn(i + " Press Ctrl-C if you care about " + table);
+      Thread.sleep(1000);
+    }
+    hbaseShell("truncate '" + table + '\'');
+  }
+
+  private static void hbaseShell(final String command) throws Exception {
+    final ProcessBuilder pb = new ProcessBuilder();
+    pb.command(HBASE_HOME + "/bin/hbase", "shell");
+    pb.environment().remove("HBASE_HOME");
+    LOG.info("Running HBase shell command: " + command);
+    final Process shell = pb.start();
+    try {
+      final OutputStream stdin = shell.getOutputStream();
+      stdin.write(command.getBytes());
+      stdin.write('\n');
+      stdin.flush();  // Technically the JDK doesn't guarantee that close()
+      stdin.close();  // will flush(), so better do it explicitly to be safe.
+      // Let's hope that the HBase shell doesn't print more than 4KB of shit
+      // on stderr, otherwise we're getting deadlocked here.  Yeah seriously.
+      // Dealing with subprocesses in Java is such a royal PITA.
+      printLines("stdout", shell.getInputStream());  // Confusing method name,
+      printLines("stderr", shell.getErrorStream());  // courtesy of !@#$% JDK.
+      final int rv = shell.waitFor();
+      if (rv != 0) {
+        throw new RuntimeException("hbase shell returned " + rv);
+      }
+    } finally {
+      shell.destroy();  // Required by the fucking JDK, no matter what.
+    }
+  }
+
+  private static void printLines(final String what, final InputStream in)
+    throws Exception {
+    final BufferedReader r = new BufferedReader(new InputStreamReader(in));
+    String line;
+    while ((line = r.readLine()) != null) {
+      LOG.info('(' + what + ") " + line);
+    }
   }
 
 }
