@@ -56,8 +56,11 @@ import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
 
 import com.stumbleupon.async.Callback;
+import com.stumbleupon.async.CallbackOverflowError;
 import com.stumbleupon.async.Deferred;
 
+import org.hbase.async.AtomicIncrementRequest;
+import org.hbase.async.Bytes;
 import org.hbase.async.DeleteRequest;
 import org.hbase.async.GetRequest;
 import org.hbase.async.HBaseClient;
@@ -77,7 +80,8 @@ final public class TestIntegration {
 
   private static final Logger LOG = Common.logger(TestIntegration.class);
 
-  private static final short FAST_FLUSH = 10;
+  private static final short FAST_FLUSH = 10;    // milliseconds
+  private static final short SLOW_FLUSH = 1000;  // milliseconds
   /** Path to HBase home so we can run the HBase shell.  */
   private static final String HBASE_HOME;
   static {
@@ -317,6 +321,29 @@ final public class TestIntegration {
     KeyValue kv = kvs.get(0);
     assertEq("q", kv.qualifier());
     assertEq("", kv.value());
+  }
+
+  /** Regression test for issue #41. */
+  @Test(expected=CallbackOverflowError.class)
+  public void regression41() throws Exception {
+    client.setFlushInterval(SLOW_FLUSH);
+    final byte[] table = this.table.getBytes();
+    final byte[] key = "cnt".getBytes();
+    final byte[] family = this.family.getBytes();
+    final byte[] qual = { 'q' };
+    final DeleteRequest del = new DeleteRequest(table, key, family, qual);
+    client.delete(del).join();
+    final int iterations = 100000;
+    for (int i = 0; i < iterations; i++) {
+      client.bufferAtomicIncrement(new AtomicIncrementRequest(table, key,
+                                                              family, qual));
+    }
+    client.flush().joinUninterruptibly();
+    final GetRequest get = new GetRequest(table, key)
+      .family(family).qualifier(qual);
+    final ArrayList<KeyValue> kvs = client.get(get).join();
+    assertEquals(1, kvs.size());
+    assertEquals(iterations, Bytes.getLong(kvs.get(0).value()));
   }
 
   private static void assertEq(final String expect, final byte[] actual) {
