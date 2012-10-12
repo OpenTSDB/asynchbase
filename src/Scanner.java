@@ -127,7 +127,7 @@ public final class Scanner {
   private byte[] stop_key = EMPTY_ARRAY;
 
   private byte[] family;     // TODO(tsuna): Handle multiple families?
-  private byte[] qualifier;  // TODO(tsuna): Handle multiple qualifiers?
+  private byte[][] qualifiers;
 
   /** Pre-serialized filter to apply on the scanner.  */
   private byte[] filter;
@@ -256,6 +256,8 @@ public final class Scanner {
 
   /**
    * Specifies a particular column qualifier to scan.
+   * <p>
+   * Note that specifying a qualifier without a family has no effect.
    * @param qualifier The column qualifier.
    * <strong>This byte array will NOT be copied.</strong>
    * @throws IllegalStateException if scanning already started.
@@ -263,13 +265,31 @@ public final class Scanner {
   public void setQualifier(final byte[] qualifier) {
     KeyValue.checkQualifier(qualifier);
     checkScanningNotStarted();
-    this.qualifier = qualifier;
+    this.qualifiers = new byte[][] { qualifier };
   }
 
   /** Specifies a particular column qualifier to scan.  */
   public void setQualifier(final String qualifier) {
     setQualifier(qualifier.getBytes());
   }
+
+  /**
+   * Specifies one or more column qualifiers to scan.
+   * <p>
+   * Note that specifying qualifiers without a family has no effect.
+   * @param qualifiers The column qualifiers.
+   * <strong>These byte arrays will NOT be copied.</strong>
+   * @throws IllegalStateException if scanning already started.
+   * @since 1.4
+   */
+  public void setQualifiers(final byte[][] qualifiers) {
+    checkScanningNotStarted();
+    for (final byte[] qualifier : qualifiers) {
+      KeyValue.checkQualifier(qualifier);
+    }
+    this.qualifiers = qualifiers;
+  }
+
 
   /**
    * Sets a regular expression to filter results based on the row key.
@@ -591,7 +611,8 @@ public final class Scanner {
               || (stop_key != EMPTY_ARRAY                              // (2)
                   && Bytes.memcmp(stop_key, region_stop_key) <= 0)) {  // (3)
             get_next_rows_request = null;        // free();
-            family = qualifier = null;           // free();
+            family = null;                       // free();
+            qualifiers = null;                   // free();
             start_key = stop_key = EMPTY_ARRAY;  // free() but mustn't be null.
             return close()  // Auto-close the scanner.
               .addCallback(new Callback<ArrayList<ArrayList<KeyValue>>, Object>() {
@@ -754,10 +775,18 @@ public final class Scanner {
   public String toString() {
     final String region = this.region == null ? "null"
       : this.region == DONE ? "none" : this.region.toString();
+    int qual_length = 0;
+    if (qualifiers == null) {
+      qual_length = 4;
+    } else {
+      for (byte[] qualifier : qualifiers) {
+        qual_length += qualifier.length + 2;
+      }
+    }
     final StringBuilder buf = new StringBuilder(14 + 1 + table.length + 1 + 12
       + 1 + start_key.length + 1 + 1 + stop_key.length + 1
       + 9 + 1 + (family == null ? 4 : family.length) + 1
-      + 12 + 1 + (qualifier == null ? 4 : qualifier.length) + 1
+      + 13 + 1 + qual_length + 1
       + 22 + 5 + 15 + 5 + 14 + 6
       + 14 + 1 + region.length() + 1
       + 13 + 18 + 1);
@@ -769,8 +798,8 @@ public final class Scanner {
     Bytes.pretty(buf, stop_key);
     buf.append(", family=");
     Bytes.pretty(buf, family);
-    buf.append(", qualifier=");
-    Bytes.pretty(buf, qualifier);
+    buf.append(", qualifiers=");
+    Bytes.pretty(buf, qualifiers);
     buf.append(", populate_blockcache=").append(populate_blockcache)
       .append(", max_num_rows=").append(max_num_rows)
       .append(", max_num_kvs=").append(max_num_kvs)
@@ -901,9 +930,11 @@ public final class Scanner {
         size += 1;  // vint: Family length (guaranteed on 1 byte).
         size += family.length;  // The family.
         size += 4;  // int:  How many qualifiers follow?
-        if (qualifier != null) {
-          size += 3;  // vint: Qualifier length.
-          size += qualifier.length;  // The qualifier.
+        if (qualifiers != null) {
+          for (byte[] qualifier : qualifiers) {
+            size += 3;                 // vint: Qualifier length.
+            size += qualifier.length;  // The qualifier.
+          }
         }
       }
       return size;
@@ -957,9 +988,12 @@ public final class Scanner {
       if (family != null) {
         // Each family is then written like so:
         writeByteArray(buf, family);  // Column family name.
-        buf.writeInt(qualifier == null ? 0 : 1);  // How many qualifiers do we want?
-        if (qualifier != null) {
-          writeByteArray(buf, qualifier);  // Column qualifier name.
+        // How many qualifiers do we want?
+        buf.writeInt(qualifiers == null ? 0 : qualifiers.length);
+        if (qualifiers != null) {
+          for (byte[] qualifier : qualifiers) {
+            writeByteArray(buf, qualifier);  // Column qualifier name.
+          }
         }
       }
 
@@ -980,9 +1014,10 @@ public final class Scanner {
       Bytes.pretty(buf, stop_key);
       buf.append(", max_num_kvs=").append(max_num_kvs)
         .append(", populate_blockcache=").append(populate_blockcache);
-      return super.toStringWithQualifier("OpenScannerRequest",
-                                         family, qualifier,
-                                         buf.toString());
+      return super.toStringWithQualifiers("OpenScannerRequest",
+                                          family, qualifiers,
+                                          null,
+                                          buf.toString());
     }
 
   }

@@ -42,12 +42,14 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertArrayEquals;
 
 import com.stumbleupon.async.Callback;
+import com.stumbleupon.async.Deferred;
 
 import org.hbase.async.DeleteRequest;
 import org.hbase.async.GetRequest;
 import org.hbase.async.HBaseClient;
 import org.hbase.async.KeyValue;
 import org.hbase.async.PutRequest;
+import org.hbase.async.Scanner;
 import org.hbase.async.TableNotFoundException;
 
 import org.hbase.async.test.Common;
@@ -84,6 +86,7 @@ final class TestIntegration {
     LOG.info("Starting integration tests");
     putRead(args);
     putReadDeleteRead(args);
+    scanWithQualifiers(args);
     regression25(args);
   }
 
@@ -163,6 +166,34 @@ final class TestIntegration {
       client.shutdown().join();
     }
     LOG.info("putReadDeleteRead: PASS");
+  }
+
+  /** Scan with multiple qualifiers. */
+  private static void scanWithQualifiers(final String[] args) throws Exception {
+    final HBaseClient client = Common.getOpt(TestIncrementCoalescing.class,
+                                             args);
+    client.setFlushInterval(FAST_FLUSH);
+    try {
+      final String table = args[0];
+      final String family = args[1];
+      final PutRequest put1 = new PutRequest(table, "k", family, "a", "val1");
+      final PutRequest put2 = new PutRequest(table, "k", family, "b", "val2");
+      final PutRequest put3 = new PutRequest(table, "k", family, "c", "val3");
+      Deferred.group(client.put(put1), client.put(put2),
+                     client.put(put3)).join();
+      final Scanner scanner = client.newScanner(table);
+      scanner.setFamily(family);
+      scanner.setQualifiers(new byte[][] { { 'a' }, { 'c' } });
+      final ArrayList<ArrayList<KeyValue>> rows = scanner.nextRows(2).join();
+      assertEquals(1, rows.size());
+      final ArrayList<KeyValue> kvs = rows.get(0);
+      assertEquals(2, kvs.size());
+      assertEq("val1", kvs.get(0).value());
+      assertEq("val3", kvs.get(1).value());
+    } finally {
+      client.shutdown().join();
+    }
+    LOG.info("scanWithQualifiers: PASS");
   }
 
   /** Regression test for issue #25. */
