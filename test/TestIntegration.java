@@ -121,7 +121,7 @@ final class TestIntegration {
       final String table = args[0];
       final String family = args[1];
       final double write_time = System.currentTimeMillis();
-      final PutRequest put = new PutRequest(table, "k", "f", "q", "val");
+      final PutRequest put = new PutRequest(table, "k", family, "q", "val");
       final GetRequest get = new GetRequest(table, "k")
         .family(family).qualifier("q");
       client.put(put).join();
@@ -148,14 +148,14 @@ final class TestIntegration {
     try {
       final String table = args[0];
       final String family = args[1];
-      final PutRequest put = new PutRequest(table, "k", "f", "q", "val");
+      final PutRequest put = new PutRequest(table, "k", family, "q", "val");
       final GetRequest get = new GetRequest(table, "k")
         .family(family).qualifier("q");
       client.put(put).join();
       final ArrayList<KeyValue> kvs = client.get(get).join();
       assertEquals(1, kvs.size());
       assertEq("val", kvs.get(0).value());
-      final DeleteRequest del = new DeleteRequest(table, "k", "f", "q");
+      final DeleteRequest del = new DeleteRequest(table, "k", family, "q");
       client.delete(del).join();
       final ArrayList<KeyValue> kvs2 = client.get(get).join();
       assertEquals(0, kvs2.size());
@@ -180,9 +180,9 @@ final class TestIntegration {
         final PutRequest put;
         final String key = 'k' + String.valueOf(i);
         if (i % 2 == 0) {
-          put = new PutRequest(table1, key, "f", "q", "v");
+          put = new PutRequest(table1, key, family, "q", "v");
         } else {
-          put = new PutRequest(table2, key, "f", "q", "v");
+          put = new PutRequest(table2, key, family, "q", "v");
         }
         final DeleteRequest delete = new DeleteRequest(put.table(), put.key());
         client.delete(delete);
