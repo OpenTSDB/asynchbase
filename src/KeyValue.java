@@ -255,14 +255,22 @@ public final class KeyValue implements Comparable<KeyValue> {
     final int qual_length = (rowkey_length - key_length - family_length
                              - 2 - 1 - 8 - 1);
     HBaseRpc.checkArrayLength(buf, qual_length);
-    final byte[] qualifier = (qual_length > 0 ? new byte[qual_length]
-                              : HBaseClient.EMPTY_ARRAY);
-    buf.readBytes(qualifier);
+    final byte[] qualifier;
+    if (qual_length > 0) {
+      qualifier = new byte[qual_length];
+      buf.readBytes(qualifier);
+    } else {
+      qualifier = HBaseClient.EMPTY_ARRAY;
+    }
     final long timestamp = buf.readLong();
     final byte key_type = buf.readByte();
-    final byte[] value = (value_length > 0 ? new byte[value_length]
-                          : HBaseClient.EMPTY_ARRAY);
-    buf.readBytes(value);
+    final byte[] value;
+    if (value_length > 0) {
+      value = new byte[value_length];
+      buf.readBytes(value);
+    } else {
+      value = HBaseClient.EMPTY_ARRAY;
+    }
     if (2 + key_length + 1 + family_length + qual_length + 8 + 1
         != rowkey_length) {  // XXX TMP DEBUG
       invalid("2 + rl:" + key_length + " + 1 + fl:" + family_length + " + ql:"
