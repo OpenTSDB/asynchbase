@@ -291,6 +291,34 @@ final public class TestIntegration {
     client.flush().joinUninterruptibly();
   }
 
+  /** Regression test for issue #40 (which was actually Netty bug #474). */
+  @Test
+  public void regression40() throws Exception {
+    // Cause a META lookup first to avoid some DEBUG-level spam due to the
+    // long key below.
+    client.ensureTableFamilyExists(table, family).join();
+    client.setFlushInterval(FAST_FLUSH);
+    final byte[] table = this.table.getBytes();
+    // 980 was empirically found to be the minimum size with which
+    // Netty bug #474 gets triggered.  Bug got fixed in Netty 3.5.8.
+    final byte[] key = new byte[980];
+    key[0] = 'k';
+    key[1] = '4';
+    key[2] = '0';
+    key[key.length - 1] = '*';
+    final byte[] family = this.family.getBytes();
+    final byte[] qual = { 'q' };
+    final PutRequest put = new PutRequest(table, key, family, qual,
+                                          new byte[0] /* empty */);
+    final GetRequest get = new GetRequest(table, key);
+    client.put(put).join();
+    final ArrayList<KeyValue> kvs = client.get(get).join();
+    assertEquals(1, kvs.size());
+    KeyValue kv = kvs.get(0);
+    assertEq("q", kv.qualifier());
+    assertEq("", kv.value());
+  }
+
   private static void assertEq(final String expect, final byte[] actual) {
     assertArrayEquals(expect.getBytes(), actual);
   }
