@@ -26,6 +26,8 @@
  */
 package org.hbase.async;
 
+import static org.hbase.async.HBaseClient.EMPTY_ARRAY;
+
 import java.nio.charset.Charset;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -33,14 +35,11 @@ import java.util.Arrays;
 import org.jboss.netty.buffer.ChannelBuffer;
 import org.jboss.netty.buffer.ChannelBuffers;
 import org.jboss.netty.util.CharsetUtil;
-
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import com.stumbleupon.async.Callback;
 import com.stumbleupon.async.Deferred;
-
-import static org.hbase.async.HBaseClient.EMPTY_ARRAY;
 
 /**
  * Creates a scanner to read data sequentially from HBase.
@@ -127,7 +126,7 @@ public final class Scanner {
   private byte[] stop_key = EMPTY_ARRAY;
 
   private byte[] family;     // TODO(tsuna): Handle multiple families?
-  private byte[] qualifier;  // TODO(tsuna): Handle multiple qualifiers?
+  private byte[][] qualifiers;
 
   /** Pre-serialized filter to apply on the scanner.  */
   private byte[] filter;
@@ -263,13 +262,21 @@ public final class Scanner {
   public void setQualifier(final byte[] qualifier) {
     KeyValue.checkQualifier(qualifier);
     checkScanningNotStarted();
-    this.qualifier = qualifier;
+    this.qualifiers = new byte[][] { qualifier };
   }
 
   /** Specifies a particular column qualifier to scan.  */
   public void setQualifier(final String qualifier) {
     setQualifier(qualifier.getBytes());
   }
+  
+  public void setQualifiers(final byte[][] qualifiers) {
+		for (final byte[] qualifier : qualifiers) {
+			KeyValue.checkQualifier(qualifier);
+		}
+		this.qualifiers = qualifiers;
+  }
+  
 
   /**
    * Sets a regular expression to filter results based on the row key.
@@ -591,7 +598,8 @@ public final class Scanner {
               || (stop_key != EMPTY_ARRAY                              // (2)
                   && Bytes.memcmp(stop_key, region_stop_key) <= 0)) {  // (3)
             get_next_rows_request = null;        // free();
-            family = qualifier = null;           // free();
+            family = null;											 // free();
+            qualifiers = null;									 // free();
             start_key = stop_key = EMPTY_ARRAY;  // free() but mustn't be null.
             return close()  // Auto-close the scanner.
               .addCallback(new Callback<ArrayList<ArrayList<KeyValue>>, Object>() {
@@ -754,10 +762,18 @@ public final class Scanner {
   public String toString() {
     final String region = this.region == null ? "null"
       : this.region == DONE ? "none" : this.region.toString();
+    int qualifiersLength = 0;
+    if (qualifiers == null) {
+    	qualifiersLength = 4;
+    } else {
+    	for (byte[] qualifier : qualifiers) {
+    		qualifiersLength += qualifier.length + 2;
+    	}
+    }
     final StringBuilder buf = new StringBuilder(14 + 1 + table.length + 1 + 12
       + 1 + start_key.length + 1 + 1 + stop_key.length + 1
       + 9 + 1 + (family == null ? 4 : family.length) + 1
-      + 12 + 1 + (qualifier == null ? 4 : qualifier.length) + 1
+      + 13 + 1 + qualifiersLength + 1
       + 22 + 5 + 15 + 5 + 14 + 6
       + 14 + 1 + region.length() + 1
       + 13 + 18 + 1);
@@ -769,8 +785,20 @@ public final class Scanner {
     Bytes.pretty(buf, stop_key);
     buf.append(", family=");
     Bytes.pretty(buf, family);
-    buf.append(", qualifier=");
-    Bytes.pretty(buf, qualifier);
+    buf.append(", qualifiers=");
+    if (qualifiers != null) {
+    	buf.append("{");
+    	int i = 0;
+    	for (byte[] qualifier : qualifiers) {
+    		Bytes.pretty(buf, qualifier);
+    		if (++i < qualifiers.length) {
+    			buf.append(", ");
+    		}
+    	}
+    	buf.append("}");
+    } else {
+    	buf.append("null");
+    }
     buf.append(", populate_blockcache=").append(populate_blockcache)
       .append(", max_num_rows=").append(max_num_rows)
       .append(", max_num_kvs=").append(max_num_kvs)
@@ -901,9 +929,11 @@ public final class Scanner {
         size += 1;  // vint: Family length (guaranteed on 1 byte).
         size += family.length;  // The family.
         size += 4;  // int:  How many qualifiers follow?
-        if (qualifier != null) {
-          size += 3;  // vint: Qualifier length.
-          size += qualifier.length;  // The qualifier.
+        if (qualifiers != null) {
+          for (byte[] qualifier : qualifiers) {
+          	size += 3;  // vint: Qualifier length.
+          	size += qualifier.length;  // The qualifier.          	
+          }
         }
       }
       return size;
@@ -957,9 +987,11 @@ public final class Scanner {
       if (family != null) {
         // Each family is then written like so:
         writeByteArray(buf, family);  // Column family name.
-        buf.writeInt(qualifier == null ? 0 : 1);  // How many qualifiers do we want?
-        if (qualifier != null) {
-          writeByteArray(buf, qualifier);  // Column qualifier name.
+        buf.writeInt(qualifiers == null ? 0 : qualifiers.length);  // How many qualifiers do we want?
+        if (qualifiers != null) {
+        	for (byte[] qualifier : qualifiers) {
+        		writeByteArray(buf, qualifier);  // Column qualifier name.        		
+        	}
         }
       }
 
@@ -980,8 +1012,9 @@ public final class Scanner {
       Bytes.pretty(buf, stop_key);
       buf.append(", max_num_kvs=").append(max_num_kvs)
         .append(", populate_blockcache=").append(populate_blockcache);
-      return super.toStringWithQualifier("OpenScannerRequest",
-                                         family, qualifier,
+      return super.toStringWithQualifiers("OpenScannerRequest",
+                                         family, qualifiers,
+                                         null,
                                          buf.toString());
     }
 
