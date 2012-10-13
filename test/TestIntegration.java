@@ -200,6 +200,53 @@ final public class TestIntegration {
     assertEquals(0, kvs2.size());
   }
 
+  /** Basic scan test. */
+  @Test
+  public void basicScan() throws Exception {
+    client.setFlushInterval(FAST_FLUSH);
+    final PutRequest put1 = new PutRequest(table, "s1", family, "q", "v1");
+    final PutRequest put2 = new PutRequest(table, "s2", family, "q", "v2");
+    final PutRequest put3 = new PutRequest(table, "s3", family, "q", "v3");
+    Deferred.group(client.put(put1), client.put(put2),
+                   client.put(put3)).join();
+    // Scan the same 3 rows created above twice.
+    for (int i = 0; i < 2; i++) {
+      LOG.info("------------ iteration #" + i);
+      final Scanner scanner = client.newScanner(table);
+      scanner.setStartKey("s0");
+      scanner.setStopKey("s9");
+      // Callback class to keep scanning recursively.
+      class cb implements Callback<Object, ArrayList<ArrayList<KeyValue>>> {
+        private int n = 0;
+        public Object call(final ArrayList<ArrayList<KeyValue>> rows) {
+          if (rows == null) {
+            return null;
+          }
+          n++;
+          try {
+            assertEquals(1, rows.size());
+            final ArrayList<KeyValue> kvs = rows.get(0);
+            final KeyValue kv = kvs.get(0);
+            assertEquals(1, kvs.size());
+            assertEq("s" + n, kv.key());
+            assertEq("q", kv.qualifier());
+            assertEq("v" + n, kv.value());
+            return scanner.nextRows(1).addCallback(this);
+          } catch (AssertionError e) {
+            // Deferred doesn't catch Errors on purpose, so transform any
+            // assertion failure into an Exception.
+            throw new RuntimeException("Asynchronous failure", e);
+          }
+        }
+      }
+      try {
+        scanner.nextRows(1).addCallback(new cb()).join();
+      } finally {
+        scanner.close().join();
+      }
+    }
+  }
+
   /** Scan with multiple qualifiers. */
   @Test
   public void scanWithQualifiers() throws Exception {
