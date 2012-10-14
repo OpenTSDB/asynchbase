@@ -26,6 +26,11 @@
  */
 package org.hbase.async.test;
 
+import java.lang.annotation.ElementType;
+import java.lang.annotation.Retention;
+import java.lang.annotation.RetentionPolicy;
+import java.lang.annotation.Target;
+import java.lang.reflect.Method;
 import java.io.BufferedReader;
 import java.io.File;
 import java.io.InputStream;
@@ -38,8 +43,16 @@ import org.jboss.netty.logging.Slf4JLoggerFactory;
 
 import org.slf4j.Logger;
 
-import static org.junit.Assert.assertEquals;
+import org.junit.After;
+import org.junit.Before;
+import org.junit.Test;
+import org.junit.runner.Description;
+import org.junit.runner.JUnitCore;
+import org.junit.runner.Result;
+import org.junit.runner.notification.Failure;
+import org.junit.runner.notification.RunListener;
 import static org.junit.Assert.assertArrayEquals;
+import static org.junit.Assert.assertEquals;
 
 import com.stumbleupon.async.Callback;
 import com.stumbleupon.async.Deferred;
@@ -59,7 +72,7 @@ import org.hbase.async.test.Common;
  *
  * Requires a locally running HBase cluster.
  */
-final class TestIntegration {
+final public class TestIntegration {
 
   private static final Logger LOG = Common.logger(TestIntegration.class);
 
@@ -77,17 +90,44 @@ final class TestIntegration {
       throw new RuntimeException("No such directory: " + HBASE_HOME);
     }
   }
+
   /** Whether or not to truncate existing tables during tests.  */
   private static final boolean TRUNCATE =
     System.getenv("TEST_NO_TRUNCATE") == null;
 
+  private static String table;
+  private static String family;
+  private static String[] args;
+  private HBaseClient client;
+
   public static void main(final String[] args) throws Exception {
     preFlightTest(args);
+    table = args[0];
+    family = args[1];
+    TestIntegration.args = args;
     LOG.info("Starting integration tests");
-    putRead(args);
-    putReadDeleteRead(args);
-    scanWithQualifiers(args);
-    regression25(args);
+    final JUnitCore junit = new JUnitCore();
+    final JunitListener listener = new JunitListener();
+    junit.addListener(listener);
+    final Result result = junit.run(TestIntegration.class);
+    LOG.info("Ran " + result.getRunCount() + " tests in "
+             + result.getRunTime() + "ms");
+    if (!result.wasSuccessful()) {
+      LOG.error(result.getFailureCount() + " tests failed: "
+                + result.getFailures());
+      System.exit(1);
+    }
+    LOG.info("All tests passed!");
+  }
+
+  @Before
+  public void setUp() {
+    client = Common.getOpt(TestIntegration.class, args);
+  }
+
+  @After
+  public void tearDown() throws Exception {
+    client.shutdown().join();
   }
 
   /** Ensures the table/family we use for our test exists. */
@@ -116,114 +156,84 @@ final class TestIntegration {
   }
 
   /** Write a single thing to HBase and read it back. */
-  private static void putRead(final String[] args) throws Exception {
-    final HBaseClient client = Common.getOpt(TestIncrementCoalescing.class,
-                                             args);
+  @Test
+  public void putRead() throws Exception {
     client.setFlushInterval(FAST_FLUSH);
-    try {
-      final String table = args[0];
-      final String family = args[1];
-      final double write_time = System.currentTimeMillis();
-      final PutRequest put = new PutRequest(table, "k", family, "q", "val");
-      final GetRequest get = new GetRequest(table, "k")
-        .family(family).qualifier("q");
-      client.put(put).join();
-      final ArrayList<KeyValue> kvs = client.get(get).join();
-      assertEquals(1, kvs.size());
-      final KeyValue kv = kvs.get(0);
-      assertEq("k", kv.key());
-      assertEq(family, kv.family());
-      assertEq("q", kv.qualifier());
-      assertEq("val", kv.value());
-      final double kvts = kv.timestamp();
-      assertEquals(write_time, kvts, 5000.0);  // Within five seconds.
-    } finally {
-      client.shutdown().join();
-    }
-    LOG.info("putRead: PASS");
+    final double write_time = System.currentTimeMillis();
+    final PutRequest put = new PutRequest(table, "k", family, "q", "val");
+    final GetRequest get = new GetRequest(table, "k")
+      .family(family).qualifier("q");
+    client.put(put).join();
+    final ArrayList<KeyValue> kvs = client.get(get).join();
+    assertEquals(1, kvs.size());
+    final KeyValue kv = kvs.get(0);
+    assertEq("k", kv.key());
+    assertEq(family, kv.family());
+    assertEq("q", kv.qualifier());
+    assertEq("val", kv.value());
+    final double kvts = kv.timestamp();
+    assertEquals(write_time, kvts, 5000.0);  // Within five seconds.
   }
 
   /** Write a single thing to HBase and read it back, delete it, read it. */
-  private static void putReadDeleteRead(final String[] args) throws Exception {
-    final HBaseClient client = Common.getOpt(TestIncrementCoalescing.class,
-                                             args);
+  @Test
+  public void putReadDeleteRead() throws Exception {
     client.setFlushInterval(FAST_FLUSH);
-    try {
-      final String table = args[0];
-      final String family = args[1];
-      final PutRequest put = new PutRequest(table, "k", family, "q", "val");
-      final GetRequest get = new GetRequest(table, "k")
-        .family(family).qualifier("q");
-      client.put(put).join();
-      final ArrayList<KeyValue> kvs = client.get(get).join();
-      assertEquals(1, kvs.size());
-      assertEq("val", kvs.get(0).value());
-      final DeleteRequest del = new DeleteRequest(table, "k", family, "q");
-      client.delete(del).join();
-      final ArrayList<KeyValue> kvs2 = client.get(get).join();
-      assertEquals(0, kvs2.size());
-    } finally {
-      client.shutdown().join();
-    }
-    LOG.info("putReadDeleteRead: PASS");
+    final PutRequest put = new PutRequest(table, "k", family, "q", "val");
+    final GetRequest get = new GetRequest(table, "k")
+      .family(family).qualifier("q");
+    client.put(put).join();
+    final ArrayList<KeyValue> kvs = client.get(get).join();
+    assertEquals(1, kvs.size());
+    assertEq("val", kvs.get(0).value());
+    final DeleteRequest del = new DeleteRequest(table, "k", family, "q");
+    client.delete(del).join();
+    final ArrayList<KeyValue> kvs2 = client.get(get).join();
+    assertEquals(0, kvs2.size());
   }
 
   /** Scan with multiple qualifiers. */
-  private static void scanWithQualifiers(final String[] args) throws Exception {
-    final HBaseClient client = Common.getOpt(TestIncrementCoalescing.class,
-                                             args);
+  @Test
+  public void scanWithQualifiers() throws Exception {
     client.setFlushInterval(FAST_FLUSH);
-    try {
-      final String table = args[0];
-      final String family = args[1];
-      final PutRequest put1 = new PutRequest(table, "k", family, "a", "val1");
-      final PutRequest put2 = new PutRequest(table, "k", family, "b", "val2");
-      final PutRequest put3 = new PutRequest(table, "k", family, "c", "val3");
-      Deferred.group(client.put(put1), client.put(put2),
-                     client.put(put3)).join();
-      final Scanner scanner = client.newScanner(table);
-      scanner.setFamily(family);
-      scanner.setQualifiers(new byte[][] { { 'a' }, { 'c' } });
-      final ArrayList<ArrayList<KeyValue>> rows = scanner.nextRows(2).join();
-      assertEquals(1, rows.size());
-      final ArrayList<KeyValue> kvs = rows.get(0);
-      assertEquals(2, kvs.size());
-      assertEq("val1", kvs.get(0).value());
-      assertEq("val3", kvs.get(1).value());
-    } finally {
-      client.shutdown().join();
-    }
-    LOG.info("scanWithQualifiers: PASS");
+    final PutRequest put1 = new PutRequest(table, "k", family, "a", "val1");
+    final PutRequest put2 = new PutRequest(table, "k", family, "b", "val2");
+    final PutRequest put3 = new PutRequest(table, "k", family, "c", "val3");
+    Deferred.group(client.put(put1), client.put(put2),
+                   client.put(put3)).join();
+    final Scanner scanner = client.newScanner(table);
+    scanner.setFamily(family);
+    scanner.setQualifiers(new byte[][] { { 'a' }, { 'c' } });
+    final ArrayList<ArrayList<KeyValue>> rows = scanner.nextRows(2).join();
+    assertEquals(1, rows.size());
+    final ArrayList<KeyValue> kvs = rows.get(0);
+    assertEquals(2, kvs.size());
+    assertEq("val1", kvs.get(0).value());
+    assertEq("val3", kvs.get(1).value());
   }
 
   /** Regression test for issue #25. */
-  private static void regression25(final String[] args) throws Exception {
-    final HBaseClient client = Common.getOpt(TestIncrementCoalescing.class,
-                                             args);
+  @Test
+  public void regression25() throws Exception {
     client.setFlushInterval(FAST_FLUSH);
-    try {
-      final String table1 = args[0] + "1";
-      final String table2 = args[0] + "2";
-      final String family = args[1];
-      createOrTruncateTable(client, table1, family);
-      createOrTruncateTable(client, table2, family);
-      for (int i = 0; i < 2; i++) {
-        final PutRequest put;
-        final String key = 'k' + String.valueOf(i);
-        if (i % 2 == 0) {
-          put = new PutRequest(table1, key, family, "q", "v");
-        } else {
-          put = new PutRequest(table2, key, family, "q", "v");
-        }
-        final DeleteRequest delete = new DeleteRequest(put.table(), put.key());
-        client.delete(delete);
-        client.put(put);
+    final String table1 = args[0] + "1";
+    final String table2 = args[0] + "2";
+    final String family = args[1];
+    createOrTruncateTable(client, table1, family);
+    createOrTruncateTable(client, table2, family);
+    for (int i = 0; i < 2; i++) {
+      final PutRequest put;
+      final String key = 'k' + String.valueOf(i);
+      if (i % 2 == 0) {
+        put = new PutRequest(table1, key, family, "q", "v");
+      } else {
+        put = new PutRequest(table2, key, family, "q", "v");
       }
-      client.flush().joinUninterruptibly();
-    } finally {
-      client.shutdown().join();
+      final DeleteRequest delete = new DeleteRequest(put.table(), put.key());
+      client.delete(delete);
+      client.put(put);
     }
-    LOG.info("regression25: PASS");
+    client.flush().joinUninterruptibly();
   }
 
   private static void assertEq(final String expect, final byte[] actual) {
@@ -281,6 +291,29 @@ final class TestIntegration {
     String line;
     while ((line = r.readLine()) != null) {
       LOG.info('(' + what + ") " + line);
+    }
+  }
+
+  private static final class JunitListener extends RunListener {
+    @Override
+    public void testStarted(final Description description) {
+      LOG.info("Running test " + description.getMethodName());
+    }
+
+    @Override
+    public void testFinished(final Description description) {
+      LOG.info("Done running test " + description.getMethodName());
+    }
+
+    @Override
+    public void testFailure(final Failure failure) {
+      LOG.error("Test failed: " + failure.getDescription().getMethodName(),
+                failure.getException());
+    }
+
+    @Override
+    public void testIgnored(final Description description) {
+      LOG.info("Test ignored: " + description.getMethodName());
     }
   }
 
