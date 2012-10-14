@@ -48,6 +48,7 @@ import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.Description;
 import org.junit.runner.JUnitCore;
+import org.junit.runner.Request;
 import org.junit.runner.Result;
 import org.junit.runner.notification.Failure;
 import org.junit.runner.notification.RunListener;
@@ -109,7 +110,14 @@ final public class TestIntegration {
     final JUnitCore junit = new JUnitCore();
     final JunitListener listener = new JunitListener();
     junit.addListener(listener);
-    final Result result = junit.run(TestIntegration.class);
+    final String singleTest = System.getenv("TEST_NAME");
+    final Request req;
+    if (singleTest != null) {
+      req = Request.method(TestIntegration.class, singleTest);
+    } else {
+      req = Request.aClass(TestIntegration.class);
+    }
+    final Result result = junit.run(req);
     LOG.info("Ran " + result.getRunCount() + " tests in "
              + result.getRunTime() + "ms");
     if (!result.wasSuccessful()) {
