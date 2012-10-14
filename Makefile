@@ -36,7 +36,7 @@ package := org.hbase.async
 spec_title := Asynchronous HBase Client
 spec_vendor := StumbleUpon, Inc.
 # Semantic Versioning (see http://semver.org/).
-spec_version := 1.4.0-SNAPSHOT
+spec_version := 1.4.2-jbaldassari
 jar := $(top_builddir)/asynchbase-$(spec_version).jar
 asynchbase_SOURCES := \
 	src/AtomicIncrementRequest.java	\
