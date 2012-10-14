@@ -458,6 +458,7 @@ public final class Scanner {
                                          + ") is greater than the maximum"
                                          + " timestamp: " + max_timestamp);
     }
+    checkScanningNotStarted();
     min_timestamp = timestamp;
   }
 
@@ -490,6 +491,7 @@ public final class Scanner {
                                          + ") is greater than the minimum"
                                          + " timestamp: " + min_timestamp);
     }
+    checkScanningNotStarted();
     max_timestamp = timestamp;
   }
 
@@ -525,6 +527,7 @@ public final class Scanner {
       throw new IllegalArgumentException("Negative minimum timestamp: "
                                          + min_timestamp);
     }
+    checkScanningNotStarted();
     // We now have the guarantee that max_timestamp >= 0, no need to check it.
     this.min_timestamp = min_timestamp;
     this.max_timestamp = max_timestamp;
