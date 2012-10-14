@@ -50,6 +50,11 @@ public final class GetRequest extends HBaseRpc
   private long lockid = RowLock.NO_LOCK;
 
   /**
+   * How many versions of each cell to retrieve.
+   */
+  private int versions = 1;
+
+  /**
    * Constructor.
    * <strong>These byte arrays will NOT be copied.</strong>
    * @param table The non-empty name of the table to use.
@@ -177,6 +182,35 @@ public final class GetRequest extends HBaseRpc
     return this;
   }
 
+  /**
+   * Sets the maximum number of versions to return for each cell read.
+   * <p>
+   * By default only the most recent version of each cell is read.
+   * If you want to get all possible versions available, pass
+   * {@link Integer#MAX_VALUE} in argument.
+   * @param versions A strictly positive number of versions to return.
+   * @return {@code this}, always.
+   * @since 1.4
+   * @throws IllegalArgumentException if {@code versions <= 0}
+   */
+  public GetRequest maxVersions(final int versions) {
+    if (versions <= 0) {
+      throw new IllegalArgumentException("Need a strictly positive number: "
+                                         + versions);
+    }
+    this.versions = versions;
+    return this;
+  }
+
+  /**
+   * Returns the maximum number of versions to return for each cell scanned.
+   * @return A strictly positive integer.
+   * @since 1.4
+   */
+  public int maxVersions() {
+    return versions;
+  }
+
   @Override
   public byte[] table() {
     return table;
@@ -268,7 +302,7 @@ public final class GetRequest extends HBaseRpc
     buf.writeByte(1);    // Get#GET_VERSION.  Undocumented versioning of Get.
     writeByteArray(buf, key);
     buf.writeLong(lockid);  // Lock ID.
-    buf.writeInt(1);     // Max number of versions to return.
+    buf.writeInt(versions); // Max number of versions to return.
     buf.writeByte(0x00); // boolean (false): whether or not to use a filter.
     // If the previous boolean was true:
     //   writeByteArray(buf, filter name as byte array);

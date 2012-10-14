@@ -6,6 +6,8 @@ This project uses Semantic Versioning (see http://semver.org/).
   - Fixed an RPC serialization bug when batching whole-row deletes.
     See issue #25.
   - Scanners can now scan multiple qualifiers at a time (#35).
+  - Scanner and GetRequest now enable you to specify how many versions
+    to read from HBase.
   - Upgraded to Netty 3.5.9 to avoid an IndexOutOfBoundsException
     when deserializing a KeyValue with an empty qualifier or
     value, under certain circumstances.

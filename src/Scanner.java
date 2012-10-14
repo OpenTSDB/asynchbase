@@ -154,6 +154,11 @@ public final class Scanner {
   private int max_num_kvs = DEFAULT_MAX_NUM_KVS;
 
   /**
+   * How many versions of each cell to retrieve.
+   */
+  private int versions = 1;
+
+  /**
    * The region currently being scanned.
    * If null, we haven't started scanning.
    * If == DONE, then we're done scanning.
@@ -436,6 +441,35 @@ public final class Scanner {
     }
     checkScanningNotStarted();
     this.max_num_kvs = max_num_kvs;
+  }
+
+  /**
+   * Sets the maximum number of versions to return for each cell scanned.
+   * <p>
+   * By default a scanner will only return the most recent version of
+   * each cell.  If you want to get all possible versions available,
+   * pass {@link Integer#MAX_VALUE} in argument.
+   * @param versions A strictly positive number of versions to return.
+   * @since 1.4
+   * @throws IllegalStateException if scanning already started.
+   * @throws IllegalArgumentException if {@code versions <= 0}
+   */
+  public void setMaxVersions(final int versions) {
+    if (versions <= 0) {
+      throw new IllegalArgumentException("Need a strictly positive number: "
+                                         + versions);
+    }
+    checkScanningNotStarted();
+    this.versions = versions;
+  }
+
+  /**
+   * Returns the maximum number of versions to return for each cell scanned.
+   * @return A strictly positive integer.
+   * @since 1.4
+   */
+  public int getMaxVersions() {
+    return versions;
   }
 
   /**
@@ -958,7 +992,7 @@ public final class Scanner {
       buf.writeByte(1);    // Manual versioning of Scan.
       writeByteArray(buf, start_key);
       writeByteArray(buf, stop_key);
-      buf.writeInt(1);     // Max number of versions to return.
+      buf.writeInt(versions);  // Max number of versions to return.
 
       // Max number of KeyValues to get per RPC.
       buf.writeInt(max_num_kvs);
