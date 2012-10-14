@@ -271,6 +271,83 @@ final public class TestIntegration {
     assertEq("val3", kvs.get(1).value());
   }
 
+  /** Lots of buffered counter increments from multiple threads. */
+  @Test
+  public void bufferedIncrementStressTest() throws Exception {
+    client.setFlushInterval(FAST_FLUSH);
+    final byte[] table = this.table.getBytes();
+    final byte[] key1 = "cnt1".getBytes();  // Spread the increments..
+    final byte[] key2 = "cnt2".getBytes();  // .. over these two counters.
+    final byte[] family = this.family.getBytes();
+    final byte[] qual = { 'q' };
+    final DeleteRequest del1 = new DeleteRequest(table, key1, family, qual);
+    final DeleteRequest del2 = new DeleteRequest(table, key2, family, qual);
+    Deferred.group(client.delete(del1), client.delete(del2)).join();
+
+    final int nthreads = Runtime.getRuntime().availableProcessors() * 2;
+    // The magic number comes from the limit on callbacks that Deferred
+    // imposes.  We spread increments over two counters, hence the x 2.
+    final int incr_per_thread = 16384 / nthreads * 2;
+    final boolean[] successes = new boolean[nthreads];
+
+    final class IncrementThread extends Thread {
+      private final int num;
+      public IncrementThread(final int num) {
+        super("IncrementThread-" + num);
+        this.num = num;
+      }
+      public void run() {
+        try {
+          doIncrements();
+          successes[num] = true;
+        } catch (Throwable e) {
+          successes[num] = false;
+          LOG.error("Uncaught exception", e);
+        }
+      }
+      private void doIncrements() {
+        for (int i = 0; i < incr_per_thread; i++) {
+          final byte[] key = i % 2 == 0 ? key1 : key2;
+          client.bufferAtomicIncrement(new AtomicIncrementRequest(table, key,
+                                                                  family, qual));
+        }
+      }
+    }
+
+    final IncrementThread[] threads = new IncrementThread[nthreads];
+    for (int i = 0; i < nthreads; i++) {
+      threads[i] = new IncrementThread(i);
+    }
+    for (int i = 0; i < nthreads; i++) {
+      threads[i].start();
+    }
+    for (int i = 0; i < nthreads; i++) {
+      threads[i].join();
+    }
+
+    client.flush().joinUninterruptibly();
+
+    // Check that we the counters have the expected value.
+    final GetRequest[] gets = { mkGet(table, key1, family, qual),
+                                mkGet(table, key2, family, qual) };
+    for (final GetRequest get : gets) {
+      final ArrayList<KeyValue> kvs = client.get(get).join();
+      assertEquals(1, kvs.size());
+      assertEquals(incr_per_thread * nthreads / 2,
+                   Bytes.getLong(kvs.get(0).value()));
+    }
+
+    for (int i = 0; i < nthreads; i++) {
+      assertEquals(true, successes[i]);  // Make sure no exception escaped.
+    }
+  }
+
+  /** Helper method to create a get request.  */
+  private static GetRequest mkGet(final byte[] table, final byte[] key,
+                                  final byte[] family, final byte[] qual) {
+    return new GetRequest(table, key).family(family).qualifier(qual);
+  }
+
   /** Regression test for issue #25. */
   @Test
   public void regression25() throws Exception {
