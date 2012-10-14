@@ -1,4 +1,5 @@
-HBase Async - User visible changes.
+AsyncHBase - User visible and noteworthy changes.
+This project uses Semantic Versioning (see http://semver.org/).
 
 * Version 1.4.0 (2012-??-??) [???????]
 
@@ -9,12 +10,14 @@ HBase Async - User visible changes.
     when deserializing a KeyValue with an empty qualifier or
     value, under certain circumstances.
 
+
 * Version 1.3.2 (2012-07-10) [2af9f55]
 
 Noteworthy changes:
   - Upgraded to Netty 3.5.2.
   - KeyValue now allows a timestamp of 0.
 
+
 * Version 1.3.1 (2012-06-16) [7ea151b]
 
   - Critical bug fix of issue #27 that makes some keys unusable
@@ -22,7 +25,7 @@ Noteworthy changes:
   - `ensureTableFamilyExists' and `ensureTableExists' are cheaper
     as they partially work around HBASE-3170.
 
-
+
 * Version 1.3.0 (2012-05-06) [bb9168c]
 
 New public APIs:
