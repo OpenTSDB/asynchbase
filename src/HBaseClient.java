@@ -1155,8 +1155,7 @@ public final class HBaseClient {
           // if we need the timer once, we'll need it forever.  If it's truly
           // not needed anymore, we'll just cause a bit of extra work to the
           // timer thread every 100ms, no big deal.
-          timer.newTimeout(new FlushBufferedIncrementsTimer(),
-                           interval > 0 ? interval : 100, MILLISECONDS);
+          timer.newTimeout(this, interval > 0 ? interval : 100, MILLISECONDS);
         }
       }
     }
