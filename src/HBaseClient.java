@@ -1122,7 +1122,7 @@ public final class HBaseClient {
         amount.deferred.chain(deferred);
         return deferred;
       }
-    } while(true);
+    } while (true);
   }
 
   /**
