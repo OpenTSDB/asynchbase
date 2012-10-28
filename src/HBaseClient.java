@@ -529,6 +529,10 @@ public final class HBaseClient {
    * <p>
    * @return A {@link Deferred}, whose callback chain will be invoked when
    * everything that was buffered at the time of the call has been flushed.
+   * <p>
+   * Note that this doesn't guarantee that <b>ALL</b> outstanding RPCs have
+   * completed.  This doesn't introduce any sort of global sync point.  All
+   * it does really is it sends any buffered RPCs to HBase.
    */
   public Deferred<Object> flush() {
     num_flushes.increment();
