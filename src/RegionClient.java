@@ -283,6 +283,38 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
   }
 
   /**
+   * Returns a possibly empty list of all the RPCs that are in-flight.
+   */
+  private ArrayList<Deferred<Object>> getInflightRpcs() {
+    final ArrayList<Deferred<Object>> inflight =
+      new ArrayList<Deferred<Object>>();
+    for (final HBaseRpc rpc : rpcs_inflight.values()) {
+      inflight.add(rpc.getDeferred());
+    }
+    return inflight;
+  }
+
+  /**
+   * Returns a possibly {@code null} list of all RPCs that are pending.
+   * <p>
+   * Pending RPCs are those that are scheduled to be sent as soon as we
+   * are connected to the RegionServer and have done version negotiation.
+   */
+  private ArrayList<Deferred<Object>> getPendingRpcs() {
+    synchronized (this) {
+      if (pending_rpcs != null) {
+        final ArrayList<Deferred<Object>> pending =
+          new ArrayList<Deferred<Object>>(pending_rpcs.size());
+        for (final HBaseRpc rpc : pending_rpcs) {
+          pending.add(rpc.getDeferred());
+        }
+        return pending;
+      }
+    }
+    return null;
+  }
+
+  /**
    * Attempts to gracefully terminate the connection to this RegionServer.
    */
   public Deferred<Object> shutdown() {
@@ -302,11 +334,7 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
     // First, check whether we have RPCs in flight.  If we do, we need to wait
     // until they complete.
     {
-      final ArrayList<Deferred<Object>> inflight =
-        new ArrayList<Deferred<Object>>();
-      for (final HBaseRpc rpc : rpcs_inflight.values()) {
-        inflight.add(rpc.getDeferred());
-      }
+      final ArrayList<Deferred<Object>> inflight = getInflightRpcs();
       final int size = inflight.size();
       if (size > 0) {
         return Deferred.group(inflight)
@@ -326,13 +354,9 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
       }
     }
 
-    synchronized (this) {
-      if (pending_rpcs != null && !pending_rpcs.isEmpty()) {
-        final ArrayList<Deferred<Object>> pending =
-          new ArrayList<Deferred<Object>>(pending_rpcs.size());
-        for (final HBaseRpc rpc : pending_rpcs) {
-          pending.add(rpc.getDeferred());
-        }
+    {
+      final ArrayList<Deferred<Object>> pending = getPendingRpcs();
+      if (pending != null) {
         return Deferred.group(pending).addCallbackDeferring(
           new RetryShutdown<ArrayList<Object>>(pending.size()));
       }
