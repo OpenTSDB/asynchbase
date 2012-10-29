@@ -28,7 +28,6 @@ package org.hbase.async;
 
 import java.util.Arrays;
 import java.util.concurrent.atomic.AtomicInteger;
-import static java.util.concurrent.TimeUnit.MILLISECONDS;
 
 import com.google.common.cache.CacheBuilder;
 import com.google.common.cache.CacheLoader;

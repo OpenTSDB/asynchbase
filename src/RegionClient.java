@@ -257,7 +257,7 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
       if ((adj & 0x10) == 0x10) {  // if some arbitrary bit is set...
         adj = (short) -adj;        // ... use a negative adjustment instead.
       }
-      hbase_client.timer.newTimeout(flush_timer, interval + adj, MILLISECONDS);
+      hbase_client.newTimeout(flush_timer, interval + adj);
     }
   }
 

@@ -210,12 +210,10 @@ public final class HBaseClient {
 
   /**
    * Timer we use to handle all our timeouts.
-   * <p>
-   * This is package-private so that this timer can easily be shared with the
-   * other classes in this package.
    * TODO(tsuna): Get it through the ctor to share it with others.
+   * TODO(tsuna): Make the tick duration configurable?
    */
-  final HashedWheelTimer timer = new HashedWheelTimer(20, MILLISECONDS);
+  private final HashedWheelTimer timer = new HashedWheelTimer(20, MILLISECONDS);
 
   /** Up to how many milliseconds can we buffer an edit on the client side.  */
   private volatile short flush_interval = 1000;  // ms
@@ -660,6 +658,23 @@ public final class HBaseClient {
    */
   public Timer getTimer() {
     return timer;
+  }
+
+  /**
+   * Schedules a new timeout.
+   * @param task The task to execute when the timer times out.
+   * @param timeout_ms The timeout, in milliseconds (strictly positive).
+   */
+  void newTimeout(final TimerTask task, final long timeout_ms) {
+    try {
+      timer.newTimeout(task, timeout_ms, MILLISECONDS);
+    } catch (IllegalStateException e) {
+      // This can happen if the timer fires just before shutdown()
+      // is called from another thread, and due to how threads get
+      // scheduled we tried to call newTimeout() after timer.stop().
+      LOG.warn("Failed to schedule timer."
+               + "  Ignore this if we're shutting down.", e);
+    }
   }
 
   /**
@@ -1155,7 +1170,7 @@ public final class HBaseClient {
           // if we need the timer once, we'll need it forever.  If it's truly
           // not needed anymore, we'll just cause a bit of extra work to the
           // timer thread every 100ms, no big deal.
-          timer.newTimeout(this, interval > 0 ? interval : 100, MILLISECONDS);
+          newTimeout(this, interval > 0 ? interval : 100);
         }
       }
     }
@@ -2299,7 +2314,7 @@ public final class HBaseClient {
     final int wait_ms = probe.attempt < 4
       ? 200 * (probe.attempt + 2)     // 400, 600, 800, 1000
       : 1000 + (1 << probe.attempt);  // 1016, 1032, 1064, 1128, 1256, 1512, ..
-    timer.newTimeout(new NSRETimer(), wait_ms, MILLISECONDS);
+    newTimeout(new NSRETimer(), wait_ms);
   }
 
   // ----------------------------------------------------------------- //
@@ -2813,7 +2828,7 @@ public final class HBaseClient {
 
     /** Schedule a timer to retry {@link #getRootRegion} after some time.  */
     private void retryGetRootRegionLater(final AsyncCallback.DataCallback cb) {
-      timer.newTimeout(new TimerTask() {
+      newTimeout(new TimerTask() {
           public void run(final Timeout timeout) {
             if (zk != null) {
               LOG.debug("Retrying to find the -ROOT- region in ZooKeeper");
@@ -2823,7 +2838,7 @@ public final class HBaseClient {
               connectZK();
             }
           }
-        }, 1000, MILLISECONDS);
+        }, 1000 /* milliseconds */);
     }
 
     /**
