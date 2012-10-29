@@ -287,7 +287,7 @@ final public class TestIntegration {
     final int nthreads = Runtime.getRuntime().availableProcessors() * 2;
     // The magic number comes from the limit on callbacks that Deferred
     // imposes.  We spread increments over two counters, hence the x 2.
-    final int incr_per_thread = 16384 / nthreads * 2;
+    final int incr_per_thread = 8192 / nthreads * 2;
     final boolean[] successes = new boolean[nthreads];
 
     final class IncrementThread extends Thread {
@@ -318,6 +318,7 @@ final public class TestIntegration {
     for (int i = 0; i < nthreads; i++) {
       threads[i] = new IncrementThread(i);
     }
+    LOG.info("Starting to generate increments");
     for (int i = 0; i < nthreads; i++) {
       threads[i].start();
     }
@@ -325,7 +326,9 @@ final public class TestIntegration {
       threads[i].join();
     }
 
+    LOG.info("Flushing all buffered increments.");
     client.flush().joinUninterruptibly();
+    LOG.info("Done flushing all buffered increments.");
 
     // Check that we the counters have the expected value.
     final GetRequest[] gets = { mkGet(table, key1, family, qual),
