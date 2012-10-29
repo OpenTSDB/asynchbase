@@ -534,11 +534,15 @@ public final class HBaseClient {
    */
   public Deferred<Object> flush() {
     num_flushes.increment();
+    final boolean need_sync;
     {
       final LoadingCache<BufferedIncrement, BufferedIncrement.Amount> buf =
         increment_buffer;  // Single volatile-read.
-      if (buf != null) {
+      if (buf != null && !buf.asMap().isEmpty()) {
         flushBufferedIncrements(buf);
+        need_sync = true;
+      } else {
+        need_sync = false;
       }
     }
     final ArrayList<Deferred<Object>> d =
@@ -547,7 +551,7 @@ public final class HBaseClient {
     // Bear in mind that we're traversing a ConcurrentHashMap, so we may get
     // clients that have been removed from the map since we started iterating.
     for (final RegionClient client : client2regions.keySet()) {
-      d.add(client.flush());
+      d.add(need_sync ? client.sync() : client.flush());
     }
     for (final ArrayList<HBaseRpc> nsred : got_nsre.values()) {
       synchronized (nsred) {

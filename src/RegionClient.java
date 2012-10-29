@@ -148,6 +148,11 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
    * RPCs we've been asked to serve while disconnected from the RegionServer.
    * This reference is lazily created.  Synchronize on `this' before using it.
    *
+   * Invariants:
+   *   If pending_rpcs != null      =>  !pending_rpcs.isEmpty()
+   *   If pending_rpcs != null      =>  rpcs_inflight.isEmpty()
+   *   If !rpcs_inflight.isEmpty()  =>  pending_rpcs == null
+   *
    * TODO(tsuna): Properly manage this buffer.  Right now it's unbounded, we
    * don't auto-reconnect anyway, etc.
    */
@@ -267,7 +272,7 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
    * @return A {@link Deferred}, whose callback chain will be invoked when
    * everything that was buffered at the time of the call has been flushed.
    */
-  public Deferred<Object> flush() {
+  Deferred<Object> flush() {
     // Copy the batch to a local variable and null it out.
     final MultiAction batched_rpcs;
     synchronized (this) {
@@ -280,6 +285,35 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
     final Deferred<Object> d = batched_rpcs.getDeferred();
     sendRpc(batched_rpcs);
     return d;
+  }
+
+  /**
+   * Introduces a sync point for all outstanding RPCs.
+   * <p>
+   * All RPCs known to this {@code RegionClient}, whether they are buffered,
+   * in flight, pending, etc., will get grouped together in the Deferred
+   * returned, thereby introducing a sync point past which we can guarantee
+   * that all RPCs have completed (successfully or not).  This is similar
+   * to the {@code sync(2)} Linux system call.
+   * @return A {@link Deferred}, whose callback chain will be invoked when
+   * everything that was buffered at the time of the call has been flushed.
+   */
+  Deferred<Object> sync() {
+    flush();
+
+    ArrayList<Deferred<Object>> rpcs = getInflightRpcs();  // Never null.
+    // There are only two cases to handle here thanks to the invariant that
+    // says that if we inflight isn't empty, then pending is null.
+    if (rpcs.isEmpty()) {
+      rpcs = getPendingRpcs();
+    }
+
+    if (rpcs == null) {
+      return Deferred.fromResult(null);
+    }
+    @SuppressWarnings("unchecked")
+    final Deferred<Object> sync = (Deferred) Deferred.group(rpcs);
+    return sync;
   }
 
   /**
