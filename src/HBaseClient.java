@@ -1221,7 +1221,9 @@ public final class HBaseClient {
     if (LOG.isDebugEnabled()) {
       LOG.debug("Flushing " + increment_buffer.size() + " buffered increments");
     }
-    increment_buffer.invalidateAll();
+    synchronized (increment_buffer) {
+      increment_buffer.invalidateAll();
+    }
   }
 
   /**
