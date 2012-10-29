@@ -11,6 +11,7 @@ This project uses Semantic Versioning (see http://semver.org/).
   - Upgraded to Netty 3.5.9 to avoid an IndexOutOfBoundsException
     when deserializing a KeyValue with an empty qualifier or
     value, under certain circumstances.
+  - Upgraded to suasync 1.3.0.
 
 
 * Version 1.3.2 (2012-07-10) [2af9f55]
