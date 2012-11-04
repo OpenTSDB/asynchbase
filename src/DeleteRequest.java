@@ -45,7 +45,7 @@ import org.jboss.netty.buffer.ChannelBuffer;
  */
 public final class DeleteRequest extends BatchableRpc
   implements HBaseRpc.HasTable, HBaseRpc.HasKey,
-             HBaseRpc.HasFamily, HBaseRpc.HasQualifiers {
+             HBaseRpc.HasFamily, HBaseRpc.HasQualifiers, HBaseRpc.IsEdit {
 
   private static final byte[] DELETE = new byte[] {
     'd', 'e', 'l', 'e', 't', 'e'

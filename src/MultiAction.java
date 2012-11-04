@@ -39,7 +39,7 @@ import org.jboss.netty.buffer.ChannelBuffer;
  * This RPC is guaranteed to be sent atomically (but HBase doesn't guarantee
  * that it will apply it atomically).
  */
-final class MultiAction extends HBaseRpc {
+final class MultiAction extends HBaseRpc implements HBaseRpc.IsEdit {
 
   // NOTE: I apologize for the long methods and complex control flow logic,
   // with many nested loops and `if's.  `multiPut' and `multi' have always

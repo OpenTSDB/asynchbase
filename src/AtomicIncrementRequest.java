@@ -40,7 +40,7 @@ import org.jboss.netty.buffer.ChannelBuffer;
  */
 public final class AtomicIncrementRequest extends HBaseRpc
   implements HBaseRpc.HasTable, HBaseRpc.HasKey,
-             HBaseRpc.HasFamily, HBaseRpc.HasQualifier {
+             HBaseRpc.HasFamily, HBaseRpc.HasQualifier, HBaseRpc.IsEdit {
 
   private static final byte[] INCREMENT_COLUMN_VALUE = new byte[] {
     'i', 'n', 'c', 'r', 'e', 'm', 'e', 'n', 't',

@@ -149,6 +149,13 @@ public abstract class HBaseRpc {
     public long timestamp();
   }
 
+  /**
+   * Package-private interface to mark RPCs that are changing data in HBase.
+   * @since 1.4
+   */
+  interface IsEdit {
+  }
+
   /*
    * This class, although it's part of the public API, is mostly here to make
    * it easier for this library to manipulate the HBase RPC protocol.

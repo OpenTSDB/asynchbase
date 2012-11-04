@@ -37,7 +37,8 @@ import org.jboss.netty.buffer.ChannelBuffer;
  */
 final class CompareAndSetRequest extends HBaseRpc
   implements HBaseRpc.HasTable, HBaseRpc.HasKey,
-             HBaseRpc.HasFamily, HBaseRpc.HasQualifier, HBaseRpc.HasValue {
+             HBaseRpc.HasFamily, HBaseRpc.HasQualifier, HBaseRpc.HasValue,
+             HBaseRpc.IsEdit {
 
   // Awesome RPC method name...
   private static final byte[] CHECKANDPUT = new byte[] {

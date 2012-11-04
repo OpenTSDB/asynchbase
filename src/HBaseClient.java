@@ -556,12 +556,7 @@ public final class HBaseClient {
     for (final ArrayList<HBaseRpc> nsred : got_nsre.values()) {
       synchronized (nsred) {
         for (final HBaseRpc rpc : nsred) {
-          // TODO(tsuna): This is brittle, need to remember to edit this when
-          // adding new RPCs that change data in HBase.  Not good.
-          if (rpc instanceof PutRequest
-              || rpc instanceof AtomicIncrementRequest
-              || rpc instanceof DeleteRequest
-              || rpc instanceof CompareAndSetRequest) {
+          if (rpc instanceof HBaseRpc.IsEdit) {
             d.add(rpc.getDeferred());
           }
         }

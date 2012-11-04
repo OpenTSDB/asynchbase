@@ -59,7 +59,7 @@ import org.jboss.netty.buffer.ChannelBuffer;
  */
 public final class PutRequest extends BatchableRpc
   implements HBaseRpc.HasTable, HBaseRpc.HasKey, HBaseRpc.HasFamily,
-             HBaseRpc.HasQualifiers, HBaseRpc.HasValues,
+             HBaseRpc.HasQualifiers, HBaseRpc.HasValues, HBaseRpc.IsEdit,
              /* legacy: */ HBaseRpc.HasQualifier, HBaseRpc.HasValue {
 
   private static final byte[] PUT = new byte[] { 'p', 'u', 't' };
