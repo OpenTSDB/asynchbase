@@ -525,6 +525,7 @@ final public class TestIntegration {
     final byte[] family = this.family.getBytes();
     final byte[] qual = { 'q' };
     final DeleteRequest del = new DeleteRequest(table, key, family, qual);
+    del.setBufferable(false);
     client.delete(del).join();
     final int iterations = 100000;
     for (int i = 0; i < iterations; i++) {
