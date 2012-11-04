@@ -1086,11 +1086,6 @@ public final class HBaseClient {
    * by {@link #getFlushInterval} in order to allow the client to coalesce
    * increments.
    * <p>
-   * <strong>Node: This method only works with positive increments.</strong>
-   * Also note that if the amount is greater than or equal to
-   * {@link Short#MAX_VALUE}, the increment cannot be buffered and will be
-   * sent directly.
-   * <p>
    * Increment coalescing can dramatically reduce the number of RPCs and write
    * load on HBase if you tend to increment multiple times the same working
    * set of counters.  This is very common in user-facing serving systems that
@@ -1098,26 +1093,23 @@ public final class HBaseClient {
    * <p>
    * If client-side buffering is disabled ({@link #getFlushInterval} returns
    * 0) then this function has the same effect as calling
-   * {@link #atomicIncrement(AtomicIncrementRequest)}.
+   * {@link #atomicIncrement(AtomicIncrementRequest)} directly.
    * @param request The increment request.
    * @return The deferred {@code long} value that results from the increment.
-   * @throws IllegalArgumentException if {@code request.getAmount() < 0}
    * @since 1.3
+   * @since 1.4 This method works with negative increment values.
    */
   public Deferred<Long> bufferAtomicIncrement(final AtomicIncrementRequest request) {
     final long value = request.getAmount();
-    if (value < 0) {
-      throw new IllegalArgumentException("Cannot buffer atomic increment with"
-                                         + " negative amount: " + request);
-    } else if (value >= Short.MAX_VALUE   // Value to large to safely coalesce.
-               || flush_interval == 0) {  // Client-side buffer disabled.
+    if (!BufferedIncrement.Amount.checkOverflow(value)  // Value too large.
+        || flush_interval == 0) {           // Client-side buffer disabled.
       return atomicIncrement(request);
     }
 
     final BufferedIncrement incr =
       new BufferedIncrement(request.table(), request.key(), request.family(),
                             request.qualifier());
-    final short delta = (short) value;
+
     do {
       BufferedIncrement.Amount amount;
       // Semi-evil: the very first time we get here, `increment_buffer' will
@@ -1130,17 +1122,13 @@ public final class HBaseClient {
         setupIncrementCoalescing();
         amount = increment_buffer.getUnchecked(incr);
       }
-      if (amount.addAndGet(delta) < 0) {
-        // Race condition.  We got something out of the buffer, but in the mean
-        // time another thread picked it up and decided to send it to HBase. So
-        // we need to retry, which will create a new entry in the buffer.
-        amount.addAndGet(-delta);  // Undo our previous addAndGet.
-        // Loop again to retry.
-      } else {
+      if (amount.update(value)) {
         final Deferred<Long> deferred = new Deferred<Long>();
         amount.deferred.chain(deferred);
         return deferred;
       }
+      // else: Loop again to retry.
+      increment_buffer.refresh(incr);
     } while (true);
   }
 

@@ -345,6 +345,119 @@ final public class TestIntegration {
     }
   }
 
+  /** Increment coalescing with values too large to be coalesced. */
+  @Test
+  public void incrementCoalescingWithAmountsTooBig() throws Exception {
+    client.setFlushInterval(SLOW_FLUSH);
+    final byte[] table = this.table.getBytes();
+    final byte[] key = "cnt".getBytes();
+    final byte[] family = this.family.getBytes();
+    final byte[] qual = { 'q' };
+    final DeleteRequest del = new DeleteRequest(table, key, family, qual);
+    del.setBufferable(false);
+    client.delete(del).join();
+    final long big = 1L << 48;  // Too big to be coalesced.
+    client.bufferAtomicIncrement(new AtomicIncrementRequest(table, key,
+                                                            family, qual, big));
+    client.bufferAtomicIncrement(new AtomicIncrementRequest(table, key,
+                                                            family, qual, big));
+    client.flush().joinUninterruptibly();
+    final GetRequest get = new GetRequest(table, key)
+      .family(family).qualifier(qual);
+    final ArrayList<KeyValue> kvs = client.get(get).join();
+    assertEquals(1, kvs.size());
+    assertEquals(big + big, Bytes.getLong(kvs.get(0).value()));
+  }
+
+  /** Increment coalescing with large values that overflow. */
+  @Test
+  public void incrementCoalescingWithOverflowingAmounts() throws Exception {
+    client.setFlushInterval(SLOW_FLUSH);
+    final byte[] table = this.table.getBytes();
+    final byte[] key = "cnt".getBytes();
+    final byte[] family = this.family.getBytes();
+    final byte[] qual = { 'q' };
+    final DeleteRequest del = new DeleteRequest(table, key, family, qual);
+    del.setBufferable(false);
+    client.delete(del).join();
+    final long big = 1L << 47;
+    // First two RPCs can be coalesced.
+    client.bufferAtomicIncrement(new AtomicIncrementRequest(table, key,
+                                                            family, qual, big));
+    client.bufferAtomicIncrement(new AtomicIncrementRequest(table, key,
+                                                            family, qual, 1));
+    // This one would cause an overflow, so will be sent as a separate RPC.
+    // Overflow would happen because the max value is (1L << 48) - 1.
+    client.bufferAtomicIncrement(new AtomicIncrementRequest(table, key,
+                                                            family, qual, big));
+    client.flush().joinUninterruptibly();
+    final GetRequest get = new GetRequest(table, key)
+      .family(family).qualifier(qual);
+    final ArrayList<KeyValue> kvs = client.get(get).join();
+    assertEquals(1, kvs.size());
+    assertEquals(big + 1 + big, Bytes.getLong(kvs.get(0).value()));
+    // Check we sent the right number of RPCs.
+    assertEquals(2, client.stats().atomicIncrements());
+  }
+
+  /** Increment coalescing with negative values and underflows. */
+  @Test
+  public void incrementCoalescingWithUnderflowingAmounts() throws Exception {
+    client.setFlushInterval(SLOW_FLUSH);
+    final byte[] table = this.table.getBytes();
+    final byte[] key = "cnt".getBytes();
+    final byte[] family = this.family.getBytes();
+    final byte[] qual = { 'q' };
+    final DeleteRequest del = new DeleteRequest(table, key, family, qual);
+    del.setBufferable(false);
+    client.delete(del).join();
+    final long big = -1L << 47;
+    // First two RPCs can be coalesced.
+    client.bufferAtomicIncrement(new AtomicIncrementRequest(table, key,
+                                                            family, qual, big));
+    client.bufferAtomicIncrement(new AtomicIncrementRequest(table, key,
+                                                            family, qual, -1));
+    // This one would cause an underflow, so will be sent as a separate RPC.
+    // Overflow would happen because the max value is -1L << 48.
+    client.bufferAtomicIncrement(new AtomicIncrementRequest(table, key,
+                                                            family, qual, big));
+    client.flush().joinUninterruptibly();
+    final GetRequest get = new GetRequest(table, key)
+      .family(family).qualifier(qual);
+    final ArrayList<KeyValue> kvs = client.get(get).join();
+    assertEquals(1, kvs.size());
+    assertEquals(big - 1 + big, Bytes.getLong(kvs.get(0).value()));
+    // Check we sent the right number of RPCs.
+    assertEquals(2, client.stats().atomicIncrements());
+  }
+
+  /** Increment coalescing where the coalesced sum ends up being zero. */
+  @Test
+  public void incrementCoalescingWithZeroSumAmount() throws Exception {
+    client.setFlushInterval(SLOW_FLUSH);
+    final byte[] table = this.table.getBytes();
+    final byte[] key = "cnt".getBytes();
+    final byte[] family = this.family.getBytes();
+    final byte[] qual = { 'q' };
+    final DeleteRequest del = new DeleteRequest(table, key, family, qual);
+    del.setBufferable(false);
+    client.delete(del).join();
+    client.bufferAtomicIncrement(new AtomicIncrementRequest(table, key,
+                                                            family, qual, 1));
+    client.bufferAtomicIncrement(new AtomicIncrementRequest(table, key,
+                                                            family, qual, 2));
+    client.bufferAtomicIncrement(new AtomicIncrementRequest(table, key,
+                                                            family, qual, -3));
+    client.flush().joinUninterruptibly();
+    final GetRequest get = new GetRequest(table, key)
+      .family(family).qualifier(qual);
+    final ArrayList<KeyValue> kvs = client.get(get).join();
+    assertEquals(1, kvs.size());
+    assertEquals(0, Bytes.getLong(kvs.get(0).value()));
+    // The sum was 0, but must have sent the increment anyway.
+    assertEquals(1, client.stats().atomicIncrements());
+  }
+
   /** Helper method to create a get request.  */
   private static GetRequest mkGet(final byte[] table, final byte[] key,
                                   final byte[] family, final byte[] qual) {
@@ -404,7 +517,7 @@ final public class TestIntegration {
   }
 
   /** Regression test for issue #41. */
-  @Test(expected=CallbackOverflowError.class)
+  @Test
   public void regression41() throws Exception {
     client.setFlushInterval(SLOW_FLUSH);
     final byte[] table = this.table.getBytes();
