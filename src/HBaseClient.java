@@ -533,6 +533,25 @@ public final class HBaseClient {
    * it does really is it sends any buffered RPCs to HBase.
    */
   public Deferred<Object> flush() {
+    {
+      // If some RPCs are waiting for -ROOT- to be discovered, we too must wait
+      // because some of those RPCs could be edits that we must wait on.
+      final Deferred<Object> d = zkclient.getDeferredRootIfBeingLookedUp();
+      if (d != null) {
+        LOG.debug("Flush needs to wait on -ROOT- to come back");
+        final class RetryFlush implements Callback<Object, Object> {
+          public Object call(final Object arg) {
+            LOG.debug("Flush retrying after -ROOT- came back");
+            return flush();
+          }
+          public String toString() {
+            return "retry flush";
+          }
+        }
+        return d.addBoth(new RetryFlush());
+      }
+    }
+
     num_flushes.increment();
     final boolean need_sync;
     {
@@ -764,8 +783,10 @@ public final class HBaseClient {
     // because some of those RPCs could be edits that we must not lose.
     final Deferred<Object> d = zkclient.getDeferredRootIfBeingLookedUp();
     if (d != null) {
+      LOG.debug("Shutdown needs to wait on -ROOT- to come back");
       final class RetryShutdown implements Callback<Object, Object> {
         public Object call(final Object arg) {
+          LOG.debug("Shutdown retrying after -ROOT- came back");
           return shutdown();
         }
         public String toString() {
@@ -1896,7 +1917,7 @@ public final class HBaseClient {
     // RegionServer, Netty delivers a CLOSED ChannelStateEvent from a "boss"
     // thread while we may still be handling the OPEN event in an NIO thread.
     // Locking the client prevents it from being able to buffer requests when
-    // this happens.  After we release the lock, the it will find it's dead.
+    // this happens.  After we release the lock, then it will find it's dead.
     synchronized (client) {
       // Don't put any code between here and the next put (see next comment).
 
@@ -1912,14 +1933,7 @@ public final class HBaseClient {
       // 3. Update the reverse mapping created in step 1.
       // This is done last because it's only used to gracefully handle
       // disconnections and isn't used for serving.
-      ArrayList<RegionInfo> regions = client2regions.get(client);
-      if (regions == null) {
-        final ArrayList<RegionInfo> newlist = new ArrayList<RegionInfo>();
-        regions = client2regions.putIfAbsent(client, newlist);
-        if (regions == null) {   // We've just put `newlist'.
-          regions = newlist;
-        }
-      }
+      final ArrayList<RegionInfo> regions = client2regions.get(client);
       synchronized (regions) {
         regions.add(region);
         nregions = regions.size();
@@ -2347,6 +2361,7 @@ public final class HBaseClient {
       chan = channel_factory.newChannel(pipeline);
       ip2client.put(hostport, client);  // This is guaranteed to return null.
     }
+    client2regions.put(client, new ArrayList<RegionInfo>());
     num_connections_created.increment();
     // Configure and connect the channel without locking ip2client.
     final SocketChannelConfig config = chan.getConfig();

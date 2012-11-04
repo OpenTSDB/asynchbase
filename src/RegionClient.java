@@ -151,6 +151,7 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
    * Invariants:
    *   If pending_rpcs != null      =>  !pending_rpcs.isEmpty()
    *   If pending_rpcs != null      =>  rpcs_inflight.isEmpty()
+   *   If pending_rpcs == null      =>  batched_rpcs == null
    *   If !rpcs_inflight.isEmpty()  =>  pending_rpcs == null
    *
    * TODO(tsuna): Properly manage this buffer.  Right now it's unbounded, we
@@ -275,10 +276,21 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
   Deferred<Object> flush() {
     // Copy the batch to a local variable and null it out.
     final MultiAction batched_rpcs;
+    final ArrayList<Deferred<Object>> pending;
     synchronized (this) {
       batched_rpcs = this.batched_rpcs;
       this.batched_rpcs = null;
+      pending = getPendingRpcs();
     }
+
+    if (pending != null && !pending.isEmpty()) {
+      @SuppressWarnings("unchecked")
+      final Deferred<Object> wait = (Deferred) Deferred.group(pending);
+      // We can return here because if we found pending RPCs it's guaranteed
+      // that batched_rpcs was null.
+      return wait;
+    }
+
     if (batched_rpcs == null || batched_rpcs.size() == 0) {
       return Deferred.fromResult(null);
     }

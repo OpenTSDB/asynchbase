@@ -9,6 +9,9 @@ New public APIs:
     to read from HBase.
 
 Noteworthy changes:
+  - Fixed cases where calling `flush()' or `shutdown()' while the
+    client is still starting up could cause it to terminate too early
+    and to not execute all pending/buffered RPCs (#2).
   - Fixed an RPC serialization bug when batching whole-row deletes.
     See issue #25.
   - The Deferred returned by `flush()' now guarantees that buffered

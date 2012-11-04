@@ -464,6 +464,27 @@ final public class TestIntegration {
     return new GetRequest(table, key).family(family).qualifier(qual);
   }
 
+  /** Regression test for issue #2. */
+  @Test
+  public void regression2() throws Exception {
+    try {
+      final PutRequest put1 = new PutRequest(table, "k1", family, "q", "val1");
+      final PutRequest put2 = new PutRequest(table, "k2", family, "q", "val2");
+      LOG.info("Before calling put()");
+      client.put(put1);
+      client.put(put2);
+      LOG.info("After calling put()");
+    } finally {
+      LOG.info("Before calling flush()");
+      // Flushing immediately a cold client used to be troublesome because we
+      // wouldn't do a good job at making sure that we can let the client do
+      // the entire start-up dance (find ROOT, META, issue pending queries...).
+      client.flush().join();
+      LOG.info("After calling flush()");
+      assertEquals(1, client.stats().numBatchedRpcSent());
+    }
+  }
+
   /** Regression test for issue #25. */
   @Test
   public void regression25() throws Exception {
