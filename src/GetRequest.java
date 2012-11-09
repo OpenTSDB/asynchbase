@@ -48,6 +48,8 @@ public final class GetRequest extends HBaseRpc
   private byte[] family;     // TODO(tsuna): Handle multiple families?
   private byte[][] qualifiers;
   private long lockid = RowLock.NO_LOCK;
+  private long min_timestamp = 0;
+  private long max_timestamp = Long.MAX_VALUE;
 
   /**
    * Constructor.
@@ -154,6 +156,26 @@ public final class GetRequest extends HBaseRpc
   /** Specifies a particular column qualifier to get.  */
   public GetRequest qualifier(final String qualifier) {
     return qualifier(qualifier.getBytes());
+  }
+
+  /** Specifies a minimum timestamp.  */
+  public GetRequest minTimestamp(final long timestamp) {
+    this.min_timestamp = timestamp;
+    return this;
+  }
+
+  public long minTimestamp() {
+    return this.min_timestamp;
+  }
+
+  /** Specifies a maximum timestamp.  */
+  public GetRequest maxTimestamp(final long timestamp) {
+    this.max_timestamp = timestamp;
+    return this;
+  }
+
+  public long maxTimestamp() {
+    return this.max_timestamp;
   }
 
   /** Specifies an explicit row lock to use with this request.  */
@@ -264,8 +286,8 @@ public final class GetRequest extends HBaseRpc
     }
 
     // TimeRange
-    buf.writeLong(0);               // Minimum timestamp.
-    buf.writeLong(Long.MAX_VALUE);  // Maximum timestamp.
+    buf.writeLong(this.min_timestamp); // Minimum timestamp.
+    buf.writeLong(this.max_timestamp);  // Maximum timestamp.
     buf.writeByte(0x01);            // Boolean: "all time".
     // The "all time" boolean indicates whether or not this time range covers
     // all possible times.  Not sure why it's part of the serialized RPC...
