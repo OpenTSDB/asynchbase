@@ -1020,8 +1020,9 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
     } else {
       LOG.error("Unexpected exception from downstream on " + c, e);
     }
-    // TODO(tsuna): Do we really want to do that all the time?
-    Channels.close(c);
+    if (c.isOpen()) {
+      Channels.close(c);
+    }
   }
 
   // ------------------------------- //
