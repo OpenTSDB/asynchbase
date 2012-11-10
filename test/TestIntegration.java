@@ -308,8 +308,7 @@ final public class TestIntegration {
       private void doIncrements() {
         for (int i = 0; i < incr_per_thread; i++) {
           final byte[] key = i % 2 == 0 ? key1 : key2;
-          client.bufferAtomicIncrement(new AtomicIncrementRequest(table, key,
-                                                                  family, qual));
+          bufferIncrement(table, key, family, qual, 1);
         }
       }
     }
@@ -357,10 +356,8 @@ final public class TestIntegration {
     del.setBufferable(false);
     client.delete(del).join();
     final long big = 1L << 48;  // Too big to be coalesced.
-    client.bufferAtomicIncrement(new AtomicIncrementRequest(table, key,
-                                                            family, qual, big));
-    client.bufferAtomicIncrement(new AtomicIncrementRequest(table, key,
-                                                            family, qual, big));
+    bufferIncrement(table, key, family, qual, big);
+    bufferIncrement(table, key, family, qual, big);
     client.flush().joinUninterruptibly();
     final GetRequest get = new GetRequest(table, key)
       .family(family).qualifier(qual);
@@ -382,14 +379,11 @@ final public class TestIntegration {
     client.delete(del).join();
     final long big = 1L << 47;
     // First two RPCs can be coalesced.
-    client.bufferAtomicIncrement(new AtomicIncrementRequest(table, key,
-                                                            family, qual, big));
-    client.bufferAtomicIncrement(new AtomicIncrementRequest(table, key,
-                                                            family, qual, 1));
+    bufferIncrement(table, key, family, qual, big);
+    bufferIncrement(table, key, family, qual, 1);
     // This one would cause an overflow, so will be sent as a separate RPC.
     // Overflow would happen because the max value is (1L << 48) - 1.
-    client.bufferAtomicIncrement(new AtomicIncrementRequest(table, key,
-                                                            family, qual, big));
+    bufferIncrement(table, key, family, qual, big);
     client.flush().joinUninterruptibly();
     final GetRequest get = new GetRequest(table, key)
       .family(family).qualifier(qual);
@@ -413,14 +407,11 @@ final public class TestIntegration {
     client.delete(del).join();
     final long big = -1L << 47;
     // First two RPCs can be coalesced.
-    client.bufferAtomicIncrement(new AtomicIncrementRequest(table, key,
-                                                            family, qual, big));
-    client.bufferAtomicIncrement(new AtomicIncrementRequest(table, key,
-                                                            family, qual, -1));
+    bufferIncrement(table, key, family, qual, big);
+    bufferIncrement(table, key, family, qual, -1);
     // This one would cause an underflow, so will be sent as a separate RPC.
     // Overflow would happen because the max value is -1L << 48.
-    client.bufferAtomicIncrement(new AtomicIncrementRequest(table, key,
-                                                            family, qual, big));
+    bufferIncrement(table, key, family, qual, big);
     client.flush().joinUninterruptibly();
     final GetRequest get = new GetRequest(table, key)
       .family(family).qualifier(qual);
@@ -442,12 +433,9 @@ final public class TestIntegration {
     final DeleteRequest del = new DeleteRequest(table, key, family, qual);
     del.setBufferable(false);
     client.delete(del).join();
-    client.bufferAtomicIncrement(new AtomicIncrementRequest(table, key,
-                                                            family, qual, 1));
-    client.bufferAtomicIncrement(new AtomicIncrementRequest(table, key,
-                                                            family, qual, 2));
-    client.bufferAtomicIncrement(new AtomicIncrementRequest(table, key,
-                                                            family, qual, -3));
+    bufferIncrement(table, key, family, qual, 1);
+    bufferIncrement(table, key, family, qual, 2);
+    bufferIncrement(table, key, family, qual, -3);
     client.flush().joinUninterruptibly();
     final GetRequest get = new GetRequest(table, key)
       .family(family).qualifier(qual);
@@ -456,6 +444,16 @@ final public class TestIntegration {
     assertEquals(0, Bytes.getLong(kvs.get(0).value()));
     // The sum was 0, but must have sent the increment anyway.
     assertEquals(1, client.stats().atomicIncrements());
+  }
+
+  /** Helper method to create an atomic increment request.  */
+  private Deferred<Long> bufferIncrement(final byte[] table,
+                                         final byte[] key, final byte[] family,
+                                         final byte[] qual, final long value) {
+    return
+      client.bufferAtomicIncrement(new AtomicIncrementRequest(table, key,
+                                                              family, qual,
+                                                              value));
   }
 
   /** Helper method to create a get request.  */
@@ -550,8 +548,7 @@ final public class TestIntegration {
     client.delete(del).join();
     final int iterations = 100000;
     for (int i = 0; i < iterations; i++) {
-      client.bufferAtomicIncrement(new AtomicIncrementRequest(table, key,
-                                                              family, qual));
+      bufferIncrement(table, key, family, qual, 1);
     }
     client.flush().joinUninterruptibly();
     final GetRequest get = new GetRequest(table, key)
