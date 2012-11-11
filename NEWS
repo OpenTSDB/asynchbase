@@ -1,7 +1,7 @@
 AsyncHBase - User visible and noteworthy changes.
 This project uses Semantic Versioning (see http://semver.org/).
 
-* Version 1.4.0 (2012-??-??) [???????]
+* Version 1.4.0 (2012-11-10) [fae1a04]
 
 New public APIs:
   - Scanners can now scan multiple qualifiers at a time (#35).
