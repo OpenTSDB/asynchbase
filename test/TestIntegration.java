@@ -356,14 +356,21 @@ final public class TestIntegration {
     del.setBufferable(false);
     client.delete(del).join();
     final long big = 1L << 48;  // Too big to be coalesced.
-    bufferIncrement(table, key, family, qual, big);
-    bufferIncrement(table, key, family, qual, big);
-    client.flush().joinUninterruptibly();
-    final GetRequest get = new GetRequest(table, key)
-      .family(family).qualifier(qual);
-    final ArrayList<KeyValue> kvs = client.get(get).join();
+    final ArrayList<KeyValue> kvs = Deferred.group(
+      bufferIncrement(table, key, family, qual, big),
+      bufferIncrement(table, key, family, qual, big)
+    ).addCallbackDeferring(new Callback<Deferred<ArrayList<KeyValue>>,
+                                        ArrayList<Object>>() {
+      public Deferred<ArrayList<KeyValue>> call(final ArrayList<Object> incs) {
+        final GetRequest get = new GetRequest(table, key)
+          .family(family).qualifier(qual);
+        return client.get(get);
+      }
+    }).join();
     assertEquals(1, kvs.size());
     assertEquals(big + big, Bytes.getLong(kvs.get(0).value()));
+    // Check we sent the right number of RPCs.
+    assertEquals(2, client.stats().atomicIncrements());
   }
 
   /** Increment coalescing with large values that overflow. */
