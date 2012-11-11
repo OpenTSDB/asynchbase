@@ -114,7 +114,7 @@
           </execution>
         </executions>
         <configuration>
-          <keyname>oss@stumbleupon.com</keyname>
+          <keyname>tsunanet@gmail.com</keyname>
         </configuration>
       </plugin>
     </plugins>
