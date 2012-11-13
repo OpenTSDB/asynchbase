@@ -38,7 +38,6 @@ import org.hbase.async.PutRequest;
 import org.hbase.async.RowLock;
 import org.hbase.async.RowLockRequest;
 import org.hbase.async.Scanner;
-
 import org.slf4j.Logger;
 
 import org.hbase.async.test.Common;
@@ -55,6 +54,7 @@ final class Test {
     commands = new HashMap<String, Cmd>();
     commands.put("icv", new icv());
     commands.put("scan", new scan());
+    commands.put("mscan", new mscan());
     final get get = new get();  // get get get!!
     commands.put("get", get);
     commands.put("lget", get);
@@ -78,6 +78,7 @@ final class Test {
                        + "  put <table> <key> <family> <qualifier> <value>\n"
                        + "  delete <table> <key> [<family> [<qualifier>]]\n"
                        + "  scan <table> [start] [family] [qualifier] [stop] [regexp]\n"
+                       + "  mscan <table> [start] [family[:qualifier[,qualifier]]/[family...]] [stop] [regexp]\n"
                        + "  cas <table> <key> <family> <qualifier> <expected> <value>\n"
                        + "Variants that acquire an explicit row-lock:\n"
                        + "  lget <table> <key> [family] [qualifiers ...]\n"
@@ -261,6 +262,48 @@ final class Test {
         case 4: scanner.setStartKey(args[3]);
       }
       args = null;
+      LOG.info("Start scanner=" + scanner);
+      try {
+        ArrayList<ArrayList<KeyValue>> rows;
+        while ((rows = scanner.nextRows().joinUninterruptibly()) != null) {
+          LOG.info("scanned results=" + rows + " from " + scanner);
+        }
+      } catch (Exception e) {
+        LOG.error("Scan failed", e);
+      }
+    }
+  }
+
+  private static final class mscan implements Cmd {
+    @SuppressWarnings("fallthrough")
+    public void execute(final HBaseClient client, String[] args) {
+      ensureArguments(args, 3, 7);
+      final Scanner scanner = client.newScanner(args[2]);
+      switch (args.length) {
+        case 7: scanner.setKeyRegexp(args[6]);
+        case 6: scanner.setStopKey(args[5]);
+        case 5:
+          final String columns = args[4];
+          final ArrayList<byte[]> families = new ArrayList<byte[]>();
+          final ArrayList<byte[][]> qualifiers = new ArrayList<byte[][]>();
+          for (String spec : columns.split("/")) {
+            final String[] family = spec.split(":");
+            families.add(family[0].getBytes());
+            if (family.length == 1) {
+              qualifiers.add(null);
+            } else {
+              final String[] quals = family[1].split(",");
+              final byte[][] qb = new byte[quals.length][];
+              for (int i = 0; i < qb.length; i++) {
+                qb[i] = quals[i].getBytes();
+              }
+              qualifiers.add(qb);
+            }
+          }
+          scanner.setFamilies(families.toArray(new byte[families.size()][]),
+                              qualifiers.toArray(new byte[qualifiers.size()][][]));
+        case 4: scanner.setStartKey(args[3]);
+      }
       LOG.info("Start scanner=" + scanner);
       try {
         ArrayList<ArrayList<KeyValue>> rows;
