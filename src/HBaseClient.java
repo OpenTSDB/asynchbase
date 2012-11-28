@@ -1096,6 +1096,21 @@ public final class HBaseClient {
   }
 
   /**
+   * Atomically and durably increments a value in HBase.
+   * <p>
+   * This is equivalent to
+   * {@link #atomicIncrement(AtomicIncrementRequest, boolean) atomicIncrement}
+   * {@code (request, true)}
+   * @param request The increment request.
+   * @return The deferred {@code Object} value that results from the increment.
+   */
+  public Deferred<Object> atomicIncrement(boolean returnDeferredObject, final AtomicIncrementRequest request) {
+      num_atomic_increments.increment();
+      return sendRpcToRegion(request).addCallbacks(icv_obj_done,
+              Callback.PASSTHROUGH);
+  }
+
+  /**
    * Buffers a durable atomic increment for coalescing.
    * <p>
    * This increment will be held in memory up to the amount of time allowed
@@ -1255,6 +1270,21 @@ public final class HBaseClient {
         return "type incrementColumnValue response";
       }
     };
+
+ /** Singleton callback to handle responses of incrementColumnValue RPCs when we want to return an Object.  */
+ private static final Callback<Object, Object> icv_obj_done =
+ new Callback<Object, Object>() {
+     public Object call(final Object response) {
+         if (response instanceof Long) {
+             return response;
+         } else {
+             throw new InvalidResponseException(Long.class, response);
+         }
+     }
+     public String toString() {
+         return "type incrementColumnValue response";
+     }
+ };
 
   /**
    * Atomically increments a value in HBase.
