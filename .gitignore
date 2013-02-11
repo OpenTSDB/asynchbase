@@ -1,2 +1,5 @@
 build/
 pom.xml
+.idea
+*.iml
+target/
