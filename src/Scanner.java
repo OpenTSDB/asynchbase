@@ -396,12 +396,11 @@ public final class Scanner {
    * @param prefix which is used to match the row keys.
    * Sets start key to prefix
    */
-  public void setPrefixFilter(final byte[] prefix) {
-    setStartKey(prefix);
-
+  public void setPrefix(final byte[] prefix) {
+    //setStartKey(prefix);
     filter = new byte[(1 + PREFIXFILTER.length + 1 + prefix.length)];
-
-    final ChannelBuffer buf = ChannelBuffers.wrappedBuffer(filter);
+    fillPrefixFilterByteArray(filter, prefix);
+    /*final ChannelBuffer buf = ChannelBuffers.wrappedBuffer(filter);
     buf.clear();
 
     // prefix filter
@@ -410,7 +409,7 @@ public final class Scanner {
 
     // write the bytes of the prefix
     buf.writeByte((byte)prefix.length);         // 1
-    buf.writeBytes(prefix);                     // prefix.length
+    buf.writeBytes(prefix);                     // prefix.length*/
   }
 
   /**
@@ -418,9 +417,9 @@ public final class Scanner {
    * @param prefix to match the row key.
    * @return byte array representation of the filter.
    */
-  public byte[] getPrefixFilter(final byte[] prefix) {
+  public byte[] getPrefix(final byte[] prefix) {
     byte[] ret = new byte[(1 + 43 + 1 + prefix.length)];
-    final ChannelBuffer buf = ChannelBuffers.wrappedBuffer(ret);
+    /*final ChannelBuffer buf = ChannelBuffers.wrappedBuffer(ret);
     buf.clear();  // Set the writerIndex to 0.
 
     // prefix filter
@@ -429,9 +428,21 @@ public final class Scanner {
 
     // write the bytes of the prefix
     buf.writeByte((byte)prefix.length);             // 1
-    buf.writeBytes(prefix);                         // prefix.length
-
+    buf.writeBytes(prefix);                         // prefix.length*/
+    fillPrefixFilterByteArray(ret, prefix);
     return ret;
+  }
+
+  private void fillPrefixFilterByteArray(final byte[] array, final byte[] prefix) {
+    setStartKey(prefix);
+    final ChannelBuffer buf = ChannelBuffers.wrappedBuffer(array);
+    buf.clear();  // Set the writerIndex to 0.
+    // prefix filter
+    buf.writeByte((byte)PREFIXFILTER.length);       // 1
+    buf.writeBytes(PREFIXFILTER);                   // 43
+    // write the bytes of the prefix
+    buf.writeByte((byte)prefix.length);             // 1
+    buf.writeBytes(prefix);                         // prefix.length
   }
 
   private static final byte[] COLUMNPREFIXFILTER = Bytes.ISO88591("org.apache.hadoop"
@@ -447,17 +458,18 @@ public final class Scanner {
    * a full table scan. Be sure of what you are doing when using this.
    */
   public void setColumnPrefix(final byte[] prefix) {
-      filter = new byte[1 + COLUMNPREFIXFILTER.length + 1 + prefix.length];
-      final ChannelBuffer buf = ChannelBuffers.wrappedBuffer(filter);
-      buf.clear();
+    filter = new byte[1 + COLUMNPREFIXFILTER.length + 1 + prefix.length];
+    fillColumnPrefixByteArray(filter, prefix);
+    /*final ChannelBuffer buf = ChannelBuffers.wrappedBuffer(filter);
+    buf.clear();
 
-      //org.apache.hadoop.hbase.filter.ColumnPrefixFilter
-      buf.writeByte((byte)COLUMNPREFIXFILTER.length);   //1
-      buf.writeBytes(COLUMNPREFIXFILTER);               //49
+    //org.apache.hadoop.hbase.filter.ColumnPrefixFilter
+    buf.writeByte((byte)COLUMNPREFIXFILTER.length);   //1
+    buf.writeBytes(COLUMNPREFIXFILTER);               //49
 
-      //write the bytes of the prefix
-      buf.writeByte((byte)prefix.length);               //1
-      buf.writeBytes(prefix);
+    //write the bytes of the prefix
+    buf.writeByte((byte)prefix.length);               //1
+    buf.writeBytes(prefix);*/
   }
 
   /**
@@ -467,13 +479,19 @@ public final class Scanner {
    */
   public byte[] getColumnPrefix(final byte[] prefix) {
     byte[] ret = new byte[1 + COLUMNPREFIXFILTER.length + 1 + prefix.length];
-    final ChannelBuffer buf = ChannelBuffers.wrappedBuffer(ret);
-    buf.clear();
-    buf.writeByte((byte)COLUMNPREFIXFILTER.length);
-    buf.writeBytes(COLUMNPREFIXFILTER);
-    buf.writeByte((byte)prefix.length);
-    buf.writeBytes(prefix);
+    fillColumnPrefixByteArray(ret, prefix);
     return ret;
+  }
+
+  private void fillColumnPrefixByteArray(final byte[] array, final byte[] prefix) {
+    final ChannelBuffer buf = ChannelBuffers.wrappedBuffer(array);
+    buf.clear();
+    //org.apache.hadoop.hbase.filter.ColumnPrefixFilter
+    buf.writeByte((byte)COLUMNPREFIXFILTER.length);     //1
+    buf.writeBytes(COLUMNPREFIXFILTER);                 //49
+    //write the bytes of the prefix
+    buf.writeByte((byte)prefix.length);                 //1
+    buf.writeBytes(prefix);                             //prefix.length
   }
 
   private static final byte[] FILTERLIST = Bytes.ISO88591("org.apache.hadoop" +
@@ -484,6 +502,7 @@ public final class Scanner {
    * BE CAREFUL: the byte arrays are not representing row key, column family, column qualifier or column value
    * You can get byte array representation by calling {@link #getColumnPrefix(byte[])},
    * {@link #getPrefixFilter(byte[])} or add your own.
+   * Enable your logging to DEBUG to see what this function does.
    * MUST_PASS_ALL (i.e. AND) is the only operator that is supported right now.
    * @param filters the list of filters that need to be applied to this scan.
    */
@@ -520,7 +539,7 @@ public final class Scanner {
     totalByteListLength += 4;
     //append all filters
     for(byte[] f : filters) {
-      LOG.info("setFilterList: writing filter of length " + f.length);
+      LOG.debug("setFilterList: writing filter of length " + f.length);
       totalByteListLength += 1;
       buf.writeByte(53);                    //1 : code for WritableByteArrayComparable (NOT!!)
       totalByteListLength += 1;
