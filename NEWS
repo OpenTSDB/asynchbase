@@ -1,6 +1,16 @@
 AsyncHBase - User visible and noteworthy changes.
 This project uses Semantic Versioning (see http://semver.org/).
 
+* Version 1.4.1 (2013-02-14) [???????]
+
+Noteworthy bug fixes:
+  - Under certain failure modes, especially during RegionServer failures
+    or regions split, asynchbase could incorrectly discard an RPC instead
+    of retrying it.  This made the client look like it was stuck if the
+    RPC was a ROOT or META lookup (#1).
+  - Maven releases are now signed with the GPG key of tsunanet@gmail.com
+
+
 * Version 1.4.0 (2012-11-10) [fae1a04]
 
 New public APIs:
