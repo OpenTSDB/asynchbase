@@ -9,7 +9,7 @@
   <name>@spec_title@</name>
   <organization>
     <name>@spec_vendor@</name>
-    <url>http://www.stumbleupon.com</url>
+    <url>http://opentsdb.net</url>
   </organization>
   <description>
     An alternative HBase client library for applications requiring fully
