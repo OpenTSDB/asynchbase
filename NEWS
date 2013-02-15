@@ -8,6 +8,9 @@ Noteworthy bug fixes:
     or regions split, asynchbase could incorrectly discard an RPC instead
     of retrying it.  This made the client look like it was stuck if the
     RPC was a ROOT or META lookup (#1).
+  - Update all dependencies.  Due to new dependencies in Junit and PowerMock,
+    asynchbase now depends on hamcrest-core and objenesis respectively.
+    These are test-only dependencies.
   - Maven releases are now signed with the GPG key of tsunanet@gmail.com
 
 

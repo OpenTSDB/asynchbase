@@ -197,14 +197,14 @@
       <scope>runtime</scope>
     </dependency>
 
-    <dependency>
-      <groupId>org.slf4j</groupId>
-      <artifactId>jcl-over-slf4j</artifactId>
-      <version>@JCL_OVER_SLF4J_VERSION@</version>
-      <scope>runtime</scope>
-    </dependency>
-
     <!-- test dependencies -->
+
+    <dependency>
+      <groupId>org.hamcrest</groupId>
+      <artifactId>hamcrest-core</artifactId>
+      <version>@HAMCREST_VERSION@</version>
+      <scope>test</scope>
+    </dependency>
 
     <dependency>
       <groupId>junit</groupId>
@@ -224,6 +224,13 @@
       <groupId>org.mockito</groupId>
       <artifactId>mockito-all</artifactId>
       <version>@MOCKITO_VERSION@</version>
+      <scope>test</scope>
+    </dependency>
+
+    <dependency>
+      <groupId>org.objenesis</groupId>
+      <artifactId>objenesis</artifactId>
+      <version>@OBJENESIS_VERSION@</version>
       <scope>test</scope>
     </dependency>
 
