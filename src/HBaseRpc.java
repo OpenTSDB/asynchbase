@@ -543,6 +543,39 @@ public abstract class HBaseRpc {
    * This is used by subclasses such as {@link DeleteRequest}
    * or {@link GetRequest}, to avoid code duplication.
    * @param classname The name of the class of the caller.
+   * @param columns a possibly null column names (e.g. col:qual)
+   * @param values A non-empty list of values or null.
+   * @param fields Additional fields to include in the output.
+   */
+  final String toStringWithColumns(final String classname,
+                                      final byte[][] columns,
+                                      final String fields) {
+    final StringBuilder buf = new StringBuilder(256  // min=182
+            + fields.length());
+    buf.append(classname).append("(table=");
+    Bytes.pretty(buf, table);
+    buf.append(", key=");
+    Bytes.pretty(buf, key);
+    buf.append(", columns=");
+    Bytes.pretty(buf, columns);
+    buf.append(fields);
+    buf.append(", attempt=").append(attempt)
+            .append(", region=");
+    if (region == null) {
+      buf.append("null");
+    } else {
+      region.toStringbuf(buf);
+    }
+    buf.append(')');
+    return buf.toString();
+  }
+
+  /**
+   * Helper for subclass's {@link #toString} implementations.
+   * <p>
+   * This is used by subclasses such as {@link DeleteRequest}
+   * or {@link GetRequest}, to avoid code duplication.
+   * @param classname The name of the class of the caller.
    * @param family A possibly null family name.
    * @param qualifier A possibly null column qualifier.
    * @param fields Additional fields to include in the output.

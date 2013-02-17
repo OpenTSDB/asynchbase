@@ -553,6 +553,48 @@ public final class Bytes {
   }
 
   /**
+   * Makes array, concatenating two passed arrays
+   * @param a first array
+   * @param b second array
+   * @return concatenation
+   */
+  public static byte[] concat(byte[] a, byte[] b) {
+    byte[] r = new byte[a.length + b.length];
+    System.arraycopy(a, 0, r, 0, a.length);
+    System.arraycopy(b, 0, r, a.length, b.length);
+    return r;
+  }
+
+  /**
+   * Makes array, concatenating three passed arrays
+   * @param a first array
+   * @param b second array
+   * @param c t array
+   * @return concatenation
+   */
+  public static byte[] concat(byte[] a, byte[] b, byte[] c) {
+    byte[] r = new byte[a.length + b.length + c.length];
+    System.arraycopy(a, 0, r, 0, a.length);
+    System.arraycopy(b, 0, r, a.length, b.length);
+    System.arraycopy(c, 0, r, a.length + b.length, c.length);
+    return r;
+  }
+
+  /**
+   * Calculates total length of array of byte arrays.
+   * @param byteArrays array of bytes, nulls permitted
+   * @return cumulative sums of byte arrays lengths
+   */
+  public static int len(byte[][] byteArrays) {
+    int len = 0;
+    for (byte[] byteArray : byteArrays) {
+      if (byteArray != null)
+        len += byteArray.length;
+    }
+    return len;
+  }
+
+  /**
    * Tests whether two byte arrays have the same contents.
    * @param a First non-{@code null} byte array to compare.
    * @param b Second non-{@code null} byte array to compare.
