@@ -69,6 +69,7 @@ asynchbase_SOURCES := \
 	src/RemoteException.java	\
 	src/RowLock.java	\
 	src/RowLockRequest.java	\
+	src/ScanFilter.java	\
 	src/Scanner.java	\
 	src/SingletonList.java	\
 	src/TableNotFoundException.java	\
