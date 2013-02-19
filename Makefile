@@ -36,7 +36,7 @@ package := org.hbase.async
 spec_title := Asynchronous HBase Client
 spec_vendor := StumbleUpon, Inc.
 # Semantic Versioning (see http://semver.org/).
-spec_version := 1.4.1
+spec_version := 1.4.2
 jar := $(top_builddir)/asynchbase-$(spec_version).jar
 asynchbase_SOURCES := \
 	src/AtomicIncrementRequest.java	\
@@ -60,6 +60,7 @@ asynchbase_SOURCES := \
 	src/NoSuchColumnFamilyException.java	\
 	src/NonRecoverableException.java	\
 	src/NotServingRegionException.java	\
+        src/ParsedKeyValues.java                \
 	src/PleaseThrottleException.java	\
 	src/PutRequest.java	\
 	src/RecoverableException.java	\

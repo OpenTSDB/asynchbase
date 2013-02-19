@@ -405,6 +405,42 @@ public final class KeyValue implements Comparable<KeyValue> {
       + (value == null ? 0 : value.length);
   }
 
+  /*static int predictSerializedSize(final byte[] key,
+                                   final byte[] family,
+                                   final byte[][] qualifiers,
+                                   final byte[][] values) {
+    return
+        + 4  // int: Total length of the whole KeyValue.
+            + 4  // int: Total length of the key part of the KeyValue.
+            + 4  // int: Total length of the value part of the KeyValue.
+            + 2                 // short: Row key length.
+            + key.length        // The row key.
+            + 1                 // byte: Family length.
+            + family.length     // The family.
+            + qualifiers.length  // The qualifier.
+            + 8                 // long: The timestamp.
+            + 1                 // byte: The type of KeyValue.
+            + (values == null ? 0 : values.length);
+  }*/
+
+  static int predictSerializedSize(final byte[] key,
+                                   final byte[][] families,
+                                   final byte[][][] qualifiers,
+                                   final byte[][][] values) {
+    return
+      + 4  // int: Total length of the whole KeyValue.
+      + 4  // int: Total length of the key part of the KeyValue.
+      + 4  // int: Total length of the value part of the KeyValue.
+      + 2                 // short: Row key length.
+      + key.length        // The row key.
+      + 1                 // byte: Family length.
+      + families.length     // The family.
+      + qualifiers.length  // The qualifier.
+      + 8                 // long: The timestamp.
+      + 1                 // byte: The type of KeyValue.
+      + (values == null ? 0 : values.length);
+  }
+
   /**
    * Serializes a KeyValue.
    * @param buf The buffer into which to write the serialized form.
