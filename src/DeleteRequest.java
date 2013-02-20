@@ -516,7 +516,7 @@ public final class DeleteRequest extends BatchableRpc
     size += families.length;  // The column family.
     size += 4;  // int:  Number of KeyValues for this family.
     for(int i = 0; i < families.length; i++) {
-      size += payloadSize(i);
+      size += payloadSize(); //TODO (vbajaria) : does not work, hacked for compilation purposes
     }
 
     return size + payloadSize();
@@ -546,7 +546,7 @@ public final class DeleteRequest extends BatchableRpc
     return size;
   }
 
-  @Override
+  /*@Override
   int payloadSize(int familyIndex) {
     if (families == new byte[][] { WHOLE_ROW }) {
       return 0;  // No payload when deleting whole rows.
@@ -566,7 +566,7 @@ public final class DeleteRequest extends BatchableRpc
       size += qualifier.length;  // The column qualifier.
     }
     return size;
-  }
+  }*/
 
   /** Serializes this request.  */
   ChannelBuffer serialize(final byte server_version) {

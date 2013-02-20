@@ -371,7 +371,7 @@ public final class KeyValue implements Comparable<KeyValue> {
   /**
    * Serializes this KeyValue.
    * @param buf The buffer into which to write the serialized form.
-   * @param type What kind of KV (e.g. {@link #PUT} or {@link DELETE_FAMILY}).
+   * @param type What kind of KV (e.g. {@link #PUT} or {@link #DELETE_FAMILY}).
    */
   void serialize(final ChannelBuffer buf, final byte type) {
     serialize(buf, type, timestamp, key, family, qualifier, value);
@@ -444,7 +444,7 @@ public final class KeyValue implements Comparable<KeyValue> {
   /**
    * Serializes a KeyValue.
    * @param buf The buffer into which to write the serialized form.
-   * @param type What kind of KV (e.g. {@link #PUT} or {@link DELETE_FAMILY}).
+   * @param type What kind of KV (e.g. {@link #PUT} or {@link #DELETE_FAMILY}).
    * @param timestamp The timestamp to put on the KV.
    */
   static void serialize(final ChannelBuffer buf,
@@ -454,6 +454,7 @@ public final class KeyValue implements Comparable<KeyValue> {
                         final byte[] family,
                         final byte[] qualifier,
                         final byte[] value) {
+    System.out.println("buffer capacity : " + buf.capacity());
     final int val_length = value == null ? 0 : value.length;
     final int key_length = 2 + key.length + 1 + family.length
       + qualifier.length + 8 + 1;
@@ -465,6 +466,7 @@ public final class KeyValue implements Comparable<KeyValue> {
 
     // Then the whole key.
     buf.writeShort(key.length);           // Row length.
+    System.out.println("key : " + key);
     buf.writeBytes(key);                  // The row key (again!).
     buf.writeByte((byte) family.length);  // Family length.
     buf.writeBytes(family);               // Write the family (again!).

@@ -28,6 +28,8 @@ package org.hbase.async;
 
 import org.jboss.netty.buffer.ChannelBuffer;
 
+import java.util.List;
+
 /**
  * Reads something from HBase.
  *
@@ -167,6 +169,14 @@ public final class GetRequest extends HBaseRpc
     return this;
   }
 
+  public static GetRequest createNew(byte[] table, List<KeyValue> keyValues) {
+    ParsedKeyValues parsedKeyValues = ParsedKeyValues.parse(keyValues);
+    GetRequest getRequest = new GetRequest(table, parsedKeyValues.key);
+    getRequest.families = parsedKeyValues.families;
+    getRequest.qualifiers = parsedKeyValues.qualifiers;
+    return getRequest;
+  }
+
   /**
    * Specifies a particular column qualifier to get.
    * @param qualifier The column qualifier.
@@ -303,6 +313,21 @@ public final class GetRequest extends HBaseRpc
     size += 4;  // int:  Number of families.
 
     if (families != null) {
+      for (int i = 0; i < families.length; i++) {
+        size += 1;  // vint: Family length (guaranteed on 1 byte).
+        size += families[i].length;  // The family.
+        size += 1;  // byte: Boolean: do we want specific qualifiers?
+        if (qualifiers != null) {
+          size += 4;  // int:  How many qualifiers follow?
+          for (final byte[] qualifier : qualifiers[i]) {
+            size += 3;  // vint: Qualifier length.
+            size += qualifier.length;  // The qualifier.
+          }
+        }
+      }
+    }
+
+    /*if (families != null) {
       size += 1;  // vint: Family length (guaranteed on 1 byte).
       size += families.length;  // The family.
       size += 1;  // byte: Boolean: do we want specific qualifiers?
@@ -315,7 +340,7 @@ public final class GetRequest extends HBaseRpc
           }
         }
       }
-    }
+    }*/
 
     /*if (family != null) {
       size += 1;  // vint: Family length (guaranteed on 1 byte).

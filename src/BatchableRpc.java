@@ -167,7 +167,7 @@ abstract class BatchableRpc extends HBaseRpc
    */
   abstract int payloadSize();
 
-  abstract int payloadSize(int i);
+  //abstract int payloadSize(int i);
 
   /**
    * Serialize the part of this RPC for a {@link MultiAction}.

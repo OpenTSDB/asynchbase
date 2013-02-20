@@ -676,22 +676,27 @@ public final class PutRequest extends BatchableRpc
     /*for (int i = 0; i < qualifiers.length; i++) {
       size += KeyValue.predictSerializedSize(key, family, qualifiers[i], values[i]);
     }*/
+    size += families.length; //number of column families that follow
     for (int i = 0; i < families.length; i++) {
+      size += 1;   //column family size in 1 byte
+      size += families[i].length; //the column family
+      size += 4;  //number of key values
+      size += 4;  //bytes of all the key values that follow
       for(int j = 0; j < qualifiers[i].length; j++) {
-        size+= KeyValue.predictSerializedSize(key, families[i], qualifiers[i][j], values[i][j]);
+        size+= KeyValue.predictSerializedSize(key, families[i], qualifiers[i][j], values[i][j]); //payload size for each
       }
     }
     return size;
   }
 
-  @Override
+  /*@Override
   int payloadSize(int familyIndex) {
     int size = 0;
     for(int i = 0; i < qualifiers[familyIndex].length; i++) {
       size+=KeyValue.predictSerializedSize(key, families[familyIndex], qualifiers[familyIndex][i], values[familyIndex][i]);
     }
     return size;
-  }
+  }*/
 
   @Override
   void serializePayload(final ChannelBuffer buf) {
@@ -700,15 +705,21 @@ public final class PutRequest extends BatchableRpc
                          qualifiers[i], values[i]);
     }*/
 
-    LOG.debug("num families : " + families.length);
+    //LOG.info("num families : " + families.length);
     buf.writeInt(families.length); //number of families
     for(int i = 0; i < families.length; i++) {
-      LOG.debug("family name : " + Bytes.pretty(families[i]));
+      //LOG.info("family name : " + Bytes.pretty(families[i]));
       writeByteArray(buf, families[i]); //the column family
       buf.writeInt(qualifiers[i].length); //the number of KeyValue that follows
-      buf.writeInt(payloadSize(i));
+
+      int size = 0;
+      for (int j = 0; j < qualifiers[i].length; j++) {
+        size += KeyValue.predictSerializedSize(key, families[i], qualifiers[i][j], values[i][j]);
+      }
+
+      buf.writeInt(size);  //total number of bytes for all those key values
       for(int j = 0; j < qualifiers[i].length; j++) {
-        LOG.debug("serializing qualifier and value : " + Bytes.pretty(qualifiers[i][j]) + " " + Bytes.pretty(values[i][j]));
+        LOG.info("serializing qualifier and value : " + Bytes.pretty(qualifiers[i][j]) + " " + Bytes.pretty(values[i][j]));
         KeyValue.serialize(buf, KeyValue.PUT, timestamp, key, families[i], qualifiers[i][j], values[i][j]);
       }
     }
@@ -733,6 +744,7 @@ public final class PutRequest extends BatchableRpc
     size += region.name().length;  // The region name.
 
     size += predictPutSize();
+    LOG.info("predicted serialized size : " + size);
     return size;
   }
 
@@ -750,19 +762,22 @@ public final class PutRequest extends BatchableRpc
     size += 1;  // bool: Whether or not to write to the WAL.
     size += 4;  // int:  Number of families for which we have edits.
 
-    size += 1;  // vint: Family length (guaranteed on 1 byte).
-    /*size += family.length;  // The family.
+    /*size += 1;  // vint: Family length (guaranteed on 1 byte).
+    size += family.length;  // The family.
     size += 4;  // int:  Number of KeyValues that follow.
     size += 4;  // int:  Total number of bytes for all those KeyValues.
 
     size += payloadSize();*/
 
-    for (int i = 0; i < families.length; i++) {
+    /*for (int i = 0; i < families.length; i++) {
+      size += 1;  // vint: Family length (guaranteed on 1 byte).
       size += families[i].length;
-      size += 4;
-      size += 4;
+      size += 4; // int:  Number of KeyValues that follow.
+      size += 4; // int:  Total number of bytes for all those KeyValues.
       size += payloadSize(i);
-    }
+    }*/
+
+    size += payloadSize();
 
     return size;
   }
