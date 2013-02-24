@@ -380,6 +380,7 @@ public final class Scanner {
     buf.writeByte((byte) REGEXSTRINGCOMPARATOR.length);         // 1
     buf.writeBytes(REGEXSTRINGCOMPARATOR);                      // 52
     // writeUTF the regexp
+    System.out.println("ASYNCHBASE ================== writing regex of length " + regex.length + " regex " + Bytes.pretty(regex));
     buf.writeShort(regex.length);                               // 2
     buf.writeBytes(regex);                                      // regex.length
     // writeUTF the charset

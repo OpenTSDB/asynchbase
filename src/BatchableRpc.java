@@ -43,8 +43,7 @@ abstract class BatchableRpc extends HBaseRpc
   // access them directly.
 
   /** Family affected by this RPC.  */
-  /*protected*/ //final byte[] family;
-  final byte[][] families;
+  /*protected*/ final byte[] family;
 
   /** The timestamp to use for {@link KeyValue}s of this RPC.  */
   /*protected*/ final long timestamp;
@@ -71,7 +70,7 @@ abstract class BatchableRpc extends HBaseRpc
    * Package private constructor.
    * @param method The name of the method to invoke on the RegionServer.
    * @param table The name of the table this RPC is for.
-   * @param key The name of the row this RPC is for.
+   * @param row The name of the row this RPC is for.
    * @param family The column family to edit in that table.  Subclass must
    * validate, this class doesn't perform any validation on the family.
    * @param timestamp The timestamp to use for {@link KeyValue}s of this RPC.
@@ -81,17 +80,7 @@ abstract class BatchableRpc extends HBaseRpc
                final byte[] key, final byte[] family,
                final long timestamp, final long lockid) {
     super(method, table, key);
-    //this.family = family;
-    this.families = new byte[][] { family };
-    this.timestamp = timestamp;
-    this.lockid = lockid;
-  }
-
-  BatchableRpc(final byte[] method, final byte[] table,
-               final byte[] key, final byte[][] families,
-               final long timestamp, final long lockid) {
-    super(method, table, key);
-    this.families = families;
+    this.family = family;
     this.timestamp = timestamp;
     this.lockid = lockid;
   }
@@ -126,8 +115,7 @@ abstract class BatchableRpc extends HBaseRpc
 
   @Override
   public final byte[] family() {
-    //return family;
-    return families[0];
+    return family;
   }
 
   @Override
@@ -166,8 +154,6 @@ abstract class BatchableRpc extends HBaseRpc
    * The estimate is conservative.
    */
   abstract int payloadSize();
-
-  //abstract int payloadSize(int i);
 
   /**
    * Serialize the part of this RPC for a {@link MultiAction}.

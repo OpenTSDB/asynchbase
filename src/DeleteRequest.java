@@ -61,8 +61,7 @@ public final class DeleteRequest extends BatchableRpc
   /** Special value for {@link #family} when deleting a whole row.  */
   static final byte[] WHOLE_ROW = new byte[0];
 
-  //private final byte[][] qualifiers;
-  private final byte[][][] qualifiers;
+  private final byte[][] qualifiers;
 
   /**
    * Constructor to delete an entire row.
@@ -399,13 +398,11 @@ public final class DeleteRequest extends BatchableRpc
       for (final byte[] qualifier : qualifiers) {
         KeyValue.checkQualifier(qualifier);
       }
-      //this.qualifiers = qualifiers;
-      this.qualifiers = new byte[][][] { qualifiers };
+      this.qualifiers = qualifiers;
     } else {
       // No specific qualifier to delete: delete the entire family.  Not that
       // if `family == null', we'll delete the whole row anyway.
-      //this.qualifiers = DELETE_FAMILY_MARKER;
-      this.qualifiers = new byte[][][] { DELETE_FAMILY_MARKER };
+      this.qualifiers = DELETE_FAMILY_MARKER;
     }
   }
 
@@ -421,12 +418,11 @@ public final class DeleteRequest extends BatchableRpc
 
   @Override
   public byte[][] qualifiers() {
-    return qualifiers[0];
+    return qualifiers;
   }
 
   public String toString() {
-    //return super.toStringWithQualifiers("DeleteRequest", family, qualifiers);
-    return super.toStringWithQualifiers("DeleteRequest", families, qualifiers);
+    return super.toStringWithQualifiers("DeleteRequest", family, qualifiers);
   }
 
   // ---------------------- //
@@ -454,7 +450,7 @@ public final class DeleteRequest extends BatchableRpc
 
   @Override
   void serializePayload(final ChannelBuffer buf) {
-    /*if (family == null) {
+    if (family == null) {
       return;  // No payload when deleting whole rows.
     }
     // Are we deleting a whole family at once or just a bunch of columns?
@@ -464,22 +460,6 @@ public final class DeleteRequest extends BatchableRpc
     for (final byte[] qualifier : qualifiers) {
       KeyValue.serialize(buf, type, Long.MAX_VALUE,
                          key, family, qualifier, null);
-    }*/
-    if (families == null) {
-      return; // no payload when deleting whole rows.
-    }
-
-    // Are we deleting a whole family at once or just a bunch of columns?
-    final byte type = (qualifiers == new byte[][][] { DELETE_FAMILY_MARKER }
-        ? KeyValue.DELETE_FAMILY : KeyValue.DELETE_COLUMN);
-
-    buf.writeInt(families.length); //number of families
-    for(int i = 0; i < families.length; i++) {
-      buf.writeBytes(families[i]); //the column family
-      buf.writeInt(qualifiers[i].length); //the number of KeyValue that follows
-      for(int j = 0; j < qualifiers.length; j++) {
-        KeyValue.serialize(buf, type, Long.MAX_VALUE, key, families[i], qualifiers[i][j], null);
-      }
     }
   }
 
@@ -506,26 +486,18 @@ public final class DeleteRequest extends BatchableRpc
     size += 8;  // long: Lock ID.
     size += 4;  // int:  Number of families.
     size += 1;  // vint: Family length (guaranteed on 1 byte).
-    /*if (family == null) {
+    if (family == null) {
       return size;
     }
-    size += family.length;  // The column family.*/
-    if (families == null) {
-      return size;
-    }
-    size += families.length;  // The column family.
+    size += family.length;  // The column family.
     size += 4;  // int:  Number of KeyValues for this family.
-    for(int i = 0; i < families.length; i++) {
-      size += payloadSize(); //TODO (vbajaria) : does not work, hacked for compilation purposes
-    }
-
     return size + payloadSize();
   }
 
   /** Returns the serialized size of all the {@link KeyValue}s in this RPC.  */
   @Override
   int payloadSize() {
-    if (families == new byte[][] { WHOLE_ROW }) {
+    if (family == WHOLE_ROW) {
       return 0;  // No payload when deleting whole rows.
     }
     int size = 0;
@@ -535,38 +507,15 @@ public final class DeleteRequest extends BatchableRpc
     size += 2;  // short:Length of the key.
     size += key.length;  // The row key (again!).
     size += 1;  // byte: Family length (again!).
-    //size += family.length;  // The column family (again!).
-    size += families.length;  // The column family (again!).
+    size += family.length;  // The column family (again!).
     size += 8;  // long: The timestamp (again!).
     size += 1;  // byte: The type of KeyValue.
     size *= qualifiers.length;
-    for (final byte[][] qualifier : qualifiers) {
+    for (final byte[] qualifier : qualifiers) {
       size += qualifier.length;  // The column qualifier.
     }
     return size;
   }
-
-  /*@Override
-  int payloadSize(int familyIndex) {
-    if (families == new byte[][] { WHOLE_ROW }) {
-      return 0;  // No payload when deleting whole rows.
-    }
-    int size = 0;
-    size += 4;  // int:  Total length of the whole KeyValue.
-    size += 4;  // int:  Total length of the key part of the KeyValue.
-    size += 4;  // int:  Length of the value part of the KeyValue.
-    size += 2;  // short:Length of the key.
-    size += key.length;  // The row key (again!).
-    size += 1;  // byte: Family length (again!).
-    size += families[familyIndex].length;  // The column family (again!).
-    size += 8;  // long: The timestamp (again!).
-    size += 1;  // byte: The type of KeyValue.
-    size *= qualifiers[familyIndex].length;
-    for (final byte[] qualifier : qualifiers[familyIndex]) {
-      size += qualifier.length;  // The column qualifier.
-    }
-    return size;
-  }*/
 
   /** Serializes this request.  */
   ChannelBuffer serialize(final byte server_version) {
@@ -586,16 +535,15 @@ public final class DeleteRequest extends BatchableRpc
     buf.writeLong(lockid);  // Lock ID.
 
     // Families.
-    if (families[0] ==  WHOLE_ROW) {
+    if (family == WHOLE_ROW) {
       buf.writeInt(0);  // Number of families that follow.
       return buf;
     }
-
-    /*buf.writeInt(1);    // Number of families that follow.
+    buf.writeInt(1);    // Number of families that follow.
 
     // Each family is then written like so:
     writeByteArray(buf, family);  // Column family name.
-    buf.writeInt(qualifiers.length);  // How many KeyValues for this family?*/
+    buf.writeInt(qualifiers.length);  // How many KeyValues for this family?
     serializePayload(buf);
     return buf;
   }

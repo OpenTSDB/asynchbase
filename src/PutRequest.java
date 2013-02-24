@@ -27,12 +27,6 @@
 package org.hbase.async;
 
 import org.jboss.netty.buffer.ChannelBuffer;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.List;
 
 /**
  * Puts some data into HBase.
@@ -68,7 +62,6 @@ public final class PutRequest extends BatchableRpc
              HBaseRpc.HasQualifiers, HBaseRpc.HasValues, HBaseRpc.IsEdit,
              /* legacy: */ HBaseRpc.HasQualifier, HBaseRpc.HasValue {
 
-  private static final Logger LOG = LoggerFactory.getLogger(PutRequest.class);
   private static final byte[] PUT = new byte[] { 'p', 'u', 't' };
 
   /** Code type used for serialized `Put' objects.  */
@@ -91,10 +84,8 @@ public final class PutRequest extends BatchableRpc
    *   - qualifiers.length == values.length
    *   - qualifiers.length > 0
    */
-  //private final byte[][] qualifiers;
-  private final byte[][][] qualifiers;
-  //private final byte[][] values;
-  private final byte[][][] values;
+  private final byte[][] qualifiers;
+  private final byte[][] values;
 
   /**
    * Constructor using current time.
@@ -187,15 +178,6 @@ public final class PutRequest extends BatchableRpc
                     final byte[][] values,
                     final long timestamp) {
     this(table, key, family, qualifiers, values, timestamp, RowLock.NO_LOCK);
-  }
-
-  public PutRequest(final byte[] table,
-                    final byte[] key,
-                    final byte[][] families,
-                    final byte[][][] qualifiers,
-                    final byte[][][] values,
-                    final long timestamp) {
-    this(table, key, families, qualifiers, values, timestamp, RowLock.NO_LOCK);
   }
 
   /**
@@ -349,45 +331,9 @@ public final class PutRequest extends BatchableRpc
                      final KeyValue kv,
                      final long lockid) {
     super(PUT, table, kv.key(), kv.family(), kv.timestamp(), lockid);
-    this.qualifiers = new byte[][][] {{ kv.qualifier() }};
-    this.values = new byte[][][] {{ kv.value() }};
+    this.qualifiers = new byte[][] { kv.qualifier() };
+    this.values = new byte[][] { kv.value() };
   }
-
-  /*private PutRequest(final byte[] table,
-
-                     final long timestamp,
-                     final long lockid) {
-
-    /*List<byte[]> uniqueFamilies = Lists.newArrayList();
-    HashMap<byte[], byte[][][]> familyToQualifiers = new HashMap<byte[], byte[][][]>(keyValues.length);
-    HashMap<byte[], byte[][][]> familyToValues = new HashMap<byte[], byte[][][]>(keyValues.length);
-
-    byte[] uniqueKey = null;
-    for (KeyValue keyValue : keyValues) {
-      if (uniqueKey != null && keyValue.key() != uniqueKey) {
-        throw new IllegalArgumentException("MultiPut only supported for unique keys.");
-      }
-
-      if(uniqueKey == null) {
-        uniqueKey = keyValue.key();
-      }
-
-      if(!uniqueFamilies.contains(keyValue.family())) {
-        uniqueFamilies.add(keyValue.family());
-      }
-
-      int familyIndex = uniqueFamilies.indexOf(keyValue.family());
-
-      if(!familyToQualifiers.containsKey(keyValue.family())) {
-        familyToQualifiers.put(keyValue.family(), new byte[][][] {{ keyValue.qualifier() }});
-      }
-
-      if(!familyToValues.containsKey(keyValue.value())) {
-        familyToValues.put(keyValue.family(), new byte[][][] {{ keyValue.value() }});
-      }
-    }
-    super(PUT, table, keyValues[0].key(), Arrays. getFamilesFromKeyValues(keyValues), timestamp, lockid);
-  }*/
 
   /** Private constructor.  */
   private PutRequest(final byte[] table,
@@ -421,167 +367,9 @@ public final class PutRequest extends BatchableRpc
       KeyValue.checkQualifier(qualifiers[i]);
       KeyValue.checkValue(values[i]);
     }
-    this.qualifiers = new byte[][][] { qualifiers };
-    this.values = new byte[][][] { values };
-  }
-
-  private PutRequest(final byte[] table,
-                     final byte[] key,
-                     final byte[][] families,
-                     final byte[][][] qualifiers,
-                     final byte[][][] values,
-                     final long timestamp,
-                     final long lockid) {
-    super(PUT, table, key, families, timestamp, lockid);
-
-    for(int i = 0; i < families.length; i++) {
-      KeyValue.checkFamily(families[i]);
-      if(qualifiers[i].length != values[i].length) {
-        throw new IllegalArgumentException("Have " + qualifiers[i].length
-            + " qualifiers and " + values[i].length + " values.  Should be equal.");
-      } else if (qualifiers[i].length == 0) {
-        throw new IllegalArgumentException("Need at least one qualifier/value.");
-      }
-
-      for(int j = 0; j < qualifiers[i].length; j++) {
-        KeyValue.checkQualifier(qualifiers[i][j]);
-        KeyValue.checkValue(values[i][j]);
-      }
-    }
-
     this.qualifiers = qualifiers;
     this.values = values;
   }
-
-  public static PutRequest createNew(byte[] table, KeyValue... kvs) {
-    ParsedKeyValues parsedKeyValues = getKeyValues(kvs);
-    return new PutRequest(table, parsedKeyValues.key, parsedKeyValues.families, parsedKeyValues.qualifiers, parsedKeyValues.values, KeyValue.TIMESTAMP_NOW);
-  }
-
-  private static ParsedKeyValues getKeyValues(final KeyValue... keyValues) {
-    int uniqueFamilyIndex = 0;
-    HashMap<String, byte[]> familyIndex = new HashMap<String, byte[]>();
-    HashMap<String, List<byte[]>> familyToQualifierIndex = new HashMap<String, List<byte[]>>();
-    HashMap<String, List<byte[]>> familyToValueIndex = new HashMap<String, List<byte[]>>();
-
-    byte[] uniqueKey = null;
-
-    for (KeyValue keyValue : keyValues) {
-      if (uniqueKey != null && keyValue.key() != uniqueKey) {
-        throw new IllegalArgumentException("MultiPut only supported for unique keys.");
-      }
-
-      if(uniqueKey == null) {
-        uniqueKey = keyValue.key();
-      }
-
-      String family = Bytes.pretty(keyValue.family());
-      //check if we have already seen the family, if not use the global counter
-      int currFamilyIndex;
-      if (!familyIndex.containsKey(family)) {
-        LOG.debug("adding family " + family);
-        familyIndex.put(family, keyValue.family());
-      }
-
-      //check if we have seen a qualifier before, if not use index as 0 or else get previous value
-      //int currQualifierIndex;
-      if (!familyToQualifierIndex.containsKey(family)) {
-        familyToQualifierIndex.put(family, new ArrayList<byte[]>());
-        familyToValueIndex.put(family, new ArrayList<byte[]>());
-      }
-
-      //currQualifierIndex = familyToQualifierIndex.get(keyValue.key()).size();
-      familyToQualifierIndex.get(family).add(keyValue.qualifier());
-      familyToValueIndex.get(family).add(keyValue.value());
-    }
-
-    byte[][] families = new byte[familyIndex.size()][];
-    byte[][][] qualifiers = new byte[familyIndex.size()][][];
-    byte[][][] values = new byte[familyIndex.size()][][];
-
-    int currFamilyIndex = 0;
-    for (byte[] family : familyIndex.values()) {
-      String familyStr = Bytes.pretty(family);
-      LOG.debug("family : " + familyStr);
-      families[currFamilyIndex] = family;
-      qualifiers[currFamilyIndex] = new byte[familyToQualifierIndex.get(familyStr).size()][];
-      values[currFamilyIndex] = new byte[familyToValueIndex.get(familyStr).size()][];
-
-      for (int i = 0; i < familyToQualifierIndex.get(familyStr).size(); i++) {
-        LOG.debug("qualifier : " + Bytes.pretty(familyToQualifierIndex.get(familyStr).get(i)));
-        qualifiers[currFamilyIndex][i] = familyToQualifierIndex.get(familyStr).get(i);
-        LOG.debug("value : " + Bytes.pretty(familyToValueIndex.get(familyStr).get(i)));
-        values[currFamilyIndex][i] = familyToValueIndex.get(familyStr).get(i);
-      }
-      currFamilyIndex++;
-    }
-
-    /*KeyValues convertedKeyValues = new KeyValues();
-    convertedKeyValues.key = uniqueKey;
-    convertedKeyValues.families = families;
-    convertedKeyValues.qualifiers = qualifiers;
-    convertedKeyValues.values = values;*/
-
-    return new ParsedKeyValues(uniqueKey, families, qualifiers, values);
-  }
-
-  /*private static KeyValues getKeyValues(final KeyValue... keyValues) {
-    int uniqueFamilyIndex = 0;
-    HashMap<byte[], Integer> familyIndex = new HashMap<byte[], Integer>();
-    HashMap<byte[], Integer> familyToQualifierIndex = new HashMap<byte[], Integer>();
-    //HashMap<byte[], Integer> familyToValueIndex = new HashMap<byte[], Integer>();
-
-    byte[] uniqueKey = null;
-    byte[][] families = new byte[keyValues.length][];
-    byte[][][] qualifiers = new byte[keyValues.length][keyValues.length][];
-    byte[][][] values = new byte[keyValues.length][keyValues.length][];
-
-    for (KeyValue keyValue : keyValues) {
-      if (uniqueKey != null && keyValue.key() != uniqueKey) {
-        throw new IllegalArgumentException("MultiPut only supported for unique keys.");
-      }
-
-      if(uniqueKey == null) {
-        uniqueKey = keyValue.key();
-      }
-
-      //check if we have already seen the family, if not use the global counter
-      int currFamilyIndex;
-      if (!familyIndex.containsKey(keyValue.family())) {
-        currFamilyIndex = uniqueFamilyIndex;
-        familyIndex.put(keyValue.family(), uniqueFamilyIndex++);
-        families[currFamilyIndex] = keyValue.family();
-      } else {
-        currFamilyIndex = familyIndex.get(keyValue.key());
-      }
-
-      //check if we have seen a qualifier before, if not use index as 0 or else get previous value
-      int currQualifierIndex;
-      if(!familyToQualifierIndex.containsKey(keyValue.key())) {
-        currQualifierIndex = 0;
-        familyToQualifierIndex.put(keyValue.key(), currQualifierIndex);
-      } else {
-        currQualifierIndex = familyToQualifierIndex.get(keyValue.key()) + 1;
-        familyToQualifierIndex.put(keyValue.key(), currQualifierIndex);
-      }
-
-      qualifiers[currFamilyIndex][currQualifierIndex] = keyValue.qualifier();
-      values[currFamilyIndex][currQualifierIndex] = keyValue.value();
-    }
-
-    System.out.println(Bytes.pretty(uniqueKey));
-    System.out.println("families length : " + families.length);
-    System.out.println("qualifiers length : " + qualifiers.length);
-    System.out.println("values length : " + values.length);
-
-    *//*KeyValues convertedKeyValues = new KeyValues();
-    convertedKeyValues.key = uniqueKey;
-    convertedKeyValues.families = families;
-    convertedKeyValues.qualifiers = qualifiers;
-    convertedKeyValues.values = values;*//*
-
-    return new KeyValues(uniqueKey, families, qualifiers, values);
-  }*/
 
   @Override
   public byte[] table() {
@@ -599,7 +387,7 @@ public final class PutRequest extends BatchableRpc
    */
   @Override
   public byte[] qualifier() {
-    return qualifiers[0][0];
+    return qualifiers[0];
   }
 
   /**
@@ -608,7 +396,7 @@ public final class PutRequest extends BatchableRpc
    */
   @Override
   public byte[][] qualifiers() {
-    return qualifiers[0];
+    return qualifiers;
   }
 
   /**
@@ -617,7 +405,7 @@ public final class PutRequest extends BatchableRpc
    */
   @Override
   public byte[] value() {
-    return values[0][0];
+    return values[0];
   }
 
   /**
@@ -626,22 +414,16 @@ public final class PutRequest extends BatchableRpc
    */
   @Override
   public byte[][] values() {
-    return values[0];
+    return values;
   }
 
   public String toString() {
-    /*return super.toStringWithQualifiers("PutRequest",
+    return super.toStringWithQualifiers("PutRequest",
                                        family, qualifiers, values,
                                        ", timestamp=" + timestamp
                                        + ", lockid=" + lockid
                                        + ", durable=" + durable
-                                       + ", bufferable=" + super.bufferable);*/
-    return super.toStringWithQualifiers("PutRequest",
-        families, qualifiers, values,
-        ", timestamp=" + timestamp
-            + ", lockid=" + lockid
-            + ", durable=" + durable
-            + ", bufferable=" + super.bufferable);
+                                       + ", bufferable=" + super.bufferable);
   }
 
   // ---------------------- //
@@ -673,60 +455,18 @@ public final class PutRequest extends BatchableRpc
   @Override
   int payloadSize() {
     int size = 0;
-    /*for (int i = 0; i < qualifiers.length; i++) {
+    for (int i = 0; i < qualifiers.length; i++) {
       size += KeyValue.predictSerializedSize(key, family, qualifiers[i], values[i]);
-    }*/
-    size += families.length; //number of column families that follow
-    for (int i = 0; i < families.length; i++) {
-      size += 1;   //column family size in 1 byte
-      size += families[i].length; //the column family
-      size += 4;  //number of key values
-      size += 4;  //bytes of all the key values that follow
-      for(int j = 0; j < qualifiers[i].length; j++) {
-        size+= KeyValue.predictSerializedSize(key, families[i], qualifiers[i][j], values[i][j]); //payload size for each
-      }
     }
     return size;
   }
 
-  /*@Override
-  int payloadSize(int familyIndex) {
-    int size = 0;
-    for(int i = 0; i < qualifiers[familyIndex].length; i++) {
-      size+=KeyValue.predictSerializedSize(key, families[familyIndex], qualifiers[familyIndex][i], values[familyIndex][i]);
-    }
-    return size;
-  }*/
-
   @Override
   void serializePayload(final ChannelBuffer buf) {
-    /*for (int i = 0; i < qualifiers.length; i++) {
+    for (int i = 0; i < qualifiers.length; i++) {
       KeyValue.serialize(buf, KeyValue.PUT, timestamp, key, family,
                          qualifiers[i], values[i]);
-    }*/
-
-    //LOG.info("num families : " + families.length);
-    buf.writeInt(families.length); //number of families
-    for(int i = 0; i < families.length; i++) {
-      //LOG.info("family name : " + Bytes.pretty(families[i]));
-      writeByteArray(buf, families[i]); //the column family
-      buf.writeInt(qualifiers[i].length); //the number of KeyValue that follows
-
-      int size = 0;
-      for (int j = 0; j < qualifiers[i].length; j++) {
-        size += KeyValue.predictSerializedSize(key, families[i], qualifiers[i][j], values[i][j]);
-      }
-
-      buf.writeInt(size);  //total number of bytes for all those key values
-      for(int j = 0; j < qualifiers[i].length; j++) {
-        LOG.info("serializing qualifier and value : " + Bytes.pretty(qualifiers[i][j]) + " " + Bytes.pretty(values[i][j]));
-        KeyValue.serialize(buf, KeyValue.PUT, timestamp, key, families[i], qualifiers[i][j], values[i][j]);
-      }
     }
-    /*for (int i = 0; i < qualifiers.length; i++) {
-      KeyValue.serialize(buf, KeyValue.PUT, timestamp, key, family,
-          qualifiers[i], values[i]);
-    }*/
   }
 
   /**
@@ -744,7 +484,6 @@ public final class PutRequest extends BatchableRpc
     size += region.name().length;  // The region name.
 
     size += predictPutSize();
-    LOG.info("predicted serialized size : " + size);
     return size;
   }
 
@@ -762,20 +501,10 @@ public final class PutRequest extends BatchableRpc
     size += 1;  // bool: Whether or not to write to the WAL.
     size += 4;  // int:  Number of families for which we have edits.
 
-    /*size += 1;  // vint: Family length (guaranteed on 1 byte).
+    size += 1;  // vint: Family length (guaranteed on 1 byte).
     size += family.length;  // The family.
     size += 4;  // int:  Number of KeyValues that follow.
     size += 4;  // int:  Total number of bytes for all those KeyValues.
-
-    size += payloadSize();*/
-
-    /*for (int i = 0; i < families.length; i++) {
-      size += 1;  // vint: Family length (guaranteed on 1 byte).
-      size += families[i].length;
-      size += 4; // int:  Number of KeyValues that follow.
-      size += 4; // int:  Total number of bytes for all those KeyValues.
-      size += payloadSize(i);
-    }*/
 
     size += payloadSize();
 
@@ -810,14 +539,12 @@ public final class PutRequest extends BatchableRpc
     buf.writeLong(lockid);    // Lock ID.
     buf.writeByte(durable ? 0x01 : 0x00);  // Whether or not to use the WAL.
 
-    serializePayload(buf);
-    LOG.debug("PutRequest : SerializeInto " + Bytes.pretty(buf));
-    /*buf.writeInt(1);  // Number of families that follow.
+    buf.writeInt(1);  // Number of families that follow.
     writeByteArray(buf, family);  // The column family.
 
     buf.writeInt(qualifiers.length);  // Number of "KeyValues" that follow.
     buf.writeInt(payloadSize());  // Size of the KV that follows.
-    serializePayload(buf);*/
+    serializePayload(buf);
   }
 
 }
