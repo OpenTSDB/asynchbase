@@ -1,12 +1,13 @@
 package org.hbase.async;
 
 import org.jboss.netty.buffer.ChannelBuffer;
-import org.jboss.netty.buffer.ChannelBuffers;
 
 public class PrefixFilter extends ScanFilter {
 
-  private static final byte[] PREFIXFILTER = Bytes.ISO88591("org.apache.hadoop"
-      + ".hbase.filter.PrefixFilter");
+  private static final String FILTERNAME = "org.apache.hadoop"
+      + ".hbase.filter.PrefixFilter";
+
+  private static final byte[] FILTERBYTES = Bytes.ISO88591(FILTERNAME);
 
   private final byte[] prefix;
 
@@ -15,16 +16,21 @@ public class PrefixFilter extends ScanFilter {
   }
 
   @Override
+  String getName() {
+    return FILTERNAME;
+  }
+
+  @Override
   byte[] getNameBytes() {
-    return PREFIXFILTER;
+    return FILTERBYTES;
   }
 
   @Override
   void serialize(final ChannelBuffer buf) {
     //TODO: how to set startKey ?? either we set it or leave it to the user ?
     // prefix filter
-    buf.writeByte((byte)PREFIXFILTER.length);       // 1
-    buf.writeBytes(PREFIXFILTER);                   // 43
+    buf.writeByte((byte) FILTERBYTES.length);       // 1
+    buf.writeBytes(FILTERBYTES);                   // 43
     // write the bytes of the prefix
     buf.writeByte((byte)prefix.length);             // 1
     buf.writeBytes(prefix);                         // prefix.length
@@ -35,12 +41,12 @@ public class PrefixFilter extends ScanFilter {
     return 1 + 43 + 1 + prefix.length;
   }
 
-  @Override
+  /*@Override
   public byte[] getFilterByteArray() {
     byte[] ret = new byte[predictSerializedSize()];
     final ChannelBuffer buf = ChannelBuffers.wrappedBuffer(ret);
     buf.clear();
     serialize(buf);
     return ret;
-  }
+  }*/
 }
