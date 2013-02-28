@@ -1,6 +1,6 @@
-# Copyright (C) 2012  The Async HBase Authors.  All rights reserved.
+# Copyright (C) 2013  The Async HBase Authors.  All rights reserved.
 # This file is part of Async HBase.
-#
+# 
 # Redistribution and use in source and binary forms, with or without
 # modification, are permitted provided that the following conditions are met:
 #   - Redistributions of source code must retain the above copyright notice,
@@ -23,11 +23,11 @@
 # ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 # POSSIBILITY OF SUCH DAMAGE.
 
-GUAVA_VERSION := 13.0.1
-GUAVA := third_party/guava/guava-$(GUAVA_VERSION).jar
-GUAVA_BASE_URL := http://search.maven.org/remotecontent?filepath=com/google/guava/guava/$(GUAVA_VERSION)
+OBJENESIS_VERSION := 1.3
+OBJENESIS := third_party/objenesis/objenesis-$(OBJENESIS_VERSION).jar
+OBJENESIS_BASE_URL := http://search.maven.org/remotecontent?filepath=org/objenesis/objenesis/$(OBJENESIS_VERSION)
 
-$(GUAVA): $(GUAVA).md5
-	set dummy "$(GUAVA_BASE_URL)" "$(GUAVA)"; shift; $(FETCH_DEPENDENCY)
+$(OBJENESIS): $(OBJENESIS).md5
+	set dummy "$(OBJENESIS_BASE_URL)" "$(OBJENESIS)"; shift; $(FETCH_DEPENDENCY)
 
-THIRD_PARTY += $(GUAVA)
+THIRD_PARTY += $(OBJENESIS)

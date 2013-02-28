@@ -1,6 +1,6 @@
-# Copyright (C) 2012  The Async HBase Authors.  All rights reserved.
+# Copyright (C) 2013  The Async HBase Authors.  All rights reserved.
 # This file is part of Async HBase.
-#
+# 
 # Redistribution and use in source and binary forms, with or without
 # modification, are permitted provided that the following conditions are met:
 #   - Redistributions of source code must retain the above copyright notice,
@@ -23,11 +23,11 @@
 # ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 # POSSIBILITY OF SUCH DAMAGE.
 
-GUAVA_VERSION := 13.0.1
-GUAVA := third_party/guava/guava-$(GUAVA_VERSION).jar
-GUAVA_BASE_URL := http://search.maven.org/remotecontent?filepath=com/google/guava/guava/$(GUAVA_VERSION)
+HAMCREST_VERSION := 1.3
+HAMCREST := third_party/hamcrest/hamcrest-core-$(HAMCREST_VERSION).jar
+HAMCREST_BASE_URL := http://search.maven.org/remotecontent?filepath=org/hamcrest/hamcrest-core/$(HAMCREST_VERSION)
 
-$(GUAVA): $(GUAVA).md5
-	set dummy "$(GUAVA_BASE_URL)" "$(GUAVA)"; shift; $(FETCH_DEPENDENCY)
+$(HAMCREST): $(HAMCREST).md5
+	set dummy "$(HAMCREST_BASE_URL)" "$(HAMCREST)"; shift; $(FETCH_DEPENDENCY)
 
-THIRD_PARTY += $(GUAVA)
+THIRD_PARTY += $(HAMCREST)

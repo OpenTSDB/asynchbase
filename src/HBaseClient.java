@@ -1473,6 +1473,7 @@ public final class HBaseClient {
     final class RetryRpc implements Callback<Deferred<Object>, Object> {
       public Deferred<Object> call(final Object arg) {
         if (arg instanceof NonRecoverableException) {
+          request.callback(arg);
           return Deferred.fromError((NonRecoverableException) arg);
         }
         return sendRpcToRegion(request);
