@@ -133,6 +133,7 @@ public final class Scanner {
 
   /** Pre-serialized filter to apply on the scanner.  */
   private byte[] filter;
+  private List<ScanFilter> scanFilters;
 
   /** Minimum {@link KeyValue} timestamp to scan.  */
   private long min_timestamp = 0;
@@ -297,6 +298,47 @@ public final class Scanner {
     this.qualifiers = qualifiers;
   }
 
+  /**
+   * Specifies the filter to apply to the scanner.
+   * You should use {@link FilterList} if you wish to chain filters or use multiple filters.
+   * @param scanFilter The filter.
+   * @throws IllegalArgumentException if you supply more than 1 filter and they are not of type {@link FilterList}
+   * @since 1.5.0
+   */
+  public void setFilter(ScanFilter scanFilter) {
+    this.scanFilters = Arrays.asList(scanFilter);
+  }
+
+  /**
+   * Specifies one or more filters to apply to the scanner.
+   * You should use {@link FilterList} if you wish to chain filters or use multiple filters.
+   * @param scanFilters The filters.
+   * @throws IllegalArgumentException if you supply more than 1 filter and they are not of type {@link FilterList}
+   * @since 1.5.0
+   */
+  public void setFilters(ScanFilter... scanFilters) {
+    setFilters(Arrays.asList(scanFilters));
+  }
+
+  /**
+   * Specifies one or more filters to apply to the scanner.
+   * You should use {@link FilterList} if you wish to chain filters.
+   * @param scanFilters The filters.
+   * @throws IllegalArgumentException if you supply more than 1 filter and they are not of type {@link FilterList}
+   * @since 1.5.0
+   */
+  public void setFilters(List<ScanFilter> scanFilters) {
+    if (scanFilters.size() > 1) {
+      for (ScanFilter scanFilter : scanFilters) {
+        if (scanFilter.getClass() != FilterList.class) {
+          throw new IllegalArgumentException("supplied " + scanFilters.size() +
+              " filters, but they were not wrapped in a FilterList.");
+        }
+      }
+    }
+
+    this.scanFilters = scanFilters;
+  }
 
   /**
    * Sets a regular expression to filter results based on the row key.
@@ -336,11 +378,7 @@ public final class Scanner {
    * scanner.
    */
   public void setKeyRegexp(final String regexp, final Charset charset) {
-    final byte[] regex = Bytes.UTF8(regexp);
-    final byte[] chars = Bytes.UTF8(charset.name());
-    filter = new byte[(1 + 40 + 2 + 5 + 1 + 1 + 1 + 52
-        + 2 + regex.length + 2 + chars.length)];
-    fillKeyRegexpByteArray(filter, regex, chars);
+    setKeyRegexp(Bytes.UTF8(regexp), charset);
   }
 
   /**
@@ -360,246 +398,11 @@ public final class Scanner {
    * see {@link #setKeyRegexp(String)} for more information
    */
   public void setKeyRegexp(final byte[] regexp, final Charset charset) {
-    final byte[] chars = Bytes.UTF8(charset.name());
-    filter = new byte[(1 + 40 + 2 + 5 + 1 + 1 + 1 + 52
-        + 2 + regexp.length + 2 + chars.length)];
-    fillKeyRegexpByteArray(filter, regexp, chars);
-  }
-
-  private void fillKeyRegexpByteArray(final byte[] array, final byte[] regex, final byte[] chars) {
-    final ChannelBuffer buf = ChannelBuffers.wrappedBuffer(array);
-    buf.clear();  // Set the writerIndex to 0.
-    buf.writeByte((byte) ROWFILTER.length);                     // 1
-    buf.writeBytes(ROWFILTER);                                  // 40
-    // writeUTF of the comparison operator
-    buf.writeShort(5);                                          // 2
-    buf.writeBytes(EQUAL);                                      // 5
-    // The comparator: a RegexStringComparator
-    buf.writeByte(54);  // Code for WritableByteArrayComparable // 1
-    buf.writeByte(0);   // Code for "this has no code".         // 1
-    buf.writeByte((byte) REGEXSTRINGCOMPARATOR.length);         // 1
-    buf.writeBytes(REGEXSTRINGCOMPARATOR);                      // 52
-    // writeUTF the regexp
-    System.out.println("ASYNCHBASE ================== writing regex of length " + regex.length + " regex " + Bytes.pretty(regex));
-    buf.writeShort(regex.length);                               // 2
-    buf.writeBytes(regex);                                      // regex.length
-    // writeUTF the charset
-    buf.writeShort(chars.length);                               // 2
-    buf.writeBytes(chars);                                      // chars.length
-  }
-
-  /**
-   * Gets a regular expression to filter results based on the row key.
-   * @param regexp The regular expression with which to filter the row keys.
-   * @param charset The charset used to decode the bytes of the row key into a
-   * string.  The RegionServer must support this charset, otherwise it will
-   * unexpectedly close the connection the first time you attempt to use this
-   * scanner.
-   * see {@link #setKeyRegexp(String)} for more information
-   */
-  public byte[] getKeyRegexp(final String regexp, final Charset charset) {
-    final byte[] regex = Bytes.UTF8(regexp);
-    return getKeyRegexp(regex, charset);
-    /*final byte[] chars = Bytes.UTF8(charset.name());
-    byte[] ret = new byte[(1 + 40 + 2 + 5 + 1 + 1 + 1 + 52
-        + 2 + regex.length + 2 + chars.length)];
-    fillKeyRegexpByteArray(ret, regex, chars);
-    return ret;*/
-  }
-
-  public byte[] getKeyRegexp(final byte[] regexp, final Charset charset) {
-    final byte[] chars = Bytes.UTF8(charset.name());
-    byte[] ret = new byte[(1 + 40 + 2 + 5 + 1 + 1 + 1 + 52
-        + 2 + regexp.length + 2 + chars.length)];
-    fillKeyRegexpByteArray(ret, regexp, chars);
-    return ret;
-  }
-
-  public byte[] getKeyRegexp(final byte[] regexp) {
-    return getKeyRegexp(regexp, CharsetUtil.ISO_8859_1);
-  }
-
-  private static final byte[] PREFIXFILTER = Bytes.ISO88591("org.apache.hadoop"
-            + ".hbase.filter.PrefixFilter");
-
-  /**
-   * Sets a binary prefix to filter results based on the row key.
-   * <p>
-   * @param prefix which is used to match the row keys.
-   * Sets start key to prefix
-   */
-  public void setPrefix(final byte[] prefix) {
-    filter = new byte[(1 + PREFIXFILTER.length + 1 + prefix.length)];
-    fillPrefixFilterByteArray(filter, prefix);
-  }
-
-  /**
-   * Constructs a PrefixFilter to filter results based on the row key prefix.
-   * @param prefix to match the row key.
-   * @return byte array representation of the filter.
-   */
-  public byte[] getPrefix(final byte[] prefix) {
-    byte[] ret = new byte[(1 + 43 + 1 + prefix.length)];
-    fillPrefixFilterByteArray(ret, prefix);
-    return ret;
-  }
-
-  private void fillPrefixFilterByteArray(final byte[] array, final byte[] prefix) {
-    setStartKey(prefix);
-    final ChannelBuffer buf = ChannelBuffers.wrappedBuffer(array);
-    buf.clear();  // Set the writerIndex to 0.
-    // prefix filter
-    buf.writeByte((byte)PREFIXFILTER.length);       // 1
-    buf.writeBytes(PREFIXFILTER);                   // 43
-    // write the bytes of the prefix
-    buf.writeByte((byte)prefix.length);             // 1
-    buf.writeBytes(prefix);                         // prefix.length
-  }
-
-  private static final byte[] COLUMNPREFIXFILTER = Bytes.ISO88591("org.apache.hadoop"
-          + ".hbase.filter.ColumnPrefixFilter");
-
-  /**
-   * Sets a binary prefix to filter results based on the column qualifier prefix.
-   * <p>
-   * Very fast comparisons, compares the column qualifier bytes up to the length of the
-   * @param prefix to see if it matches. Useful for when your column qualifer are not strings
-   * and are written as compressed form bytes.
-   * Only settings this filter will return all rows that match the criteria but at the same will cost
-   * a full table scan. Be sure of what you are doing when using this.
-   */
-  public void setColumnPrefix(final byte[] prefix) {
-    filter = new byte[1 + COLUMNPREFIXFILTER.length + 1 + prefix.length];
-    fillColumnPrefixByteArray(filter, prefix);
-  }
-
-  /**
-   * Constructs a ColumnPrefixFilter to filter results based on the column qualifier.
-   * @param prefix for which a ColumnPrefixFilter will be built.
-   * @return byte array representation of the filter
-   */
-  public byte[] getColumnPrefix(final byte[] prefix) {
-    byte[] ret = new byte[1 + COLUMNPREFIXFILTER.length + 1 + prefix.length];
-    fillColumnPrefixByteArray(ret, prefix);
-    return ret;
-  }
-
-  private void fillColumnPrefixByteArray(final byte[] array, final byte[] prefix) {
-    final ChannelBuffer buf = ChannelBuffers.wrappedBuffer(array);
-    buf.clear();
-    //org.apache.hadoop.hbase.filter.ColumnPrefixFilter
-    buf.writeByte((byte)COLUMNPREFIXFILTER.length);     //1
-    buf.writeBytes(COLUMNPREFIXFILTER);                 //49
-    //write the bytes of the prefix
-    buf.writeByte((byte)prefix.length);                 //1
-    buf.writeBytes(prefix);                             //prefix.length
-  }
-
-  private static final byte[] COLUMNRANGEFILTER = Bytes.ISO88591("org.apache.hadoop"
-          + ".hbase.filter.ColumnRangeFilter");
-
-  public void setColumnRange(final byte[] minColumn, final byte[] maxColumn) {
-    setColumnRange(minColumn, true, maxColumn, true);
-  }
-
-  public void setColumnRange(final byte[] minColumn, final boolean minColumnInclusive
-                                , final byte[] maxColumn, final boolean maxColumnInclusive) {
-    filter = new byte[1 + COLUMNRANGEFILTER.length + 1 + 1 + minColumn.length
-                       + 1 + 1 + 1 + maxColumn.length + 1];
-    fillColumnRangeByteArray(filter, minColumn, minColumnInclusive, maxColumn, maxColumnInclusive);
-  }
-
-  private void fillColumnRangeByteArray(final byte[] array, final byte[] minColumn
-            , final boolean minColumnInclusive, final byte[] maxColumn , final boolean maxColumnInclusive) {
-    final ChannelBuffer buf = ChannelBuffers.wrappedBuffer(array);
-    buf.clear();
-    //org.apache.hadoop.hbase.filter.ColumnRangeFilter
-    buf.writeByte((byte)COLUMNRANGEFILTER.length);  //1
-    buf.writeBytes(COLUMNRANGEFILTER);              //48
-    //min column null
-    buf.writeByte(minColumn == null ? 1 : 0);       //1
-    //min column
-    buf.writeByte(minColumn.length);                //1 (length of minColumn)
-    buf.writeBytes(minColumn);                      //minColumn.length
-    //min column inclusive
-    buf.writeByte(minColumnInclusive ? 1 : 0);      //1
-    //max column null
-    buf.writeByte(maxColumn == null ? 1 : 0);       //1
-    //max column
-    buf.writeByte(maxColumn.length);                //1
-    buf.writeBytes(maxColumn);                      //maxColumn.length
-    //max column inclusive
-    buf.writeByte(maxColumnInclusive ? 1: 0);       //1
-  }
-
-  public byte[] getColumnRange(final byte[] minColumn, final byte[] maxColumn) {
-    return  getColumnRange(minColumn, true, maxColumn, true);
-  }
-
-  public byte[] getColumnRange(final byte[] minColumn, final boolean minColumnInclusive
-      , final byte[] maxColumn, final boolean maxColumnInclusive) {
-    byte[] ret = new byte[1 + COLUMNRANGEFILTER.length + 1 + 1 + minColumn.length
-                + 1 + 1 + 1 + maxColumn.length + 1];
-    fillColumnRangeByteArray(ret, minColumn, minColumnInclusive, maxColumn, maxColumnInclusive);
-    return ret;
-  }
-
-  private static final byte[] FILTERLIST = Bytes.ISO88591("org.apache.hadoop" +
-          ".hbase.filter.FilterList");
-
-  /**
-   * Sets a FilterList based on the passed on the byte representation of filter array.
-   * BE CAREFUL: the byte arrays are not representing row key, column family, column qualifier or column value
-   * You can get byte array representation by calling {@link #getColumnPrefix(byte[])},
-   * {@link #getPrefix(byte[])} or add your own.
-   * Enable your logging to DEBUG to see what this function does.
-   * MUST_PASS_ALL (i.e. AND) is the only operator that is supported right now.
-   * @param filters the list of filters that need to be applied to this scan.
-   */
-  public void setFilterList(final byte[]... filters) {
-
-    int totalByteListLength = 0;
-    for(byte[] f : filters) {
-      //we need this extra byte to avoid NullPointerException when readObject() is invoked
-      //we will use the WritableByteArrayComparable used in setKeyRegexp
-      //though I believe that byte value is wrong, since we use 53 while HbaseObjectWritable says its 54
-      totalByteListLength += 1;
-      //we need this extra byte since we will be using the NOT_ENCODED for doing Class.forName in HBASE code
-      //see org.apache.hadoop.hbase.io.HbaseObjectWritable.java
-      totalByteListLength += 1;
-      totalByteListLength += f.length;
+    RowFilter rowFilter = new RowFilter(regexp, charset);
+    if (scanFilters == null) {
+      scanFilters = Lists.newArrayList();
     }
-
-    LOG.debug("setFilterList: creating filter array of size " + (1 + FILTERLIST.length + 1 + 4 + totalByteListLength));
-    filter = new byte[1 + FILTERLIST.length + 1 + 4 + totalByteListLength];
-    final ChannelBuffer buf = ChannelBuffers.wrappedBuffer(filter);
-    buf.clear();
-    totalByteListLength = 0;
-
-    buf.writeByte((byte)FILTERLIST.length);   //1
-    totalByteListLength += 1;
-    buf.writeBytes(FILTERLIST);               //41
-    totalByteListLength += FILTERLIST.length;
-    //MUST_PASS_ALL TODO (vbajaria): allow for MUST_PASS_ONE
-    buf.writeByte((byte)0);                   //1
-    totalByteListLength += 1;
-    //number of filters in list
-    LOG.debug("filters length : " + filters.length);
-    buf.writeInt(filters.length);            //4
-    totalByteListLength += 4;
-    //append all filters
-    for(byte[] f : filters) {
-      LOG.debug("setFilterList: writing filter of length " + f.length);
-      totalByteListLength += 1;
-      buf.writeByte(53);                    //1 : code for WritableByteArrayComparable (NOT!!)
-      totalByteListLength += 1;
-      buf.writeByte(0);                     //1 : code for NOT_ENCODED
-      totalByteListLength += f.length;
-      buf.writeBytes(f);
-    }
-
-    LOG.debug("setFilterList: wrote ChannelBuffer bytes : " + totalByteListLength);
-    LOG.debug("buf length : " + buf.toByteBuffer());
+    scanFilters.add(rowFilter);
   }
 
   /**
@@ -1199,8 +1002,13 @@ public final class Scanner {
       size += 4;  // int:  Unused field only used by HBase's client.
       size += 1;  // bool: Whether or not to populate the blockcache.
       size += 1;  // byte: Whether or not to use a filter.
-      if (filter != null) {
+      /*if (filter != null) {
         size += filter.length;
+      }*/
+      if (scanFilters != null && scanFilters.size() > 0) {
+        for (ScanFilter scanFilter : scanFilters) {
+          size += scanFilter.predictSerializedSize();
+        }
       }
       size += 8;  // long: Minimum timestamp.
       size += 8;  // long: Maximum timestamp.
@@ -1248,11 +1056,20 @@ public final class Scanner {
       // Whether or not to populate the blockcache.
       buf.writeByte(populate_blockcache ? 0x01 : 0x00);
 
-      if (filter == null) {
+      /*if (filter == null) {
         buf.writeByte(0x00); // boolean (false): don't use a filter.
       } else {
         buf.writeByte(0x01); // boolean (true): use a filter.
         buf.writeBytes(filter);
+      }*/
+
+      if (scanFilters == null || scanFilters.size() == 0) {
+        buf.writeByte(0x00); // boolean (false): don't use a filter.
+      } else {
+        buf.writeByte(0x01); // boolean (true): use a filter.
+        for (ScanFilter scanFilter : scanFilters) {
+          scanFilter.serialize(buf);
+        }
       }
 
       // TimeRange
