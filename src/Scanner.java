@@ -1002,9 +1002,6 @@ public final class Scanner {
       size += 4;  // int:  Unused field only used by HBase's client.
       size += 1;  // bool: Whether or not to populate the blockcache.
       size += 1;  // byte: Whether or not to use a filter.
-      /*if (filter != null) {
-        size += filter.length;
-      }*/
       if (scanFilters != null && scanFilters.size() > 0) {
         for (ScanFilter scanFilter : scanFilters) {
           size += scanFilter.predictSerializedSize();
@@ -1055,13 +1052,6 @@ public final class Scanner {
 
       // Whether or not to populate the blockcache.
       buf.writeByte(populate_blockcache ? 0x01 : 0x00);
-
-      /*if (filter == null) {
-        buf.writeByte(0x00); // boolean (false): don't use a filter.
-      } else {
-        buf.writeByte(0x01); // boolean (true): use a filter.
-        buf.writeBytes(filter);
-      }*/
 
       if (scanFilters == null || scanFilters.size() == 0) {
         buf.writeByte(0x00); // boolean (false): don't use a filter.
