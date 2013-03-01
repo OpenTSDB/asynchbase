@@ -22,8 +22,7 @@ public class ParsedKeyValues {
     this.values = values;
   }
 
-  public static ParsedKeyValues parse(List<KeyValue> keyValues) {
-    int uniqueFamilyIndex = 0;
+  public static ParsedKeyValues parse(List<KeyValue> keyValues) throws IllegalArgumentException {
     HashMap<String, byte[]> familyIndex = new HashMap<String, byte[]>();
     HashMap<String, List<byte[]>> familyToQualifierIndex = new HashMap<String, List<byte[]>>();
     HashMap<String, List<byte[]>> familyToValueIndex = new HashMap<String, List<byte[]>>();
@@ -35,7 +34,7 @@ public class ParsedKeyValues {
       String keyStr = Bytes.pretty(keyValue.key());
 
       if (uniqueKeyStr != null && !keyStr.equalsIgnoreCase(uniqueKeyStr)) {
-        throw new IllegalArgumentException("MultiPut only supported for unique keys.");
+        throw new IllegalArgumentException("Operation only supported for unique keys.");
       }
 
       if(uniqueKeyStr == null) {

@@ -60,7 +60,7 @@ asynchbase_SOURCES := \
 	src/NoSuchColumnFamilyException.java	\
 	src/NonRecoverableException.java	\
 	src/NotServingRegionException.java	\
-        src/ParsedKeyValues.java                \
+	src/ParsedKeyValues.java                \
 	src/PleaseThrottleException.java	\
 	src/PutRequest.java	\
 	src/RecoverableException.java	\

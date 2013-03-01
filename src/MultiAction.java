@@ -154,7 +154,6 @@ final class MultiAction extends HBaseRpc implements HBaseRpc.IsEdit {
       final int key_length = rpc.key.length;
 
       if (new_key) {
-        //System.out.println("MultiAction:predictSerializedSize got new key");
         if (use_multi) {
           size += 4;  // int: Number of "attributes" for the last key (none).
           size += 4;  // Index of this `action'.
@@ -177,7 +176,6 @@ final class MultiAction extends HBaseRpc implements HBaseRpc.IsEdit {
       }
 
       if (new_family) {
-        //System.out.println("MultiAction:predictSerializedSize got new family");
         size += 1;  // vint: Family length (guaranteed on 1 byte).
         size += family.length;  // The family.
         size += 4;  // int:  Number of KeyValues that follow.
@@ -209,7 +207,6 @@ final class MultiAction extends HBaseRpc implements HBaseRpc.IsEdit {
     Collections.sort(batch, MULTI_CMP);
     final ChannelBuffer buf = newBuffer(server_version,
                                         predictSerializedSize(server_version));
-    //System.out.println("MultiAction buf size : " + buf.capacity());
     buf.writeInt(1);  // Number of parameters.
 
     // Are we serializing a `multi' RPC, or `multiPut'?
