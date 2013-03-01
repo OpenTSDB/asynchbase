@@ -36,8 +36,7 @@ package := org.hbase.async
 spec_title := Asynchronous HBase Client
 spec_vendor := The Async HBase Authors
 # Semantic Versioning (see http://semver.org/).
-spec_version := 1.4.2
-#spec_version := 1.5.0-SNAPSHOT
+spec_version := 1.5.0-SNAPSHOT
 jar := $(top_builddir)/asynchbase-$(spec_version).jar
 asynchbase_SOURCES := \
 	src/AtomicIncrementRequest.java	\
@@ -79,6 +78,13 @@ asynchbase_SOURCES := \
 	src/VersionMismatchException.java	\
 	src/jsr166e/LongAdder.java	\
 	src/jsr166e/Striped64.java	\
+	src/ScanFilter.java		\
+	src/ColumnPrefixFilter.java	\
+	src/ColumnRangeFilter.java	\
+	src/FilterList.java		\
+	src/PrefixFilter.java		\
+	src/RowFilter.java		\
+
 
 asynchbase_LIBADD := \
 	$(NETTY)	\
