@@ -45,10 +45,13 @@ asynchbase_SOURCES := \
 	src/BufferedIncrement.java	\
 	src/Bytes.java	\
 	src/ClientStats.java	\
+	src/ColumnPrefixFilter.java	\
+	src/ColumnRangeFilter.java	\
 	src/CompareAndSetRequest.java	\
 	src/ConnectionResetException.java	\
 	src/Counter.java	\
 	src/DeleteRequest.java	\
+	src/FilterList.java		\
 	src/GetRequest.java	\
 	src/HBaseClient.java	\
 	src/HBaseException.java	\
