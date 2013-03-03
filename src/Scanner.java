@@ -347,7 +347,7 @@ public final class Scanner {
     buf.writeShort(5);                                          // 2
     buf.writeBytes(EQUAL);                                      // 5
     // The comparator: a RegexStringComparator
-    buf.writeByte(53);  // Code for WritableByteArrayComparable // 1
+    buf.writeByte(54);  // Code for WritableByteArrayComparable // 1
     buf.writeByte(0);   // Code for "this has no code".         // 1
     buf.writeByte((byte) REGEXSTRINGCOMPARATOR.length);         // 1
     buf.writeBytes(REGEXSTRINGCOMPARATOR);                      // 52

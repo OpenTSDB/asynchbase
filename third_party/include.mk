@@ -28,11 +28,13 @@ FETCH_DEPENDENCY := ./build-aux/fetchdep.sh "$$@"
 THIRD_PARTY =
 
 include third_party/guava/include.mk
+include third_party/hamcrest/include.mk
 include third_party/javassist/include.mk
 include third_party/junit/include.mk
 include third_party/logback/include.mk
 include third_party/mockito/include.mk
 include third_party/netty/include.mk
+include third_party/objenesis/include.mk
 include third_party/powermock/include.mk
 include third_party/slf4j/include.mk
 include third_party/suasync/include.mk

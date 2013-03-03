@@ -1,4 +1,6 @@
-<project>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
   <modelVersion>4.0.0</modelVersion>
 
   <groupId>org.hbase</groupId>
@@ -7,13 +9,13 @@
   <name>@spec_title@</name>
   <organization>
     <name>@spec_vendor@</name>
-    <url>http://www.stumbleupon.com</url>
+    <url>http://opentsdb.net</url>
   </organization>
   <description>
     An alternative HBase client library for applications requiring fully
     asynchronous, non-blocking and thread-safe HBase connectivity.
   </description>
-  <url>https://github.com/stumbleupon/asynchbase</url>
+  <url>https://github.com/OpenTSDB/asynchbase</url>
   <licenses>
     <license>
       <name>BSD</name>
@@ -22,12 +24,12 @@
     </license>
   </licenses>
   <scm>
-    <connection>scm:git:git@github.com:stumbleupon/asynchbase.git</connection>
-    <url>https://github.com/stumbleupon/asynchbase</url>
+    <connection>scm:git:git@github.com:OpenTSDB/asynchbase.git</connection>
+    <url>https://github.com/OpenTSDB/asynchbase</url>
   </scm>
   <issueManagement>
     <system>GitHub</system>
-    <url>http://github.com/stumbleupon/asynchbase/issues</url>
+    <url>https://github.com/OpenTSDB/asynchbase/issues</url>
   </issueManagement>
   <mailingLists>
     <mailingList>
@@ -35,7 +37,7 @@
       <post>asynchbase@googlegroups.com</post>
       <subscribe>asynchbase+subscribe@googlegroups.com</subscribe>
       <unsubscribe>asynchbase+unsubscribe@googlegroups.com</unsubscribe>
-      <archive>https://groups.google.com/forum/#!forum/asynchbase</archive>
+      <archive>https://groups.google.com/group/asynchbase</archive>
     </mailingList>
   </mailingLists>
   <developers>
@@ -58,14 +60,18 @@
     <testSourceDirectory>test</testSourceDirectory>
 
     <plugins>
+
       <plugin>
         <groupId>org.apache.maven.plugins</groupId>
         <artifactId>maven-compiler-plugin</artifactId>
-        <version>2.3.2</version>
+        <version>2.5.1</version>
         <configuration>
+          <source>1.6</source>
+          <target>1.6</target>
           <compilerArgument>-Xlint</compilerArgument>
         </configuration>
       </plugin>
+
       <plugin>
         <groupId>org.apache.maven.plugins</groupId>
         <artifactId>maven-source-plugin</artifactId>
@@ -79,6 +85,7 @@
           </execution>
         </executions>
       </plugin>
+
       <plugin>
         <groupId>org.apache.maven.plugins</groupId>
         <artifactId>maven-javadoc-plugin</artifactId>
@@ -100,6 +107,7 @@
           </bottom>
         </configuration>
       </plugin>
+
       <plugin>
         <groupId>org.apache.maven.plugins</groupId>
         <artifactId>maven-gpg-plugin</artifactId>
@@ -117,6 +125,7 @@
           <keyname>tsunanet@gmail.com</keyname>
         </configuration>
       </plugin>
+
       <plugin>
         <groupId>org.apache.maven.plugins</groupId>
         <artifactId>maven-surefire-plugin</artifactId>
@@ -125,25 +134,30 @@
           <skipTests>${skipTests}</skipTests>
         </configuration>
       </plugin>
+
     </plugins>
   </build>
 
   <dependencies>
+
     <dependency>
       <groupId>com.google.guava</groupId>
       <artifactId>guava</artifactId>
       <version>@GUAVA_VERSION@</version>
     </dependency>
+
     <dependency>
       <groupId>io.netty</groupId>
       <artifactId>netty</artifactId>
       <version>@NETTY_VERSION@</version>
     </dependency>
+
     <dependency>
       <groupId>com.stumbleupon</groupId>
       <artifactId>async</artifactId>
       <version>@SUASYNC_VERSION@</version>
     </dependency>
+
     <dependency>
       <groupId>org.apache.zookeeper</groupId>
       <artifactId>zookeeper</artifactId>
@@ -167,6 +181,7 @@
         </exclusion>
       </exclusions>
     </dependency>
+
     <dependency>
       <groupId>org.slf4j</groupId>
       <artifactId>slf4j-api</artifactId>
@@ -174,50 +189,65 @@
     </dependency>
 
     <!-- runtime dependencies -->
+
     <dependency>
       <groupId>org.slf4j</groupId>
       <artifactId>log4j-over-slf4j</artifactId>
       <version>@LOG4J_OVER_SLF4J_VERSION@</version>
       <scope>runtime</scope>
     </dependency>
-    <dependency>
-      <groupId>org.slf4j</groupId>
-      <artifactId>jcl-over-slf4j</artifactId>
-      <version>@JCL_OVER_SLF4J_VERSION@</version>
-      <scope>runtime</scope>
-    </dependency>
 
     <!-- test dependencies -->
+
+    <dependency>
+      <groupId>org.hamcrest</groupId>
+      <artifactId>hamcrest-core</artifactId>
+      <version>@HAMCREST_VERSION@</version>
+      <scope>test</scope>
+    </dependency>
+
     <dependency>
       <groupId>junit</groupId>
       <artifactId>junit</artifactId>
       <version>@JUNIT_VERSION@</version>
       <scope>test</scope>
     </dependency>
+
     <dependency>
       <groupId>org.javassist</groupId>
       <artifactId>javassist</artifactId>
       <version>@JAVASSIST_VERSION@</version>
       <scope>test</scope>
     </dependency>
+
     <dependency>
       <groupId>org.mockito</groupId>
       <artifactId>mockito-all</artifactId>
       <version>@MOCKITO_VERSION@</version>
       <scope>test</scope>
     </dependency>
+
+    <dependency>
+      <groupId>org.objenesis</groupId>
+      <artifactId>objenesis</artifactId>
+      <version>@OBJENESIS_VERSION@</version>
+      <scope>test</scope>
+    </dependency>
+
     <dependency>
       <groupId>org.powermock</groupId>
       <artifactId>powermock-module-junit4</artifactId>
       <version>@POWERMOCK_MOCKITO_VERSION@</version>
       <scope>test</scope>
     </dependency>
+
     <dependency>
       <groupId>org.powermock</groupId>
       <artifactId>powermock-api-mockito</artifactId>
       <version>@POWERMOCK_MOCKITO_VERSION@</version>
       <scope>test</scope>
     </dependency>
+
   </dependencies>
 
   <properties>
@@ -230,4 +260,5 @@
     <artifactId>oss-parent</artifactId>
     <version>7</version>
   </parent>
+
 </project>
