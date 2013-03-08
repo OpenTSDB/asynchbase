@@ -84,6 +84,7 @@ asynchbase_SOURCES := \
 	src/FilterList.java		\
 	src/PrefixFilter.java		\
 	src/RowFilter.java		\
+	src/QualifierFilter.java	\
 
 
 asynchbase_LIBADD := \
