@@ -23,7 +23,7 @@ public class ColumnRangeFilter extends ScanFilter {
     this.minColumn = minColumn;
     this.minColumnInclusive = minColumnInclusive;
     this.maxColumn = maxColumn;
-    this.maxColumnInclusive = false;
+    this.maxColumnInclusive = maxColumnInclusive;
   }
 
   @Override
