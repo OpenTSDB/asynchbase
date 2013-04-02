@@ -646,7 +646,7 @@ public abstract class HBaseRpc {
    * assumed that TCP checksums would be sufficient (they're not).
    */
   private static final long MAX_BYTE_ARRAY_MASK =
-    0xFFFFFFFFF0000000L;  // => max = 256MB
+    0xFFFFFFFFE0000000L;  // => max = 512MB
 
   /**
    * Verifies that the given length looks like a reasonable array length.
