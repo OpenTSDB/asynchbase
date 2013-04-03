@@ -128,6 +128,25 @@ public abstract class HBaseRpc {
     public byte[] value();
   }
 
+  /**
+   * An RPC from which you can get a filter.
+   * @since 1.xx
+   */
+  public interface HasFilter {
+    /**
+     * Returns the filter contained in this RPC.
+     * <p>
+     * <strong>DO NOT MODIFY THE CONTENTS OF THE ARRAY RETURNED.</strong>
+     */
+    public byte[] filter();
+    /**
+     * Returns the name of the filter contained in this RPC.
+     * <p>
+     * <strong>DO NOT MODIFY THE CONTENTS OF THE ARRAY RETURNED.</strong>
+     */
+    public byte[] filterName();
+  }
+
   /*
    * This class, although it's part of the public API, is mostly here to make
    * it easier for this library to manipulate the HBase RPC protocol.

@@ -39,7 +39,8 @@ import org.jboss.netty.buffer.ChannelBuffer;
  */
 public final class GetRequest extends HBaseRpc
   implements HBaseRpc.HasTable, HBaseRpc.HasKey,
-             HBaseRpc.HasFamily, HBaseRpc.HasQualifiers {
+             HBaseRpc.HasFamily, HBaseRpc.HasQualifiers,
+             HBaseRpc.HasFilter {
 
   private static final byte[] GET = new byte[] { 'g', 'e', 't' };
   private static final byte[] EXISTS =
@@ -50,7 +51,8 @@ public final class GetRequest extends HBaseRpc
   private long lockid = RowLock.NO_LOCK;
   private long min_timestamp = 0;
   private long max_timestamp = Long.MAX_VALUE;
-
+  private byte[] filter;
+  private byte[] filterName;
   /**
    * Constructor.
    * <strong>These byte arrays will NOT be copied.</strong>
@@ -158,6 +160,18 @@ public final class GetRequest extends HBaseRpc
     return qualifier(qualifier.getBytes());
   }
 
+  /** Specifies an filter..  */
+  public GetRequest filter(final byte[] filter) {
+    this.filter = filter;
+    return this;
+  }
+
+  /** Specifies an filter..  */
+  public GetRequest filterName(final byte[] filterName) {
+    this.filterName = filterName;
+    return this;
+  }
+
   /** Specifies a minimum timestamp.  */
   public GetRequest minTimestamp(final long timestamp) {
     this.min_timestamp = timestamp;
@@ -204,6 +218,16 @@ public final class GetRequest extends HBaseRpc
     return qualifiers;
   }
 
+  @Override
+  public byte[] filter() {
+    return filter;
+  }
+
+  @Override
+  public byte[] filterName() {
+    return filterName;
+  }
+
   public String toString() {
     final String klass = method() == GET ? "GetRequest" : "Exists";
     return super.toStringWithQualifiers(klass, family, qualifiers);
@@ -239,6 +263,11 @@ public final class GetRequest extends HBaseRpc
     size += 8;  // long: Lock ID.
     size += 4;  // int:  Max number of versions to return.
     size += 1;  // byte: Whether or not to use a filter.
+    if (filterName != null && filter != null) {
+      size += 3;  // vint: row filter name length (3 bytes => max length = 32768).
+      size += filterName.length;  // The filter name.
+      size += filter.length;  // serialized filter see org.apache.hadoop.hbase.util.Writables.getBytes
+    }
     if (server_version >= 26) {  // New in 0.90 (because of HBASE-3174).
       size += 1;  // byte: Whether or not to cache the blocks read.
     }
@@ -276,10 +305,13 @@ public final class GetRequest extends HBaseRpc
     writeByteArray(buf, key);
     buf.writeLong(lockid);  // Lock ID.
     buf.writeInt(1);     // Max number of versions to return.
-    buf.writeByte(0x00); // boolean (false): whether or not to use a filter.
-    // If the previous boolean was true:
-    //   writeByteArray(buf, filter name as byte array);
-    //   write the filter itself
+    if (filterName != null && filter != null) {
+      buf.writeByte(0x01); // boolean (true): whether or not to use a filter.
+      writeByteArray(buf, filterName); // the filter name
+      buf.writeBytes(filter); // the filter
+    } else {
+      buf.writeByte(0x00); // boolean (false): whether or not to use a filter.
+    }
 
     if (server_version >= 26) {  // New in 0.90 (because of HBASE-3174).
       buf.writeByte(0x01);  // boolean (true): whether to cache the blocks.
