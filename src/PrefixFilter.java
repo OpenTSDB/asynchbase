@@ -40,13 +40,4 @@ public class PrefixFilter extends ScanFilter {
   int predictSerializedSize() {
     return 1 + 43 + 1 + prefix.length;
   }
-
-  /*@Override
-  public byte[] getFilterByteArray() {
-    byte[] ret = new byte[predictSerializedSize()];
-    final ChannelBuffer buf = ChannelBuffers.wrappedBuffer(ret);
-    buf.clear();
-    serialize(buf);
-    return ret;
-  }*/
 }
