@@ -494,6 +494,12 @@ public abstract class HBaseRpc {
     return toStringWithQualifiers(classname, family, qualifiers, null, "");
   }
 
+  final String toStringWithQualifiers(final String classname,
+                                      final byte[][] family,
+                                      final byte[][][] qualifiers) {
+    return toStringWithQualifiers(classname, family, qualifiers, null, "");
+  }
+
 
   /**
    * Helper for subclass's {@link #toString} implementations.
@@ -534,6 +540,23 @@ public abstract class HBaseRpc {
       region.toStringbuf(buf);
     }
     buf.append(')');
+    return buf.toString();
+  }
+
+  final String toStringWithQualifiers(final String classname,
+                                      final byte[][] families,
+                                      final byte[][][] qualifiers,
+                                      final byte[][][] values,
+                                      final String fields) {
+    final StringBuilder buf = new StringBuilder(256
+                                                + fields.length());
+    buf.append(classname).append("(table=");
+    Bytes.pretty(buf, table);
+    buf.append(", key=");
+    Bytes.pretty(buf, key);
+    buf.append(", families=");
+    Bytes.pretty(buf, families);
+    //TODO: add qualifiers + values to the buffer
     return buf.toString();
   }
 

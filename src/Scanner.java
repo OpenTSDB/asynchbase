@@ -29,7 +29,9 @@ package org.hbase.async;
 import java.nio.charset.Charset;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.List;
 
+import com.google.common.collect.Lists;
 import org.jboss.netty.buffer.ChannelBuffer;
 import org.jboss.netty.buffer.ChannelBuffers;
 import org.jboss.netty.util.CharsetUtil;
@@ -131,6 +133,7 @@ public final class Scanner {
 
   /** Pre-serialized filter to apply on the scanner.  */
   private byte[] filter;
+  private List<ScanFilter> scanFilters;
 
   /** Minimum {@link KeyValue} timestamp to scan.  */
   private long min_timestamp = 0;
@@ -295,6 +298,47 @@ public final class Scanner {
     this.qualifiers = qualifiers;
   }
 
+  /**
+   * Specifies the filter to apply to the scanner.
+   * You should use {@link FilterList} if you wish to chain filters or use multiple filters.
+   * @param scanFilter The filter.
+   * @throws IllegalArgumentException if you supply more than 1 filter and they are not of type {@link FilterList}
+   * @since 1.5.0
+   */
+  public void setFilter(ScanFilter scanFilter) {
+    this.scanFilters = Arrays.asList(scanFilter);
+  }
+
+  /**
+   * Specifies one or more filters to apply to the scanner.
+   * You should use {@link FilterList} if you wish to chain filters or use multiple filters.
+   * @param scanFilters The filters.
+   * @throws IllegalArgumentException if you supply more than 1 filter and they are not of type {@link FilterList}
+   * @since 1.5.0
+   */
+  public void setFilters(ScanFilter... scanFilters) {
+    setFilters(Arrays.asList(scanFilters));
+  }
+
+  /**
+   * Specifies one or more filters to apply to the scanner.
+   * You should use {@link FilterList} if you wish to chain filters.
+   * @param scanFilters The filters.
+   * @throws IllegalArgumentException if you supply more than 1 filter and they are not of type {@link FilterList}
+   * @since 1.5.0
+   */
+  public void setFilters(List<ScanFilter> scanFilters) {
+    if (scanFilters.size() > 1) {
+      for (ScanFilter scanFilter : scanFilters) {
+        if (scanFilter.getClass() != FilterList.class) {
+          throw new IllegalArgumentException("supplied " + scanFilters.size() +
+              " filters, but they were not wrapped in a FilterList.");
+        }
+      }
+    }
+
+    this.scanFilters = scanFilters;
+  }
 
   /**
    * Sets a regular expression to filter results based on the row key.
@@ -334,29 +378,31 @@ public final class Scanner {
    * scanner.
    */
   public void setKeyRegexp(final String regexp, final Charset charset) {
-    final byte[] regex = Bytes.UTF8(regexp);
-    final byte[] chars = Bytes.UTF8(charset.name());
-    filter = new byte[(1 + 40 + 2 + 5 + 1 + 1 + 1 + 52
-                       + 2 + regex.length + 2 + chars.length)];
-    final ChannelBuffer buf = ChannelBuffers.wrappedBuffer(filter);
-    buf.clear();  // Set the writerIndex to 0.
+    setKeyRegexp(Bytes.UTF8(regexp), charset);
+  }
 
-    buf.writeByte((byte) ROWFILTER.length);                     // 1
-    buf.writeBytes(ROWFILTER);                                  // 40
-    // writeUTF of the comparison operator
-    buf.writeShort(5);                                          // 2
-    buf.writeBytes(EQUAL);                                      // 5
-    // The comparator: a RegexStringComparator
-    buf.writeByte(54);  // Code for WritableByteArrayComparable // 1
-    buf.writeByte(0);   // Code for "this has no code".         // 1
-    buf.writeByte((byte) REGEXSTRINGCOMPARATOR.length);         // 1
-    buf.writeBytes(REGEXSTRINGCOMPARATOR);                      // 52
-    // writeUTF the regexp
-    buf.writeShort(regex.length);                               // 2
-    buf.writeBytes(regex);                                      // regex.length
-    // writeUTF the charset
-    buf.writeShort(chars.length);                               // 2
-    buf.writeBytes(chars);                                      // chars.length
+  /**
+   * Sets a regular expression to filter results based on the row key.
+   * @param regexp The binary regular expression with which to filter the row keys.
+   * Defaults to ISO_8859_1 charset.
+   * see {@link #setKeyRegexp(String)} for more information
+   */
+  public void setKeyRegexp(final byte[] regexp) {
+    setKeyRegexp(regexp, CharsetUtil.ISO_8859_1);
+  }
+
+  /**
+   * Sets a regular expression to filter results based on the row key.
+   * @param regexp The binary regular expression with which to filter the row keys.
+   * Defaults to ISO_8859_1 charset.
+   * see {@link #setKeyRegexp(String)} for more information
+   */
+  public void setKeyRegexp(final byte[] regexp, final Charset charset) {
+    RowFilter rowFilter = new RowFilter(regexp, charset);
+    if (scanFilters == null) {
+      scanFilters = Lists.newArrayList();
+    }
+    scanFilters.add(rowFilter);
   }
 
   /**
@@ -956,8 +1002,10 @@ public final class Scanner {
       size += 4;  // int:  Unused field only used by HBase's client.
       size += 1;  // bool: Whether or not to populate the blockcache.
       size += 1;  // byte: Whether or not to use a filter.
-      if (filter != null) {
-        size += filter.length;
+      if (scanFilters != null && scanFilters.size() > 0) {
+        for (ScanFilter scanFilter : scanFilters) {
+          size += scanFilter.predictSerializedSize();
+        }
       }
       size += 8;  // long: Minimum timestamp.
       size += 8;  // long: Maximum timestamp.
@@ -1005,11 +1053,13 @@ public final class Scanner {
       // Whether or not to populate the blockcache.
       buf.writeByte(populate_blockcache ? 0x01 : 0x00);
 
-      if (filter == null) {
+      if (scanFilters == null || scanFilters.size() == 0) {
         buf.writeByte(0x00); // boolean (false): don't use a filter.
       } else {
         buf.writeByte(0x01); // boolean (true): use a filter.
-        buf.writeBytes(filter);
+        for (ScanFilter scanFilter : scanFilters) {
+          scanFilter.serialize(buf);
+        }
       }
 
       // TimeRange
