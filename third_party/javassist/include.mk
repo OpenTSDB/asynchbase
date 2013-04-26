@@ -1,4 +1,4 @@
-# Copyright (c) 2011  StumbleUpon, Inc.  All rights reserved.
+# Copyright (C) 2011-2012  The Async HBase Authors.  All rights reserved.
 # This file is part of Async HBase.
 # 
 # Redistribution and use in source and binary forms, with or without
@@ -23,9 +23,9 @@
 # ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 # POSSIBILITY OF SUCH DAMAGE.
 
-JAVASSIST_VERSION := 3.15.GA
+JAVASSIST_VERSION := 3.17.1-GA
 JAVASSIST := third_party/javassist/javassist-$(JAVASSIST_VERSION).jar
-JAVASSIST_BASE_URL := $(ASYNCHBASE_THIRD_PARTY_BASE_URL)
+JAVASSIST_BASE_URL := http://search.maven.org/remotecontent?filepath=org/javassist/javassist/$(JAVASSIST_VERSION)
 
 $(JAVASSIST): $(JAVASSIST).md5
 	set dummy "$(JAVASSIST_BASE_URL)" "$(JAVASSIST)"; shift; $(FETCH_DEPENDENCY)

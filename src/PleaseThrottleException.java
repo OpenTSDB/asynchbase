@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2010  StumbleUpon, Inc.  All rights reserved.
+ * Copyright (C) 2010-2012  The Async HBase Authors.  All rights reserved.
  * This file is part of Async HBase.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -25,6 +25,8 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 package org.hbase.async;
+
+import com.stumbleupon.async.Deferred;
 
 /**
  * This exception notifies the application to throttle its use of HBase.
@@ -76,18 +78,24 @@ implements HasFailedRpcException {
   /** The RPC that was failed with this exception.  */
   private final HBaseRpc rpc;
 
+  /** A deferred one can wait on before retrying the failed RPC.  */
+  private final Deferred deferred;
+
   /**
    * Constructor.
    * @param msg A message explaining why the application has to throttle.
    * @param cause The exception that requires the application to throttle
    * itself (can be {@code null}).
    * @param rpc The RPC that was made to fail with this exception.
+   * @param deferred A deferred one can wait on before retrying the failed RPC.
    */
   PleaseThrottleException(final String msg,
                           final HBaseException cause,
-                          final HBaseRpc rpc) {
+                          final HBaseRpc rpc,
+                          final Deferred deferred) {
     super(msg, cause);
     this.rpc = rpc;
+    this.deferred = deferred;
   }
 
   /**
@@ -95,6 +103,14 @@ implements HasFailedRpcException {
    */
   public HBaseRpc getFailedRpc() {
     return rpc;
+  }
+
+  /**
+   * Returns a deferred one can wait on before retrying the failed RPC.
+   * @since 1.3
+   */
+  public Deferred getDeferred() {
+    return deferred;
   }
 
   private static final long serialVersionUID = 1286782542;

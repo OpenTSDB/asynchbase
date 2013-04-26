@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2010  StumbleUpon, Inc.  All rights reserved.
+ * Copyright (C) 2010-2012  The Async HBase Authors.  All rights reserved.
  * This file is part of Async HBase.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -127,10 +127,16 @@ public final class Scanner {
   private byte[] stop_key = EMPTY_ARRAY;
 
   private byte[] family;     // TODO(tsuna): Handle multiple families?
-  private byte[] qualifier;  // TODO(tsuna): Handle multiple qualifiers?
+  private byte[][] qualifiers;
 
   /** Pre-serialized filter to apply on the scanner.  */
   private byte[] filter;
+
+  /** Minimum {@link KeyValue} timestamp to scan.  */
+  private long min_timestamp = 0;
+
+  /** Maximum {@link KeyValue} timestamp to scan.  */
+  private long max_timestamp = Long.MAX_VALUE;
 
   /** @see #setServerBlockCache  */
   private boolean populate_blockcache = true;
@@ -146,6 +152,11 @@ public final class Scanner {
    * @see #setMaxNumKeyValues
    */
   private int max_num_kvs = DEFAULT_MAX_NUM_KVS;
+
+  /**
+   * How many versions of each cell to retrieve.
+   */
+  private int versions = 1;
 
   /**
    * The region currently being scanned.
@@ -173,16 +184,6 @@ public final class Scanner {
    * its argument, the KeyValue will be included in the results.
    */
   Callback<KeyValue,KeyValue> filteringCallback;
-
-  /**
-   * The minimum timestamp for this scan.
-   */
-  long min_timestamp;
-
-  /**
-   * The minimum timestamp for this scan.
-   */
-  long max_timestamp = Long.MAX_VALUE;
 
   /**
    * Constructor.
@@ -249,21 +250,6 @@ public final class Scanner {
   }
 
   /**
-   * Specifies a time range for which to scan.
-   * @throws IllegalArgumentException if the argument is zero or negative.
-   * @throws IllegalStateException if scanning already started.
-   */
-  public void setTimeRange(long min_timestamp, long max_timestamp) {
-    if (min_timestamp < 0 || max_timestamp < 0 || min_timestamp > max_timestamp) {
-        throw new IllegalArgumentException("invalid time range");
-    }
-    checkScanningNotStarted();
-    this.min_timestamp = min_timestamp;
-    this.max_timestamp = max_timestamp;
-  }
-
-
-  /**
    * Specifies a particular column family to scan.
    * @param family The column family.
    * <strong>This byte array will NOT be copied.</strong>
@@ -282,6 +268,8 @@ public final class Scanner {
 
   /**
    * Specifies a particular column qualifier to scan.
+   * <p>
+   * Note that specifying a qualifier without a family has no effect.
    * @param qualifier The column qualifier.
    * <strong>This byte array will NOT be copied.</strong>
    * @throws IllegalStateException if scanning already started.
@@ -289,13 +277,31 @@ public final class Scanner {
   public void setQualifier(final byte[] qualifier) {
     KeyValue.checkQualifier(qualifier);
     checkScanningNotStarted();
-    this.qualifier = qualifier;
+    this.qualifiers = new byte[][] { qualifier };
   }
 
   /** Specifies a particular column qualifier to scan.  */
   public void setQualifier(final String qualifier) {
     setQualifier(qualifier.getBytes());
   }
+
+  /**
+   * Specifies one or more column qualifiers to scan.
+   * <p>
+   * Note that specifying qualifiers without a family has no effect.
+   * @param qualifiers The column qualifiers.
+   * <strong>These byte arrays will NOT be copied.</strong>
+   * @throws IllegalStateException if scanning already started.
+   * @since 1.4
+   */
+  public void setQualifiers(final byte[][] qualifiers) {
+    checkScanningNotStarted();
+    for (final byte[] qualifier : qualifiers) {
+      KeyValue.checkQualifier(qualifier);
+    }
+    this.qualifiers = qualifiers;
+  }
+
 
   /**
    * Sets a regular expression to filter results based on the row key.
@@ -348,7 +354,7 @@ public final class Scanner {
     buf.writeShort(5);                                          // 2
     buf.writeBytes(EQUAL);                                      // 5
     // The comparator: a RegexStringComparator
-    buf.writeByte(53);  // Code for WritableByteArrayComparable // 1
+    buf.writeByte(54);  // Code for WritableByteArrayComparable // 1
     buf.writeByte(0);   // Code for "this has no code".         // 1
     buf.writeByte((byte) REGEXSTRINGCOMPARATOR.length);         // 1
     buf.writeBytes(REGEXSTRINGCOMPARATOR);                      // 52
@@ -445,6 +451,130 @@ public final class Scanner {
   }
 
   /**
+   * Sets the maximum number of versions to return for each cell scanned.
+   * <p>
+   * By default a scanner will only return the most recent version of
+   * each cell.  If you want to get all possible versions available,
+   * pass {@link Integer#MAX_VALUE} in argument.
+   * @param versions A strictly positive number of versions to return.
+   * @since 1.4
+   * @throws IllegalStateException if scanning already started.
+   * @throws IllegalArgumentException if {@code versions <= 0}
+   */
+  public void setMaxVersions(final int versions) {
+    if (versions <= 0) {
+      throw new IllegalArgumentException("Need a strictly positive number: "
+                                         + versions);
+    }
+    checkScanningNotStarted();
+    this.versions = versions;
+  }
+
+  /**
+   * Returns the maximum number of versions to return for each cell scanned.
+   * @return A strictly positive integer.
+   * @since 1.4
+   */
+  public int getMaxVersions() {
+    return versions;
+  }
+
+  /**
+   * Sets the minimum timestamp to scan (inclusive).
+   * <p>
+   * {@link KeyValue}s that have a timestamp strictly less than this one
+   * will not be returned by the scanner.  HBase has internal optimizations to
+   * avoid loading in memory data filtered out in some cases.
+   * @param timestamp The minimum timestamp to scan (inclusive).
+   * @throws IllegalArgumentException if {@code timestamp < 0}.
+   * @throws IllegalArgumentException if {@code timestamp > getMaxTimestamp()}.
+   * @see #setTimeRange
+   * @since 1.3
+   */
+  public void setMinTimestamp(final long timestamp) {
+    if (timestamp < 0) {
+      throw new IllegalArgumentException("Negative timestamp: " + timestamp);
+    } else if (timestamp > max_timestamp) {
+      throw new IllegalArgumentException("New minimum timestamp (" + timestamp
+                                         + ") is greater than the maximum"
+                                         + " timestamp: " + max_timestamp);
+    }
+    checkScanningNotStarted();
+    min_timestamp = timestamp;
+  }
+
+  /**
+   * Returns the minimum timestamp to scan (inclusive).
+   * @return A positive integer.
+   * @since 1.3
+   */
+  public long getMinTimestamp() {
+    return min_timestamp;
+  }
+
+  /**
+   * Sets the maximum timestamp to scan (exclusive).
+   * <p>
+   * {@link KeyValue}s that have a timestamp greater than or equal to this one
+   * will not be returned by the scanner.  HBase has internal optimizations to
+   * avoid loading in memory data filtered out in some cases.
+   * @param timestamp The maximum timestamp to scan (exclusive).
+   * @throws IllegalArgumentException if {@code timestamp < 0}.
+   * @throws IllegalArgumentException if {@code timestamp < getMinTimestamp()}.
+   * @see #setTimeRange
+   * @since 1.3
+   */
+  public void setMaxTimestamp(final long timestamp) {
+    if (timestamp < 0) {
+      throw new IllegalArgumentException("Negative timestamp: " + timestamp);
+    } else if (timestamp < min_timestamp) {
+      throw new IllegalArgumentException("New maximum timestamp (" + timestamp
+                                         + ") is greater than the minimum"
+                                         + " timestamp: " + min_timestamp);
+    }
+    checkScanningNotStarted();
+    max_timestamp = timestamp;
+  }
+
+  /**
+   * Returns the maximum timestamp to scan (exclusive).
+   * @return A positive integer.
+   * @since 1.3
+   */
+  public long getMaxTimestamp() {
+    return max_timestamp;
+  }
+
+  /**
+   * Sets the time range to scan.
+   * <p>
+   * {@link KeyValue}s that have a timestamp that do not fall in the range
+   * {@code [min_timestamp; max_timestamp[} will not be returned by the
+   * scanner.  HBase has internal optimizations to avoid loading in memory
+   * data filtered out in some cases.
+   * @param min_timestamp The minimum timestamp to scan (inclusive).
+   * @param max_timestamp The maximum timestamp to scan (exclusive).
+   * @throws IllegalArgumentException if {@code min_timestamp < 0}
+   * @throws IllegalArgumentException if {@code max_timestamp < 0}
+   * @throws IllegalArgumentException if {@code min_timestamp > max_timestamp}
+   * @since 1.3
+   */
+  public void setTimeRange(final long min_timestamp, final long max_timestamp) {
+    if (min_timestamp > max_timestamp) {
+      throw new IllegalArgumentException("New minimum timestamp (" + min_timestamp
+                                         + ") is greater than the new maximum"
+                                         + " timestamp: " + max_timestamp);
+    } else if (min_timestamp < 0) {
+      throw new IllegalArgumentException("Negative minimum timestamp: "
+                                         + min_timestamp);
+    }
+    checkScanningNotStarted();
+    // We now have the guarantee that max_timestamp >= 0, no need to check it.
+    this.min_timestamp = min_timestamp;
+    this.max_timestamp = max_timestamp;
+  }
+
+  /**
    * Scans a number of rows.  Calling this method is equivalent to:
    * <pre>
    *   this.{@link #setMaxNumRows setMaxNumRows}(nrows);
@@ -525,7 +655,8 @@ public final class Scanner {
               || (stop_key != EMPTY_ARRAY                              // (2)
                   && Bytes.memcmp(stop_key, region_stop_key) <= 0)) {  // (3)
             get_next_rows_request = null;        // free();
-            family = qualifier = null;           // free();
+            family = null;                       // free();
+            qualifiers = null;                   // free();
             start_key = stop_key = EMPTY_ARRAY;  // free() but mustn't be null.
             return close()  // Auto-close the scanner.
               .addCallback(new Callback<ArrayList<ArrayList<KeyValue>>, Object>() {
@@ -688,10 +819,18 @@ public final class Scanner {
   public String toString() {
     final String region = this.region == null ? "null"
       : this.region == DONE ? "none" : this.region.toString();
+    int qual_length = 0;
+    if (qualifiers == null) {
+      qual_length = 4;
+    } else {
+      for (byte[] qualifier : qualifiers) {
+        qual_length += qualifier.length + 2;
+      }
+    }
     final StringBuilder buf = new StringBuilder(14 + 1 + table.length + 1 + 12
       + 1 + start_key.length + 1 + 1 + stop_key.length + 1
       + 9 + 1 + (family == null ? 4 : family.length) + 1
-      + 12 + 1 + (qualifier == null ? 4 : qualifier.length) + 1
+      + 13 + 1 + qual_length + 1
       + 22 + 5 + 15 + 5 + 14 + 6
       + 14 + 1 + region.length() + 1
       + 13 + 18 + 1);
@@ -703,8 +842,8 @@ public final class Scanner {
     Bytes.pretty(buf, stop_key);
     buf.append(", family=");
     Bytes.pretty(buf, family);
-    buf.append(", qualifier=");
-    Bytes.pretty(buf, qualifier);
+    buf.append(", qualifiers=");
+    Bytes.pretty(buf, qualifiers);
     buf.append(", populate_blockcache=").append(populate_blockcache)
       .append(", max_num_rows=").append(max_num_rows)
       .append(", max_num_kvs=").append(max_num_kvs)
@@ -835,17 +974,20 @@ public final class Scanner {
         size += 1;  // vint: Family length (guaranteed on 1 byte).
         size += family.length;  // The family.
         size += 4;  // int:  How many qualifiers follow?
-        if (qualifier != null) {
-          size += 3;  // vint: Qualifier length.
-          size += qualifier.length;  // The qualifier.
+        if (qualifiers != null) {
+          for (byte[] qualifier : qualifiers) {
+            size += 3;                 // vint: Qualifier length.
+            size += qualifier.length;  // The qualifier.
+          }
         }
       }
       return size;
     }
 
     /** Serializes this request.  */
-    ChannelBuffer serialize(final byte unused_server_version) {
-      final ChannelBuffer buf = newBuffer(predictSerializedSize());
+    ChannelBuffer serialize(final byte server_version) {
+      final ChannelBuffer buf = newBuffer(server_version,
+                                          predictSerializedSize());
       buf.writeInt(2);  // Number of parameters.
 
       // 1st param: byte array containing region name
@@ -857,7 +999,7 @@ public final class Scanner {
       buf.writeByte(1);    // Manual versioning of Scan.
       writeByteArray(buf, start_key);
       writeByteArray(buf, stop_key);
-      buf.writeInt(1);     // Max number of versions to return.
+      buf.writeInt(versions);  // Max number of versions to return.
 
       // Max number of KeyValues to get per RPC.
       buf.writeInt(max_num_kvs);
@@ -878,11 +1020,11 @@ public final class Scanner {
       }
 
       // TimeRange
-      buf.writeLong(min_timestamp);   // Minimum timestamp.
-      buf.writeLong(max_timestamp);   // Maximum timestamp.
-      buf.writeByte(min_timestamp != 0 || max_timestamp != Long.MAX_VALUE ? 0x00 : 0x01);            // Boolean: "all time".
-      // The "all time" boolean indicates whether or not this time range covers
-      // all possible times.  Not sure why it's part of the serialized RPC...
+      buf.writeLong(min_timestamp);  // Minimum timestamp.
+      buf.writeLong(max_timestamp);  // Maximum timestamp.
+      // Boolean: "all time".
+      buf.writeByte(min_timestamp != 0 || max_timestamp != Long.MAX_VALUE
+                    ? 0x00 : 0x01);
 
       // Families.
       buf.writeInt(family != null ? 1 : 0);  // Number of families that follow.
@@ -890,9 +1032,12 @@ public final class Scanner {
       if (family != null) {
         // Each family is then written like so:
         writeByteArray(buf, family);  // Column family name.
-        buf.writeInt(qualifier == null ? 0 : 1);  // How many qualifiers do we want?
-        if (qualifier != null) {
-          writeByteArray(buf, qualifier);  // Column qualifier name.
+        // How many qualifiers do we want?
+        buf.writeInt(qualifiers == null ? 0 : qualifiers.length);
+        if (qualifiers != null) {
+          for (byte[] qualifier : qualifiers) {
+            writeByteArray(buf, qualifier);  // Column qualifier name.
+          }
         }
       }
 
@@ -919,9 +1064,10 @@ public final class Scanner {
       if (max_timestamp != Long.MAX_VALUE) {
         buf.append(", max_timestamp=").append(max_timestamp);
       }
-      return super.toStringWithQualifier("OpenScannerRequest",
-                                         family, qualifier,
-                                         buf.toString());
+      return super.toStringWithQualifiers("OpenScannerRequest",
+                                          family, qualifiers,
+                                          null,
+                                          buf.toString());
     }
 
   }
@@ -939,8 +1085,9 @@ public final class Scanner {
     }
 
     /** Serializes this request.  */
-    ChannelBuffer serialize(final byte unused_server_version) {
-      final ChannelBuffer buf = newBuffer(4 + 1 + 8 + 1 + 4);
+    ChannelBuffer serialize(final byte server_version) {
+      final ChannelBuffer buf = newBuffer(server_version,
+                                          4 + 1 + 8 + 1 + 4);
       buf.writeInt(2);  // Number of parameters.
       writeHBaseLong(buf, scanner_id);
       writeHBaseInt(buf, max_num_rows);
@@ -971,8 +1118,9 @@ public final class Scanner {
     }
 
     /** Serializes this request.  */
-    ChannelBuffer serialize(final byte unused_server_version) {
-      final ChannelBuffer buf = newBuffer(4 + 1 + 8);
+    ChannelBuffer serialize(final byte server_version) {
+      final ChannelBuffer buf = newBuffer(server_version,
+                                          4 + 1 + 8);
       buf.writeInt(1);  // Number of parameters.
       writeHBaseLong(buf, scanner_id);
       return buf;

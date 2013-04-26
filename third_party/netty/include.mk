@@ -1,4 +1,4 @@
-# Copyright (c) 2011  StumbleUpon, Inc.  All rights reserved.
+# Copyright (C) 2011-2012  The Async HBase Authors.  All rights reserved.
 # This file is part of Async HBase.
 #
 # Redistribution and use in source and binary forms, with or without
@@ -23,8 +23,8 @@
 # ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 # POSSIBILITY OF SUCH DAMAGE.
 
-NETTY_MAJOR_VERSION = 3.2
-NETTY_VERSION := 3.2.3.Final
+NETTY_MAJOR_VERSION = 3.6
+NETTY_VERSION := 3.6.2.Final
 NETTY := third_party/netty/netty-$(NETTY_VERSION).jar
 NETTY_BASE_URL := $(ASYNCHBASE_THIRD_PARTY_BASE_URL)
 

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2010  StumbleUpon, Inc.  All rights reserved.
+ * Copyright (C) 2010-2012  The Async HBase Authors.  All rights reserved.
  * This file is part of Async HBase.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -30,7 +30,6 @@ import java.net.SocketAddress;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
-import java.util.NoSuchElementException;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.Semaphore;
@@ -40,22 +39,17 @@ import static java.util.concurrent.TimeUnit.MILLISECONDS;
 import org.jboss.netty.buffer.ChannelBuffer;
 import org.jboss.netty.buffer.ChannelBuffers;
 import org.jboss.netty.channel.Channel;
-import org.jboss.netty.channel.ChannelDownstreamHandler;
 import org.jboss.netty.channel.ChannelEvent;
 import org.jboss.netty.channel.ChannelFuture;
 import org.jboss.netty.channel.ChannelFutureListener;
 import org.jboss.netty.channel.ChannelHandlerContext;
-import org.jboss.netty.channel.ChannelPipeline;
 import org.jboss.netty.channel.ChannelStateEvent;
 import org.jboss.netty.channel.Channels;
-import org.jboss.netty.channel.DownstreamMessageEvent;
 import org.jboss.netty.channel.ExceptionEvent;
-import org.jboss.netty.channel.MessageEvent;
 import org.jboss.netty.handler.codec.replay.ReplayingDecoder;
 import org.jboss.netty.handler.codec.replay.VoidEnum;
 import org.jboss.netty.util.Timeout;
 import org.jboss.netty.util.TimerTask;
-import static org.jboss.netty.channel.ChannelHandler.Sharable;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -102,7 +96,18 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
                                new UnknownScannerException(null, null));
     REMOTE_EXCEPTION_TYPES.put(UnknownRowLockException.REMOTE_CLASS,
                                new UnknownRowLockException(null, null));
+    REMOTE_EXCEPTION_TYPES.put(VersionMismatchException.REMOTE_CLASS,
+                               new VersionMismatchException(null, null));
   }
+
+  /** We don't know the RPC protocol version of the server yet.  */
+  private static final byte SERVER_VERSION_UNKNWON = 0;
+
+  /** Protocol version we pretend to use for HBase 0.90 and before.  */
+  static final byte SERVER_VERSION_090_AND_BEFORE = 24;
+
+  /** We know at least that the server uses 0.92 or above.  */
+  static final byte SERVER_VERSION_092_OR_ABOVE = 29;
 
   /** The HBase client we belong to.  */
   private final HBaseClient hbase_client;
@@ -111,7 +116,9 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
    * The channel we're connected to.
    * This will be {@code null} while we're not connected to the RegionServer.
    * This attribute is volatile because {@link #shutdown} may access it from a
-   * different thread.
+   * different thread, and because while we connect various user threads will
+   * test whether it's {@code null}.  Once we're connected and we know what
+   * protocol version the server speaks, we'll set this reference.
    */
   private volatile Channel chan;
 
@@ -127,27 +134,26 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
 
   /**
    * What RPC protocol version is this RegionServer using?.
-   * -1 means unknown.  No synchronization is typically used to read / write
-   * this value, as it's typically accessed after a volatile read or updated
-   * before a volatile write on {@link #deferred_server_version}.
+   * No synchronization is typically used to read this value.
+   * It is written only once by {@link ProtocolVersionCB}.
    */
-  private byte server_version = -1;
+  private byte server_version = SERVER_VERSION_UNKNWON;
 
   /**
-   * If we're in the process of looking up the server version...
-   * ... This will be non-null.
-   */
-  private volatile Deferred<Long> deferred_server_version;
-
-  /**
-   * Multi-put request in which we accumulate buffered edits.
+   * RPCs being batched together for efficiency.
    * Manipulating this reference requires synchronizing on `this'.
    */
-  private MultiPutRequest edit_buffer;
+  private MultiAction batched_rpcs;
 
   /**
    * RPCs we've been asked to serve while disconnected from the RegionServer.
    * This reference is lazily created.  Synchronize on `this' before using it.
+   *
+   * Invariants:
+   *   If pending_rpcs != null      =>  !pending_rpcs.isEmpty()
+   *   If pending_rpcs != null      =>  rpcs_inflight.isEmpty()
+   *   If pending_rpcs == null      =>  batched_rpcs == null
+   *   If !rpcs_inflight.isEmpty()  =>  pending_rpcs == null
    *
    * TODO(tsuna): Properly manage this buffer.  Right now it's unbounded, we
    * don't auto-reconnect anyway, etc.
@@ -224,23 +230,23 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
     return !dead;
   }
 
-  /** Periodically flushes buffered edits.  */
+  /** Periodically flushes buffered RPCs.  */
   private void periodicFlush() {
     if (chan != null || dead) {
-      // If we're dead, we want to flush our edits (this will cause them to
+      // If we're dead, we want to flush our RPCs (this will cause them to
       // get failed / retried).
       if (LOG.isDebugEnabled()) {
-        LOG.debug("Periodic flush timer: flushing edits for " + this);
+        LOG.debug("Periodic flush timer: flushing RPCs for " + this);
       }
-      // Copy the edits to local variables and null out the buffers.
-      MultiPutRequest edit_buffer;
+      // Copy the batch to a local variable and null it out.
+      final MultiAction batched_rpcs;
       synchronized (this) {
-        edit_buffer = this.edit_buffer;
-        this.edit_buffer = null;
+        batched_rpcs = this.batched_rpcs;
+        this.batched_rpcs = null;
       }
-      if (edit_buffer != null && edit_buffer.size() != 0) {
-        final Deferred<Object> d = edit_buffer.getDeferred();
-        sendRpc(edit_buffer);
+      if (batched_rpcs != null && batched_rpcs.size() != 0) {
+        final Deferred<Object> d = batched_rpcs.getDeferred();
+        sendRpc(batched_rpcs);
       }
     }
   }
@@ -264,7 +270,7 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
       if ((adj & 0x10) == 0x10) {  // if some arbitrary bit is set...
         adj = (short) -adj;        // ... use a negative adjustment instead.
       }
-      hbase_client.timer.newTimeout(flush_timer, interval + adj, MILLISECONDS);
+      hbase_client.newTimeout(flush_timer, interval + adj);
     }
   }
 
@@ -274,19 +280,91 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
    * @return A {@link Deferred}, whose callback chain will be invoked when
    * everything that was buffered at the time of the call has been flushed.
    */
-  public Deferred<Object> flush() {
-    // Copy the edits to local variables and null out the buffers.
-    MultiPutRequest edit_buffer;
+  Deferred<Object> flush() {
+    // Copy the batch to a local variable and null it out.
+    final MultiAction batched_rpcs;
+    final ArrayList<Deferred<Object>> pending;
     synchronized (this) {
-      edit_buffer = this.edit_buffer;
-      this.edit_buffer = null;
+      batched_rpcs = this.batched_rpcs;
+      this.batched_rpcs = null;
+      pending = getPendingRpcs();
     }
-    if (edit_buffer == null || edit_buffer.size() == 0) {
+
+    if (pending != null && !pending.isEmpty()) {
+      @SuppressWarnings("unchecked")
+      final Deferred<Object> wait = (Deferred) Deferred.group(pending);
+      // We can return here because if we found pending RPCs it's guaranteed
+      // that batched_rpcs was null.
+      return wait;
+    }
+
+    if (batched_rpcs == null || batched_rpcs.size() == 0) {
       return Deferred.fromResult(null);
     }
-    final Deferred<Object> d = edit_buffer.getDeferred();
-    sendRpc(edit_buffer);
+    final Deferred<Object> d = batched_rpcs.getDeferred();
+    sendRpc(batched_rpcs);
     return d;
+  }
+
+  /**
+   * Introduces a sync point for all outstanding RPCs.
+   * <p>
+   * All RPCs known to this {@code RegionClient}, whether they are buffered,
+   * in flight, pending, etc., will get grouped together in the Deferred
+   * returned, thereby introducing a sync point past which we can guarantee
+   * that all RPCs have completed (successfully or not).  This is similar
+   * to the {@code sync(2)} Linux system call.
+   * @return A {@link Deferred}, whose callback chain will be invoked when
+   * everything that was buffered at the time of the call has been flushed.
+   */
+  Deferred<Object> sync() {
+    flush();
+
+    ArrayList<Deferred<Object>> rpcs = getInflightRpcs();  // Never null.
+    // There are only two cases to handle here thanks to the invariant that
+    // says that if we inflight isn't empty, then pending is null.
+    if (rpcs.isEmpty()) {
+      rpcs = getPendingRpcs();
+    }
+
+    if (rpcs == null) {
+      return Deferred.fromResult(null);
+    }
+    @SuppressWarnings("unchecked")
+    final Deferred<Object> sync = (Deferred) Deferred.group(rpcs);
+    return sync;
+  }
+
+  /**
+   * Returns a possibly empty list of all the RPCs that are in-flight.
+   */
+  private ArrayList<Deferred<Object>> getInflightRpcs() {
+    final ArrayList<Deferred<Object>> inflight =
+      new ArrayList<Deferred<Object>>();
+    for (final HBaseRpc rpc : rpcs_inflight.values()) {
+      inflight.add(rpc.getDeferred());
+    }
+    return inflight;
+  }
+
+  /**
+   * Returns a possibly {@code null} list of all RPCs that are pending.
+   * <p>
+   * Pending RPCs are those that are scheduled to be sent as soon as we
+   * are connected to the RegionServer and have done version negotiation.
+   */
+  private ArrayList<Deferred<Object>> getPendingRpcs() {
+    synchronized (this) {
+      if (pending_rpcs != null) {
+        final ArrayList<Deferred<Object>> pending =
+          new ArrayList<Deferred<Object>>(pending_rpcs.size());
+        for (final HBaseRpc rpc : pending_rpcs) {
+          pending.add(rpc.getDeferred());
+        }
+        return pending;
+      }
+    }
+    return null;
   }
 
   /**
@@ -309,42 +387,29 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
     // First, check whether we have RPCs in flight.  If we do, we need to wait
     // until they complete.
     {
-      final ArrayList<Deferred<Object>> inflight =
-        new ArrayList<Deferred<Object>>();
-      for (final HBaseRpc rpc : rpcs_inflight.values()) {
-        inflight.add(rpc.getDeferred());
-      }
+      final ArrayList<Deferred<Object>> inflight = getInflightRpcs();
       final int size = inflight.size();
       if (size > 0) {
         return Deferred.group(inflight)
           .addCallbackDeferring(new RetryShutdown<ArrayList<Object>>(size));
       }
-      // Then check whether have buffered edits.  If we do, flush them.
-      // Copy the edits to local variables and null out the buffers.
-      MultiPutRequest edit_buffer;
+      // Then check whether have batched RPCs.  If we do, flush them.
+      // Copy the batch to a local variable and null it out.
+      final MultiAction batched_rpcs;
       synchronized (this) {
-        edit_buffer = this.edit_buffer;
-        this.edit_buffer = null;
+        batched_rpcs = this.batched_rpcs;
+        this.batched_rpcs = null;
       }
-      if (edit_buffer != null && edit_buffer.size() != 0) {
-        final Deferred<Object> d = edit_buffer.getDeferred();
-        sendRpc(edit_buffer);
+      if (batched_rpcs != null && batched_rpcs.size() != 0) {
+        final Deferred<Object> d = batched_rpcs.getDeferred();
+        sendRpc(batched_rpcs);
         return d.addCallbackDeferring(new RetryShutdown<Object>(1));
       }
     }
 
-    // The main reason we get pending rpcs here if we call shutdown before the
-    // channel has connected. However, another way happens when the channel has
-    // already been connected and the pending_rpcs sent, but then a few more
-    // requests came in while processing the original batch.
-    synchronized (this) {
-      if (pending_rpcs != null && !pending_rpcs.isEmpty()) {
-        final ArrayList<Deferred<Object>> pending =
-          new ArrayList<Deferred<Object>>(pending_rpcs.size());
-        LOG.info(this + ": " + pending_rpcs.size() + " pending rpcs in shutdown: " + pending_rpcs);
-        for (final HBaseRpc rpc : pending_rpcs) {
-          pending.add(rpc.getDeferred());
-        }
+    {
+      final ArrayList<Deferred<Object>> pending = getPendingRpcs();
+      if (pending != null) {
         return Deferred.group(pending).addCallbackDeferring(
           new RetryShutdown<ArrayList<Object>>(pending.size()));
       }
@@ -400,95 +465,87 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
     'V', 'e', 'r', 's', 'i', 'o', 'n'
   };
 
-  final static class GetProtocolVersionRequest extends HBaseRpc {
+  private final static class GetProtocolVersionRequest extends HBaseRpc {
 
     GetProtocolVersionRequest() {
       super(GET_PROTOCOL_VERSION);
     }
 
-    ChannelBuffer serialize(final byte unused_server_version) {
+    ChannelBuffer serialize(final byte server_version) {
     /** Pre-serialized form for this RPC, which is always the same.  */
       // num param + type 1 + string length + string + type 2 + long
-      final ChannelBuffer buf = newBuffer(4 + 1 + 1 + 44 + 1 + 8);
+      final ChannelBuffer buf = newBuffer(server_version,
+                                          4 + 1 + 1 + 44 + 1 + 8);
       buf.writeInt(2);  // Number of parameters.
       // 1st param.
       writeHBaseString(buf, "org.apache.hadoop.hbase.ipc.HRegionInterface");
-      writeHBaseLong(buf, 24);  // 2nd param.
+      // 2nd param: what protocol version to speak.  If we don't know what the
+      // server expects, try an old version first (0.90 and before).
+      // Otherwise tell the server we speak the same version as it does.
+      writeHBaseLong(buf, server_version == SERVER_VERSION_UNKNWON
+                     ?  SERVER_VERSION_090_AND_BEFORE : server_version);
       return buf;
     }
   };
-
-  /**
-   * Returns a new {@link GetProtocolVersionRequest} ready to go.
-   * The RPC returned already has the right callback set.
-   */
-  @SuppressWarnings("unchecked")
-  private GetProtocolVersionRequest getProtocolVersionRequest() {
-    final GetProtocolVersionRequest rpc = new GetProtocolVersionRequest();
-    final Deferred/*<Long>*/ version = rpc.getDeferred();
-    deferred_server_version = version;  // Volatile write.
-    version.addCallback(got_protocol_version);
-    return rpc;
-  }
-
-  /**
-   * Asks the server which RPC protocol version it's running.
-   * @return a Deferred {@link Long}.
-   */
-  @SuppressWarnings("unchecked")
-  public Deferred<Long> getProtocolVersion() {
-    Deferred<Long> version = deferred_server_version;  // Volatile read.
-    if (server_version != -1) {
-      return Deferred.fromResult((long) server_version);
-    }
-    // Non-atomic check-then-update is OK here.  In case of a race and a
-    // thread overwrites this reference by creating another lookup, we just
-    // pay for an unnecessary network round-trip, not a big deal.
-    if (version != null) {
-      return version;
-    }
-
-    final GetProtocolVersionRequest rpc = getProtocolVersionRequest();
-    sendRpc(rpc);
-    return (Deferred) rpc.getDeferred();
-  }
 
   void setProtocolVersion(byte server_version)
   {
     this.server_version = server_version;
   }
 
-  /** Singleton callback to handle responses of getProtocolVersion RPCs.  */
-  private final Callback<Long, Object> got_protocol_version =
-    new Callback<Long, Object>() {
-      public Long call(final Object response) {
-        if (!(response instanceof Long)) {
-          throw new InvalidResponseException(Long.class, response);
+  /** Callback to handle responses of getProtocolVersion RPCs.  */
+  private final class ProtocolVersionCB implements Callback<Long, Object> {
+
+    /** Channel connected to the server for which we're getting the version.  */
+    private final Channel chan;
+
+    public ProtocolVersionCB(final Channel chan) {
+      this.chan = chan;
+    }
+
+    public Long call(final Object response) throws Exception {
+    if (response instanceof VersionMismatchException) {
+       if (server_version == SERVER_VERSION_UNKNWON) {
+          // If we get here, it's because we tried to handshake with a server
+          // running HBase 0.92 or above, but using a pre-0.92 handshake.  So
+          // we know we have to handshake differently.
+          server_version = SERVER_VERSION_092_OR_ABOVE;
+          hbase_client.server_version = server_version;
+          helloRpc(chan, header092());
+        } else {
+          // We get here if the server refused our 0.92-style handshake.  This
+          // must be a future version of HBase that broke compatibility again,
+          // and we don't know how to talk to it, so give up here.
+          throw (VersionMismatchException) response;
         }
-        final Long version = (Long) response;
-        final long v = version;
-        if (v < 0 || v > Byte.MAX_VALUE) {
-          throw new InvalidResponseException("getProtocolVersion returned a "
-            + (v < 0 ? "negative" : "too large") + " value", version);
+        return null;
+      } else if (!(response instanceof Long)) {
+        if (response instanceof Exception) {  // If it's already an exception,
+          throw (Exception) response;         // just re-throw it as-is.
         }
-        final byte prev_version = server_version;
-        hbase_client.server_version = server_version = (byte) v;
-        deferred_server_version = null;  // Volatile write.
-        if (prev_version == -1) {   // We're 1st to get the version.
-          if (LOG.isDebugEnabled()) {
-            LOG.debug(chan + " uses RPC protocol version " + server_version);
-          }
-        } else if (prev_version != server_version) {
-          LOG.error("WTF?  We previously found that " + chan + " uses RPC"
-                    + " protocol version " + prev_version + " but now the "
-                    + " server claims to be using version " + server_version);
-        }
-        return (Long) response;
+        throw new InvalidResponseException(Long.class, response);
       }
-      public String toString() {
-        return "type getProtocolVersion response";
+      final Long version = (Long) response;
+      final long v = version;
+      if (v <= 0 || v > Byte.MAX_VALUE) {
+        throw new InvalidResponseException("getProtocolVersion returned a "
+          + (v <= 0 ? "negative" : "too large") + " value", version);
       }
-    };
+      server_version = (byte) v;
+      hbase_client.server_version = server_version;
+
+      // The following line will make this client no longer queue incoming
+      // RPCs, as we're now ready to communicate with the server.
+      RegionClient.this.chan = this.chan;  // Volatile write.
+      sendQueuedRpcs();
+      return version;
+    }
+
+    public String toString() {
+      return "handle getProtocolVersion response on " + chan;
+    }
+
+  }
 
   private static final byte[] GET_CLOSEST_ROW_BEFORE = new byte[] {
     'g', 'e', 't',
@@ -556,14 +613,15 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
       }
 
       @Override
-      ChannelBuffer serialize(final byte unused_server_version) {
+      ChannelBuffer serialize(final byte server_version) {
         // region.length and row.length will use at most a 3-byte VLong.
         // This is because VLong wastes 1 byte of meta-data + 2 bytes of
         // payload.  HBase's own KeyValue code uses a short to store the row
         // length.  Finally, family.length cannot be on more than 1 byte,
         // HBase's own KeyValue code uses a byte to store the family length.
         final byte[] region_name = region.name();
-        final ChannelBuffer buf = newBuffer(4      // num param
+        final ChannelBuffer buf = newBuffer(server_version,
+          + 4                                      // num param
           + 1 + 2 + region_name.length             // 3 times 1 byte for the
           + 1 + 4 + row.length                     //   parm type + VLong
           + 1 + 1 + family.length);                //             + array
@@ -612,34 +670,34 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
    * elapsed yet.
    * @param request An edit to sent to HBase.
    */
-  private void bufferEdit(final PutRequest request) {
-    MultiPutRequest multiput;
+  private void bufferEdit(final BatchableRpc request) {
+    MultiAction batch;
     boolean schedule_flush = false;
 
     synchronized (this) {
-      if (edit_buffer == null) {
-        edit_buffer = new MultiPutRequest();
-        addMultiPutCallbacks(edit_buffer);
+      if (batched_rpcs == null) {
+        batched_rpcs = new MultiAction(server_version);
+        addMultiActionCallbacks(batched_rpcs);
         schedule_flush = true;
       }
-      multiput = edit_buffer;
+      batch = batched_rpcs;
       // Unfortunately we have to hold the monitor on `this' while we do
       // this entire atomic dance.
-      multiput.add(request);
-      if (multiput.size() < 1024) {  // XXX Don't hardcode.
-        multiput = null;   // We're going to buffer this edit for now.
+      batch.add(request);
+      if (batch.size() < 1024) {  // XXX Don't hardcode.
+        batch = null;  // We're going to buffer this edit for now.
       } else {
         // Execute the edits buffered so far.  But first we must clear
         // the reference to the buffer we're about to send to HBase.
-        edit_buffer = new MultiPutRequest();
-        addMultiPutCallbacks(edit_buffer);
+        batched_rpcs = new MultiAction(server_version);
+        addMultiActionCallbacks(batched_rpcs);
       }
     }
 
     if (schedule_flush) {
       scheduleNextPeriodicFlush();
-    } else if (multiput != null) {
-      sendRpc(multiput);
+    } else if (batch != null) {
+      sendRpc(batch);
     }
   }
 
@@ -647,86 +705,93 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
    * Creates callbacks to handle a multi-put and adds them to the request.
    * @param request The request for which we must handle the response.
    */
-  private void addMultiPutCallbacks(final MultiPutRequest request) {
-    final class MultiPutCallback implements Callback<Object, Object> {
+  private void addMultiActionCallbacks(final MultiAction request) {
+    final class MultiActionCallback implements Callback<Object, Object> {
       public Object call(final Object resp) {
-        if (!(resp instanceof MultiPutResponse)) {
-          if (resp instanceof PutRequest) {  // Single-edit multi-put?
-            return null;  // Yes, nothing to do.  See multiPutToSinglePut.
+        if (!(resp instanceof MultiAction.Response)) {
+          if (resp instanceof BatchableRpc) {  // Single-RPC multi-action?
+            return null;  // Yes, nothing to do.  See multiActionToSingleAction.
+          } else if (resp instanceof Exception) {
+            return handleException((Exception) resp);
           }
-          throw new InvalidResponseException(MultiPutResponse.class, resp);
+          throw new InvalidResponseException(MultiAction.Response.class, resp);
         }
-        final MultiPutResponse response = (MultiPutResponse) resp;
-        final Bytes.ByteMap<Integer> failures = response.failures();
-        if (failures.isEmpty()) {
-          for (final PutRequest edit : request.edits()) {
-            edit.callback(null);  // Success.
+        final MultiAction.Response response = (MultiAction.Response) resp;
+        final ArrayList<BatchableRpc> batch = request.batch();
+        final int n = batch.size();
+        for (int i = 0; i < n; i++) {
+          final BatchableRpc rpc = batch.get(i);
+          final Object r = response.result(i);
+          if (r instanceof RecoverableException) {
+            if (r instanceof NotServingRegionException) {
+              // We need to do NSRE handling here too, as the response might
+              // have come back successful, but only some parts of the batch
+              // could have encountered an NSRE.
+              hbase_client.handleNSRE(rpc, rpc.getRegion().name(),
+                                      (NotServingRegionException) r);
+            } else {
+              retryEdit(rpc, (RecoverableException) r);
+            }
+          } else {
+            rpc.callback(r);
           }
-          return null;  // Yay, success!
         }
-        // TODO(tsuna): Wondering whether logging this at the WARN level
-        // won't be too spammy / distracting.  Maybe we can tune this down to
-        // DEBUG once the pretty bad bug HBASE-2898 is fixed.
-        LOG.warn("Some edits failed for " + failures
-                 + ", hopefully it's just due to a region split.");
-        for (final PutRequest edit : request.handlePartialFailure(failures)) {
-          retryEdit(edit, null);
-        }
-        return null;  // We're retrying, so let's call it a success for now.
+        // We're successful.  If there was a problem, the exception was
+        // delivered to the specific RPCs that failed, and they will be
+        // responsible for retrying.
+        return null;
       }
-      public String toString() {
-        return "multiPut response";
-      }
-    };
-    final class MultiPutErrback implements Callback<Object, Exception> {
-      public Object call(final Exception e) {
+
+      private Object handleException(final Exception e) {
         if (!(e instanceof RecoverableException)) {
-          for (final PutRequest edit : request.edits()) {
-            edit.callback(e);
+          for (final BatchableRpc rpc : request.batch()) {
+            rpc.callback(e);
           }
           return e;  // Can't recover from this error, let it propagate.
         }
         if (LOG.isDebugEnabled()) {
-          LOG.debug("Multi-put request failed, retrying each of the "
-                    + request.size() + " edits individually.", e);
+          LOG.debug("Multi-action request failed, retrying each of the "
+                    + request.size() + " RPCs individually.", e);
         }
-        for (final PutRequest edit : request.edits()) {
-          retryEdit(edit, (RecoverableException) e);
+        for (final BatchableRpc rpc : request.batch()) {
+          retryEdit(rpc, (RecoverableException) e);
         }
         return null;  // We're retrying, so let's call it a success for now.
       }
+
       public String toString() {
-        return "multiPut errback";
+        return "multi-action response";
       }
     };
-    request.getDeferred().addCallbacks(new MultiPutCallback(),
-                                       new MultiPutErrback());
+    request.getDeferred().addBoth(new MultiActionCallback());
   }
 
   /**
    * Retries an edit that failed with a recoverable error.
-   * @param edit The edit that failed.
+   * @param rpc The RPC that failed.
    * @param e The recoverable error that caused the edit to fail, if known.
    * Can be {@code null}.
    * @param The deferred result of the new attempt to send this edit.
    */
-  private Deferred<Object> retryEdit(final PutRequest edit,
+  private Deferred<Object> retryEdit(final BatchableRpc rpc,
                                      final RecoverableException e) {
-    if (HBaseClient.cannotRetryRequest(edit)) {
-      return HBaseClient.tooManyAttempts(edit, e);
+    if (HBaseClient.cannotRetryRequest(rpc)) {
+      return HBaseClient.tooManyAttempts(rpc, e);
     }
-    edit.setBufferable(false);
-    return hbase_client.sendRpcToRegion(edit);
+    // This RPC has already been delayed because of a failure,
+    // so make sure we don't buffer it again.
+    rpc.setBufferable(false);
+    return hbase_client.sendRpcToRegion(rpc);
   }
 
   /**
    * Creates callbacks to handle a single-put and adds them to the request.
    * @param edit The edit for which we must handle the response.
    */
-  private void addSingleEditCallbacks(final PutRequest edit) {
+  private void addSingleEditCallbacks(final BatchableRpc edit) {
     // There's no callback to add on a single put request, because
     // the remote method returns `void', so we only need an errback.
-    final class PutErrback implements Callback<Object, Exception> {
+    final class SingleEditErrback implements Callback<Object, Exception> {
       public Object call(final Exception e) {
         if (!(e instanceof RecoverableException)) {
           return e;  // Can't recover from this error, let it propagate.
@@ -734,10 +799,10 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
         return retryEdit(edit, (RecoverableException) e);
       }
       public String toString() {
-        return "put errback";
+        return "single-edit errback";
       }
     };
-    edit.getDeferred().addErrback(new PutErrback());
+    edit.getDeferred().addErrback(new SingleEditErrback());
   }
 
   /**
@@ -751,18 +816,22 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
    */
   void sendRpc(HBaseRpc rpc) {
     if (chan != null) {
-      if (rpc instanceof PutRequest) {
-        final PutRequest edit = (PutRequest) rpc;
+      if (rpc instanceof BatchableRpc
+          && (server_version >= SERVER_VERSION_092_OR_ABOVE  // Before 0.92,
+              || rpc instanceof PutRequest)) {  // we could only batch "put".
+        final BatchableRpc edit = (BatchableRpc) rpc;
         if (edit.canBuffer() && hbase_client.getFlushInterval() > 0) {
           bufferEdit(edit);
           return;
         }
         addSingleEditCallbacks(edit);
-      } else if (rpc instanceof MultiPutRequest) {
+      } else if (rpc instanceof MultiAction) {
         // Transform single-edit multi-put into single-put.
-        final MultiPutRequest multiput = (MultiPutRequest) rpc;
-        if (multiput.size() == 1) {
-          rpc = multiPutToSinglePut(multiput);
+        final MultiAction batch = (MultiAction) rpc;
+        if (batch.size() == 1) {
+          rpc = multiActionToSingleAction(batch);
+        } else {
+          hbase_client.num_multi_rpcs.increment();
         }
       }
       final ChannelBuffer serialized = encode(rpc);
@@ -813,24 +882,24 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
    * Transforms the given single-edit multi-put into a regular single-put.
    * @param multiput The single-edit multi-put to transform.
    */
-  private PutRequest multiPutToSinglePut(final MultiPutRequest multiput) {
-    final PutRequest edit = multiput.edits().get(0);
-    addSingleEditCallbacks(edit);
+  private BatchableRpc multiActionToSingleAction(final MultiAction batch) {
+    final BatchableRpc rpc = batch.batch().get(0);
+    addSingleEditCallbacks(rpc);
     // Once the single-edit is done, we still need to make sure we're
-    // going to run the callback chain of the MultiPutRequest.
+    // going to run the callback chain of the MultiAction.
     final class Multi2SingleCB implements Callback<Object, Object> {
       public Object call(final Object arg) {
-        // If there was a problem, let the MultiPutRequest know.
-        // Otherwise, give the PutRequest in argument to the MultiPutRequest
-        // callback.  This is kind of a kludge: the MultiPutRequest callback
-        // will understand that this means that this single-edit was already
+        // If there was a problem, let the MultiAction know.
+        // Otherwise, give the HBaseRpc in argument to the MultiAction
+        // callback.  This is kind of a kludge: the MultiAction callback
+        // will understand that this means that this single-RPC was already
         // successfully executed on its own.
-        multiput.callback(arg instanceof Exception ? arg : edit);
+        batch.callback(arg instanceof Exception ? arg : rpc);
         return arg;
       }
     }
-    edit.getDeferred().addBoth(new Multi2SingleCB());
-    return edit;
+    rpc.getDeferred().addBoth(new Multi2SingleCB());
+    return rpc;
   }
 
   // -------------------------------------- //
@@ -840,8 +909,23 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
   @Override
   public void channelConnected(final ChannelHandlerContext ctx,
                                final ChannelStateEvent e) {
-    chan = e.getChannel();
+    final Channel chan = e.getChannel();
+    final ChannelBuffer header;
+    if (System.getProperty("org.hbase.async.cdh3b3") != null) {
+      header = headerCDH3b3();
+    } else {
+      header = header090();
+    }
+    helloRpc(chan, header);
+  }
 
+  /**
+   * Sends the queued RPCs to the server, once we're connected to it.
+   * This gets called after {@link #channelConnected}, once we were able to
+   * handshake with the server and find out which version it's running.
+   * @see #helloRpc
+   */
+  private void sendQueuedRpcs() {
     ArrayList<HBaseRpc> rpcs;
     synchronized (this) {
       rpcs = pending_rpcs;
@@ -891,20 +975,20 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
     failOrRetryRpcs(rpcs_inflight.values(), exception);
     rpcs_inflight.clear();
 
-    ArrayList<HBaseRpc> rpcs;
-    MultiPutRequest multiput;
+    final ArrayList<HBaseRpc> rpcs;
+    final MultiAction batch;
     synchronized (this) {
       dead = true;
       rpcs = pending_rpcs;
       pending_rpcs = null;
-      multiput = edit_buffer;
-      edit_buffer = null;
+      batch = batched_rpcs;
+      batched_rpcs = null;
     }
     if (rpcs != null) {
       failOrRetryRpcs(rpcs, exception);
     }
-    if (multiput != null) {
-      multiput.callback(exception);  // Make it fail.
+    if (batch != null) {
+      batch.callback(exception);  // Make it fail.
     }
   }
 
@@ -944,16 +1028,16 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
                               final ExceptionEvent event) {
     final Throwable e = event.getCause();
     final Channel c = event.getChannel();
-    final SocketAddress remote = c.getRemoteAddress();
 
     if (e instanceof RejectedExecutionException) {
       LOG.warn("RPC rejected by the executor,"
                + " ignore this if we're shutting down", e);
     } else {
-      LOG.error("Unexpected exception from downstream.", e);
+      LOG.error("Unexpected exception from downstream on " + c, e);
     }
-    // TODO(tsuna): Do we really want to do that all the time?
-    Channels.close(c);
+    if (c.isOpen()) {
+      Channels.close(c);
+    }
   }
 
   // ------------------------------- //
@@ -989,11 +1073,6 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
       throw new AssertionError("Should never happen!  rpc=" + rpc);
     }
 
-    if (rpc.versionSensitive() && server_version == -1) {
-      getProtocolVersion().addBoth(new RetryRpc<Long>(rpc));
-      return null;
-    }
-
     // TODO(tsuna): Add rate-limiting here.  We don't want to send more than
     // N QPS to a given region server.
     // TODO(tsuna): Check the size() of rpcs_inflight.  We don't want to have
@@ -1010,12 +1089,30 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
       // buffer without this extra space at the beginning, we're going to
       // corrupt the RPC at this point.
       final byte[] method = rpc.method();
-      // The first int is the size of the message, excluding the 4 bytes
-      // needed for the size itself, hence the `-4'.
-      payload.setInt(0, payload.readableBytes() - 4); // 4 bytes
-      payload.setInt(4, rpcid);                       // 4 bytes
-      payload.setShort(8, method.length);             // 2 bytes
-      payload.setBytes(10, method);                   // method.length bytes
+      if (server_version >= SERVER_VERSION_092_OR_ABOVE) {
+        // The first int is the size of the message, excluding the 4 bytes
+        // needed for the size itself, hence the `-4'.
+        payload.setInt(0, payload.readableBytes() - 4); // 4 bytes
+        payload.setInt(4, rpcid);                       // 4 bytes
+        // RPC version (org.apache.hadoop.hbase.ipc.Invocation.RPC_VERSION).
+        payload.setByte(8, 1);                          // 4 bytes
+        payload.setShort(9, method.length);             // 2 bytes
+        payload.setBytes(11, method);                   // method.length bytes
+        // Client version.  We always pretend to run the same version as the
+        // server we're talking to.
+        payload.setLong(11 + method.length, server_version);
+        // Finger print of the method (also called "clientMethodsHash").
+        // This field is unused, so we never set it, which is why the next
+        // line is commented out.  It doesn't matter what value it has.
+        //payload.setInt(11 + method.length + 8, 0);
+      } else {  // Serialize for versions 0.90 and before.
+        // The first int is the size of the message, excluding the 4 bytes
+        // needed for the size itself, hence the `-4'.
+        payload.setInt(0, payload.readableBytes() - 4); // 4 bytes
+        payload.setInt(4, rpcid);                       // 4 bytes
+        payload.setShort(8, method.length);             // 2 bytes
+        payload.setBytes(10, method);                   // method.length bytes
+      }
     } catch (Exception e) {
       LOG.error("Uncaught exception while serializing RPC: " + rpc, e);
       rpc.callback(e);  // Make the RPC fail with the exception.
@@ -1447,24 +1544,58 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
    * or an exception).
    */
   private Object deserialize(final ChannelBuffer buf, final int rpcid) {
-    // The 1st byte of the payload tells us whether the request failed.
-    if (buf.readByte() != 0x00) {  // 0x00 means no error.
-      // In case of failures, the rest of the response is just 2
-      // Hadoop-encoded strings.  The first is the class name of the
-      // exception, the 2nd is the message and stack trace.
-      final String type = HBaseRpc.readHadoopString(buf);
-      final String msg = HBaseRpc.readHadoopString(buf);
-      final HBaseException exc = REMOTE_EXCEPTION_TYPES.get(type);
-      if (exc != null) {
-        return exc.make(msg, rpcs_inflight.get(rpcid));
-      } else {
-        return new RemoteException(type, msg);
+    // The 1st byte of the payload contains flags:
+    //   0x00  Old style success (prior 0.92).
+    //   0x01  RPC failed with an exception.
+    //   0x02  New style success (0.92 and above).
+    final byte flags = buf.readByte();
+    if ((flags & HBaseRpc.RPC_FRAMED) != 0) {
+      // Total size of the response, including the RPC ID (4 bytes) and flags
+      // (1 byte) that we've already read, including the 4 bytes used by
+      // the length itself, and including the 4 bytes used for the RPC status.
+      final int length = buf.readInt() - 4 - 1 - 4 - 4;
+      final int status = buf.readInt();  // Unused right now.
+      try {
+        HBaseRpc.checkArrayLength(buf, length);
+        // Make sure we have that many bytes readable.
+        // This will have to change to be able to do streaming RPCs where we
+        // deserialize parts of the response as it comes off the wire.
+        buf.markReaderIndex();
+        buf.skipBytes(length);
+        buf.resetReaderIndex();
+      } catch (IllegalArgumentException e) {
+        LOG.error("WTF?  RPC #" + rpcid + ": ", e);
       }
     }
+
+    final HBaseRpc rpc = rpcs_inflight.get(rpcid);
+    if ((flags & HBaseRpc.RPC_ERROR) != 0) {
+      return deserializeException(buf, rpc);
+    }
     try {
-      return deserializeObject(buf, rpcid);
+      return deserializeObject(buf, rpcid, rpc);
     } catch (IllegalArgumentException e) {  // The RPC didn't look good to us.
       return new InvalidResponseException(e.getMessage(), e);
+    }
+  }
+
+  /**
+   * De-serializes an exception.
+   * @param buf The buffer to read from.
+   * @param request The RPC that caused this exception.
+   */
+  static HBaseException deserializeException(final ChannelBuffer buf,
+                                             final HBaseRpc request) {
+    // In case of failures, the rest of the response is just 2
+    // Hadoop-encoded strings.  The first is the class name of the
+    // exception, the 2nd is the message and stack trace.
+    final String type = HBaseRpc.readHadoopString(buf);
+    final String msg = HBaseRpc.readHadoopString(buf);
+    final HBaseException exc = REMOTE_EXCEPTION_TYPES.get(type);
+    if (exc != null) {
+      return exc.make(msg, request);
+    } else {
+      return new RemoteException(type, msg);
     }
   }
 
@@ -1473,15 +1604,17 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
    * {@code HbaseObjectWritable#writeObject}.
    * @return The de-serialized object (which can be {@code null}).
    */
-  private Object deserializeObject(final ChannelBuffer buf, final int rpcid) {
-    int b = buf.readByte();
-    switch (b) {  // Read the type of the response.
+  @SuppressWarnings("fallthrough")
+  Object deserializeObject(final ChannelBuffer buf,
+                           final int rpcid,
+                           final HBaseRpc request) {
+    switch (buf.readByte()) {  // Read the type of the response.
       case  1:  // Boolean
         return buf.readByte() != 0x00;
       case  6:  // Long
         return buf.readLong();
       case 14:  // Writable
-        return deserializeObject(buf, rpcid);  // Recursively de-serialize it.
+        return deserializeObject(buf, rpcid, request);  // Recursively de-serialize it.
       case 17:  // NullInstance
         buf.readByte();  // Consume the (useless) type of the "null".
         return null;
@@ -1493,8 +1626,10 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
         current = new HBaseArrayResultParser(rpcid);
         return current.process(buf);
       case 58:  // MultiPutResponse
-        buf.readByte();  // Read the type again.  See HBASE-2877.
-        return MultiPutResponse.fromBuffer(buf);
+        // Fall through
+      case 67:  // MultiResponse
+        // Don't read the type again, responseFromBuffer() will need it.
+        return ((MultiAction) request).responseFromBuffer(buf);
     }
     throw new NonRecoverableException("Couldn't de-serialize "
                                       + Bytes.pretty(buf, MAX_PRETTY_BYTES));
@@ -1559,10 +1694,10 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
     int nedits;
     synchronized (this) {
       npending_rpcs = pending_rpcs == null ? 0 : pending_rpcs.size();
-      nedits = edit_buffer == null ? 0 : edit_buffer.size();
+      nedits = batched_rpcs == null ? 0 : batched_rpcs.size();
     }
     buf.append(npending_rpcs)             // = 1
-      .append(", #edits=")                // = 9
+      .append(", #batched=")              // = 9
       .append(nedits);                    // ~ 2
     buf.append(", #rpcs_inflight=")       // =17
       .append(rpcs_inflight.size())       // ~ 2
@@ -1570,156 +1705,106 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
     return buf.toString();
   }
 
+  // -------------------------------------------- //
+  // Dealing with the handshake at the beginning. //
+  // -------------------------------------------- //
+
+  /** Initial part of the header.  */
+  private final static byte[] HRPC3 = new byte[] { 'h', 'r', 'p', 'c', 3 };
+
+  /** Common part of the hello header: magic + version.  */
+  private ChannelBuffer commonHeader(final byte[] buf, final byte[] hrpc) {
+    final ChannelBuffer header = ChannelBuffers.wrappedBuffer(buf);
+    header.clear();  // Set the writerIndex to 0.
+
+    // Magic header.  See HBaseClient#writeHeader
+    // "hrpc" followed by the version.
+    // See HBaseServer#HEADER and HBaseServer#CURRENT_VERSION.
+    header.writeBytes(hrpc);  // 4 + 1
+    return header;
+  }
+
+  /** Hello header for HBase 0.92 and later.  */
+  private ChannelBuffer header092() {
+    final byte[] buf = new byte[4 + 1 + 4 + 1 + 44];
+    final ChannelBuffer header = commonHeader(buf, HRPC3);
+
+    // Serialized ipc.ConnectionHeader
+    // We skip 4 bytes now and will set it to the actual size at the end.
+    header.writerIndex(header.writerIndex() + 4);  // 4
+    final String klass = "org.apache.hadoop.hbase.ipc.HRegionInterface";
+    header.writeByte(klass.length());              // 1
+    header.writeBytes(Bytes.ISO88591(klass));      // 44
+
+    // Now set the length of the whole damn thing.
+    // -4 because the length itself isn't part of the payload.
+    // -5 because the "hrpc" + version isn't part of the payload.
+    header.setInt(5, header.writerIndex() - 4 - 5);
+    return header;
+  }
+
+  /** Hello header for HBase 0.90 and earlier.  */
+  private ChannelBuffer header090() {
+    final byte[] buf = new byte[4 + 1 + 4 + 2 + 29 + 2 + 48 + 2 + 47];
+    final ChannelBuffer header = commonHeader(buf, HRPC3);
+
+    // Serialized UserGroupInformation to say who we are.
+    // We're not nice so we're not gonna say who we are and we'll just send
+    // `null' (hadoop.io.ObjectWritable$NullInstance).
+    // First, we need the size of the whole damn UserGroupInformation thing.
+    // We skip 4 bytes now and will set it to the actual size at the end.
+    header.writerIndex(header.writerIndex() + 4);             // 4
+    // Write the class name of the object.
+    // See hadoop.io.ObjectWritable#writeObject
+    // See hadoop.io.UTF8#writeString
+    // String length as a short followed by UTF-8 string.
+    String klass = "org.apache.hadoop.io.Writable";
+    header.writeShort(klass.length());                        // 2
+    header.writeBytes(Bytes.ISO88591(klass));                 // 29
+    klass = "org.apache.hadoop.io.ObjectWritable$NullInstance";
+    header.writeShort(klass.length());                        // 2
+    header.writeBytes(Bytes.ISO88591(klass));                 // 48
+    klass = "org.apache.hadoop.security.UserGroupInformation";
+    header.writeShort(klass.length());                        // 2
+    header.writeBytes(Bytes.ISO88591(klass));                 // 47
+
+    // Now set the length of the whole damn thing.
+    // -4 because the length itself isn't part of the payload.
+    // -5 because the "hrpc" + version isn't part of the payload.
+    header.setInt(5, header.writerIndex() - 4 - 5);
+    return header;
+  }
+
+  /** CDH3b3-specific header for Hadoop "security".  */
+  private ChannelBuffer headerCDH3b3() {
+    // CDH3 b3 includes a temporary patch that is non-backwards compatible
+    // and results in clients getting disconnected as soon as they send the
+    // header, because the HBase RPC protocol provides no mechanism to send
+    // an error message back to the client during the initial "hello" stage
+    // of a connection.
+    final byte[] user = Bytes.UTF8(System.getProperty("user.name", "asynchbase"));
+    final byte[] buf = new byte[4 + 1 + 4 + 4 + user.length];
+    final ChannelBuffer header = commonHeader(buf, HRPC3);
+
+    // Length of the encoded string (useless).
+    header.writeInt(4 + user.length);  // 4
+    // String as encoded by `WritableUtils.writeString'.
+    header.writeInt(user.length);      // 4
+    header.writeBytes(user);           // length bytes
+    return header;
+  }
+
   /**
-   * Handler that sends the Hadoop RPC "hello" header before the first RPC.
-   * <p>
-   * This handler will simply prepend the "hello" header before the first RPC
-   * and will then remove itself from the pipeline, so all subsequent messages
-   * going through the pipeline won't need to go through this handler.
+   * Sends the "hello" message needed when opening a new connection.
+   * This message is immediately followed by a {@link GetProtocolVersionRequest}
+   * so we can learn what version the server is running to be able to talk to
+   * it the way it expects.
+   * @param chan The channel connected to the server we need to handshake.
+   * @param header The header to use for the handshake.
    */
-  @Sharable
-  final static class SayHelloFirstRpc implements ChannelDownstreamHandler {
-
-    /** Singleton instance.  */
-    public final static SayHelloFirstRpc INSTANCE = new SayHelloFirstRpc();
-
-    /** The header to send.  */
-    private static final byte[] HELLO_HEADER;
-    static {
-      // CDH3 b3 includes a temporary patch that is non-backwards compatible
-      // and results in clients getting disconnected as soon as they send the
-      // header, because the HBase RPC protocol provides no mechanism to send
-      // an error message back to the client during the initial "hello" stage
-      // of a connection.
-      if (System.getProperty("org.hbase.async.cdh3b3") != null) {
-        final byte[] user = Bytes.UTF8(System.getProperty("user.name", "hbaseasync"));
-        HELLO_HEADER = new byte[4 + 1 + 4 + 4 + user.length];
-        headerCDH3b3(user);
-      } else {
-        HELLO_HEADER = new byte[4 + 1 + 4 + 2 + 29 + 2 + 48 + 2 + 47];
-        normalHeader();
-      }
-    }
-
-    /** Common part of the hello header: magic + version.  */
-    private static ChannelBuffer commonHeader() {
-      final ChannelBuffer buf = ChannelBuffers.wrappedBuffer(HELLO_HEADER);
-      buf.clear();  // Set the writerIndex to 0.
-
-      // Magic header.  See HBaseClient#writeHeader
-      // "hrpc" followed by the version (3).
-      // See HBaseServer#HEADER and HBaseServer#CURRENT_VERSION.
-      buf.writeBytes(new byte[] { 'h', 'r', 'p', 'c', 3 });  // 4 + 1
-      return buf;
-    }
-
-    /** Hello header for HBase 0.90.0 and earlier.  */
-    private static void normalHeader() {
-      final ChannelBuffer buf = commonHeader();
-
-      // Serialized UserGroupInformation to say who we are.
-      // We're not nice so we're not gonna say who we are and we'll just send
-      // `null' (hadoop.io.ObjectWritable$NullInstance).
-      // First, we need the size of the whole damn UserGroupInformation thing.
-      // We skip 4 bytes now and will set it to the actual size at the end.
-      buf.writerIndex(buf.writerIndex() + 4);                // 4
-      // Write the class name of the object.
-      // See hadoop.io.ObjectWritable#writeObject
-      // See hadoop.io.UTF8#writeString
-      // String length as a short followed by UTF-8 string.
-      String klass = "org.apache.hadoop.io.Writable";
-      buf.writeShort(klass.length());                        // 2
-      buf.writeBytes(Bytes.ISO88591(klass));                 // 29
-      klass = "org.apache.hadoop.io.ObjectWritable$NullInstance";
-      buf.writeShort(klass.length());                        // 2
-      buf.writeBytes(Bytes.ISO88591(klass));                 // 48
-      klass = "org.apache.hadoop.security.UserGroupInformation";
-      buf.writeShort(klass.length());                        // 2
-      buf.writeBytes(Bytes.ISO88591(klass));                 // 47
-
-      // Now set the length of the whole damn thing.
-      // -4 because the length itself isn't part of the payload.
-      // -5 because the "hrpc" + version isn't part of the payload.
-      buf.setInt(5, buf.writerIndex() - 4 - 5);
-    }
-
-    /** CDH3b3-specific header for Hadoop "security".  */
-    private static void headerCDH3b3(final byte[] user) {
-      // Our username.
-      final ChannelBuffer buf = commonHeader();
-
-      // Length of the encoded string (useless).
-      buf.writeInt(4 + user.length);  // 4
-      // String as encoded by `WritableUtils.writeString'.
-      buf.writeInt(user.length);      // 4
-      buf.writeBytes(user);           // length bytes
-    }
-
-    private SayHelloFirstRpc() {  // Singleton, can't instantiate from outside.
-    }
-
-    /**
-     * Handles messages going downstream (to the wire).
-     * @param ctx The context of the channel handler.
-     * @param event The event traveling downstream.
-     */
-    @Override
-    public void handleDownstream(final ChannelHandlerContext ctx,
-                                 final ChannelEvent event) {
-      if (event instanceof MessageEvent) {
-        synchronized (ctx) {
-          final ChannelPipeline pipeline = ctx.getPipeline();
-
-          // After acquiring the lock on `ctx', if we're still in the pipeline
-          // it means that no message has been sent downstream yet, we're the
-          // first one to attempt to send something.
-          if (pipeline.get(SayHelloFirstRpc.class) == this) {
-            final MessageEvent me = (MessageEvent) event;
-            final ChannelBuffer payload = (ChannelBuffer) me.getMessage();
-            final ChannelBuffer header = ChannelBuffers.wrappedBuffer(HELLO_HEADER);
-            final RegionClient client = pipeline.get(RegionClient.class);
-
-            // Piggyback a version request in the 1st packet after the payload
-            // we were trying to send. This way we'll have the version handy
-            // pretty quickly. Since it's most likely going to fit in the same
-            // packet we send out, it adds ~zero overhead. But don't piggyback a
-            // version request if the payload is already a version request or if
-            // we already know the server version.
-            final ChannelBuffer buf;
-            if (client.server_version < 0 && !isVersionRequest(payload)) {
-              final ChannelBuffer version =
-                client.encode(client.getProtocolVersionRequest());
-              buf = ChannelBuffers.wrappedBuffer(header, payload, version);
-            } else {
-              buf = ChannelBuffers.wrappedBuffer(header, payload);
-            }
-            ctx.sendDownstream(new DownstreamMessageEvent(ctx.getChannel(), me.getFuture(),
-                                                          buf, me.getRemoteAddress()));
-            // Remove us from the pipeline so nobody else will send hello packet.
-            pipeline.remove(this);
-            return;
-          }
-          // else: Fall through.
-        }
-      }
-      ctx.sendDownstream(event);
-    }
-
-    /** Inspects the payload and returns true if it's a version RPC.  */
-    private static boolean isVersionRequest(final ChannelBuffer payload) {
-      final int length = GET_PROTOCOL_VERSION.length;
-      // Header = 4+4+2, followed by method name.
-      if (payload.readableBytes() < 4 + 4 + 2 + length) {
-        return false;  // Too short to be a version request.
-      }
-      for (int i = 0; i < length; i++) {
-        if (payload.getByte(4 + 4 + 2 + i) != GET_PROTOCOL_VERSION[i]) {
-          return false;
-        }
-      }
-      // No other RPC has a name that starts with "getProtocolVersion"
-      // so this must be a version request.
-      return true;
-    }
+  private void helloRpc(final Channel chan, final ChannelBuffer header) {
+    final GetProtocolVersionRequest rpc = new GetProtocolVersionRequest();
+    rpc.getDeferred().addBoth(new ProtocolVersionCB(chan));
+    Channels.write(chan, ChannelBuffers.wrappedBuffer(header, encode(rpc)));
   }
 }

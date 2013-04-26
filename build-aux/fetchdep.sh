@@ -1,5 +1,5 @@
 #!/bin/bash
-# Copyright (c) 2011  StumbleUpon, Inc.  All rights reserved.
+# Copyright (C) 2011-2012  The Async HBase Authors.  All rights reserved.
 # This file is part of Async HBase.
 #
 # Redistribution and use in source and binary forms, with or without
@@ -59,7 +59,7 @@ validate_checksum() {
 }
 
 # Don't re-download if we happen to have the right file already.
-test -f "$2" && validate_checksum "$2" && touch "$2" && exit
+test -f "$2" && validate_checksum "$2" && touch "$2" && rm -f "$2-t" && exit
 
 rm -f "$2"
 $MKDIR_P "$d"

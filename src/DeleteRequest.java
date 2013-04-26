@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2010, 2011  StumbleUpon, Inc.  All rights reserved.
+ * Copyright (C) 2010-2012  The Async HBase Authors.  All rights reserved.
  * This file is part of Async HBase.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -37,22 +37,31 @@ import org.jboss.netty.buffer.ChannelBuffer;
  * For more info, please refer to the documentation of {@link HBaseRpc}.
  * <h1>A note on passing {@code String}s in argument</h1>
  * All strings are assumed to use the platform's default charset.
+ * <h1>A note on passing {@code timestamp}s in argument</h1>
+ * Irrespective of the order in which you send RPCs, a {@code DeleteRequest}
+ * that is created with a specific timestamp in argument will only delete
+ * values in HBase that were previously stored with a timestamp less than
+ * or equal to that of the {@code DeleteRequest}.
  */
-public final class DeleteRequest extends HBaseRpc
+public final class DeleteRequest extends BatchableRpc
   implements HBaseRpc.HasTable, HBaseRpc.HasKey,
-             HBaseRpc.HasFamily, HBaseRpc.HasQualifiers {
+             HBaseRpc.HasFamily, HBaseRpc.HasQualifiers, HBaseRpc.IsEdit {
 
   private static final byte[] DELETE = new byte[] {
     'd', 'e', 'l', 'e', 't', 'e'
   };
 
+  /** Code type used for serialized `Delete' objects.  */
+  static final byte CODE = 31;
+
   /** Special value for {@link #qualifiers} when deleting a whole family.  */
   private static final byte[][] DELETE_FAMILY_MARKER =
     new byte[][] { HBaseClient.EMPTY_ARRAY };
 
-  private final byte[] family;     // TODO(tsuna): Handle multiple families?
+  /** Special value for {@link #family} when deleting a whole row.  */
+  static final byte[] WHOLE_ROW = new byte[0];
+
   private final byte[][] qualifiers;
-  private final long lockid;
 
   /**
    * Constructor to delete an entire row.
@@ -62,7 +71,21 @@ public final class DeleteRequest extends HBaseRpc
    * @throws IllegalArgumentException if any argument is malformed.
    */
   public DeleteRequest(final byte[] table, final byte[] key) {
-    this(table, key, null, null, RowLock.NO_LOCK);
+    this(table, key, null, null, KeyValue.TIMESTAMP_NOW, RowLock.NO_LOCK);
+  }
+
+  /**
+   * Constructor to delete an entire row before a specific timestamp.
+   * <strong>These byte arrays will NOT be copied.</strong>
+   * @param table The table to edit.
+   * @param key The key of the row to edit in that table.
+   * @param timestamp The timestamp to set on this edit.
+   * @throws IllegalArgumentException if any argument is malformed.
+   * @since 1.2
+   */
+  public DeleteRequest(final byte[] table, final byte[] key,
+                       final long timestamp) {
+    this(table, key, null, null, timestamp, RowLock.NO_LOCK);
   }
 
   /**
@@ -77,7 +100,24 @@ public final class DeleteRequest extends HBaseRpc
   public DeleteRequest(final byte[] table,
                        final byte[] key,
                        final byte[] family) {
-    this(table, key, family, null, RowLock.NO_LOCK);
+    this(table, key, family, null, KeyValue.TIMESTAMP_NOW, RowLock.NO_LOCK);
+  }
+
+  /**
+   * Constructor to delete a specific family before a specific timestamp.
+   * <strong>These byte arrays will NOT be copied.</strong>
+   * @param table The table to edit.
+   * @param key The key of the row to edit in that table.
+   * @param family The column family to edit in that table.
+   * @param timestamp The timestamp to set on this edit.
+   * @throws IllegalArgumentException if any argument is malformed.
+   * @since 1.2
+   */
+  public DeleteRequest(final byte[] table,
+                       final byte[] key,
+                       final byte[] family,
+                       final long timestamp) {
+    this(table, key, family, null, timestamp, RowLock.NO_LOCK);
   }
 
   /**
@@ -94,7 +134,31 @@ public final class DeleteRequest extends HBaseRpc
                        final byte[] key,
                        final byte[] family,
                        final byte[] qualifier) {
-      this(table, key, family, qualifier == null ? null : new byte[][] { qualifier }, RowLock.NO_LOCK);
+      this(table, key, family,
+           qualifier == null ? null : new byte[][] { qualifier },
+           KeyValue.TIMESTAMP_NOW, RowLock.NO_LOCK);
+  }
+
+  /**
+   * Constructor to delete a specific cell before a specific timestamp.
+   * <strong>These byte arrays will NOT be copied.</strong>
+   * @param table The table to edit.
+   * @param key The key of the row to edit in that table.
+   * @param family The column family to edit in that table.
+   * @param qualifier The column qualifier to delete in that family.
+   * Can be {@code null}, to delete the whole family.
+   * @param timestamp The timestamp to set on this edit.
+   * @throws IllegalArgumentException if any argument is malformed.
+   * @since 1.2
+   */
+  public DeleteRequest(final byte[] table,
+                       final byte[] key,
+                       final byte[] family,
+                       final byte[] qualifier,
+                       final long timestamp) {
+      this(table, key, family,
+           qualifier == null ? null : new byte[][] { qualifier },
+           timestamp, RowLock.NO_LOCK);
   }
 
   /**
@@ -111,11 +175,31 @@ public final class DeleteRequest extends HBaseRpc
                        final byte[] key,
                        final byte[] family,
                        final byte[][] qualifiers) {
-    this(table, key, family, qualifiers, RowLock.NO_LOCK);
+    this(table, key, family, qualifiers,
+         KeyValue.TIMESTAMP_NOW, RowLock.NO_LOCK);
   }
 
   /**
-   * Constructor to delete a specific cell.
+   * Constructor to delete a specific number of cells in a row.
+   * <strong>These byte arrays will NOT be copied.</strong>
+   * @param table The table to edit.
+   * @param key The key of the row to edit in that table.
+   * @param family The column family to edit in that table.
+   * @param qualifiers The column qualifiers to delete in that family.
+   * @param timestamp The timestamp to set on this edit.
+   * @throws IllegalArgumentException if any argument is malformed.
+   * @since 1.2
+   */
+  public DeleteRequest(final byte[] table,
+                       final byte[] key,
+                       final byte[] family,
+                       final byte[][] qualifiers,
+                       final long timestamp) {
+    this(table, key, family, qualifiers, timestamp, RowLock.NO_LOCK);
+  }
+
+  /**
+   * Constructor to delete a specific cell with an explicit row lock.
    * <strong>These byte arrays will NOT be copied.</strong>
    * @param table The table to edit.
    * @param key The key of the row to edit in that table.
@@ -129,7 +213,32 @@ public final class DeleteRequest extends HBaseRpc
                        final byte[] family,
                        final byte[] qualifier,
                        final RowLock lock) {
-    this(table, key, family, qualifier == null ? null : new byte[][] { qualifier }, lock.id());
+    this(table, key, family,
+         qualifier == null ? null : new byte[][] { qualifier },
+         KeyValue.TIMESTAMP_NOW, lock.id());
+  }
+
+  /**
+   * Constructor to delete a specific cell with an explicit row lock.
+   * <strong>These byte arrays will NOT be copied.</strong>
+   * @param table The table to edit.
+   * @param key The key of the row to edit in that table.
+   * @param family The column family to edit in that table.
+   * @param qualifier The column qualifier to delete in that family.
+   * @param timestamp The timestamp to set on this edit.
+   * @param lock An explicit row lock to use with this request.
+   * @throws IllegalArgumentException if any argument is malformed.
+   * @since 1.2
+   */
+  public DeleteRequest(final byte[] table,
+                       final byte[] key,
+                       final byte[] family,
+                       final byte[] qualifier,
+                       final long timestamp,
+                       final RowLock lock) {
+    this(table, key, family,
+         qualifier == null ? null : new byte[][] { qualifier },
+         timestamp, lock.id());
   }
 
   /**
@@ -149,7 +258,29 @@ public final class DeleteRequest extends HBaseRpc
                        final byte[] family,
                        final byte[][] qualifiers,
                        final RowLock lock) {
-    this(table, key, family, qualifiers, lock.id());
+    this(table, key, family, qualifiers, KeyValue.TIMESTAMP_NOW, lock.id());
+  }
+
+  /**
+   * Constructor to delete a specific number of cells in a row with a row lock.
+   * <strong>These byte arrays will NOT be copied.</strong>
+   * @param table The table to edit.
+   * @param key The key of the row to edit in that table.
+   * @param family The column family to edit in that table.
+   * @param qualifiers The column qualifiers to delete in that family.
+   * Can be {@code null}.
+   * @param timestamp The timestamp to set on this edit.
+   * @param lock An explicit row lock to use with this request.
+   * @throws IllegalArgumentException if any argument is malformed.
+   * @since 1.2
+   */
+  public DeleteRequest(final byte[] table,
+                       final byte[] key,
+                       final byte[] family,
+                       final byte[][] qualifiers,
+                       final long timestamp,
+                       final RowLock lock) {
+    this(table, key, family, qualifiers, timestamp, lock.id());
   }
 
   /**
@@ -159,7 +290,8 @@ public final class DeleteRequest extends HBaseRpc
    * @throws IllegalArgumentException if any argument is malformed.
    */
   public DeleteRequest(final String table, final String key) {
-    this(table.getBytes(), key.getBytes(), null, null, RowLock.NO_LOCK);
+    this(table.getBytes(), key.getBytes(), null, null,
+         KeyValue.TIMESTAMP_NOW, RowLock.NO_LOCK);
   }
 
   /**
@@ -173,7 +305,8 @@ public final class DeleteRequest extends HBaseRpc
   public DeleteRequest(final String table,
                        final String key,
                        final String family) {
-    this(table.getBytes(), key.getBytes(), family.getBytes(), null, RowLock.NO_LOCK);
+    this(table.getBytes(), key.getBytes(), family.getBytes(), null,
+         KeyValue.TIMESTAMP_NOW, RowLock.NO_LOCK);
   }
 
   /**
@@ -190,11 +323,12 @@ public final class DeleteRequest extends HBaseRpc
                        final String family,
                        final String qualifier) {
     this(table.getBytes(), key.getBytes(), family.getBytes(),
-         qualifier == null ? null : new byte[][] { qualifier.getBytes() }, RowLock.NO_LOCK);
+         qualifier == null ? null : new byte[][] { qualifier.getBytes() },
+         KeyValue.TIMESTAMP_NOW, RowLock.NO_LOCK);
   }
 
   /**
-   * Constructor to delete a specific cell.
+   * Constructor to delete a specific cell with an explicit row lock.
    * @param table The table to edit.
    * @param key The key of the row to edit in that table.
    * @param family The column family to edit in that table.
@@ -209,7 +343,37 @@ public final class DeleteRequest extends HBaseRpc
                        final String qualifier,
                        final RowLock lock) {
     this(table.getBytes(), key.getBytes(), family.getBytes(),
-         qualifier == null ? null : new byte[][] { qualifier.getBytes() }, lock.id());
+         qualifier == null ? null : new byte[][] { qualifier.getBytes() },
+         KeyValue.TIMESTAMP_NOW, lock.id());
+  }
+
+  /**
+   * Constructor to delete a specific cell.
+   * @param table The table to edit.
+   * @param kv The specific {@link KeyValue} to delete.  Note that if this
+   * {@link KeyValue} specifies a timestamp, then this specific timestamp only
+   * will be deleted.
+   * @since 1.2
+   */
+  public DeleteRequest(final byte[] table, final KeyValue kv) {
+    this(table, kv.key(), kv.family(), new byte[][] { kv.qualifier() },
+         kv.timestamp(), RowLock.NO_LOCK);
+  }
+
+  /**
+   * Constructor to delete a specific cell with an explicit row lock.
+   * @param table The table to edit.
+   * @param kv The specific {@link KeyValue} to delete.  Note that if this
+   * {@link KeyValue} specifies a timestamp, then this specific timestamp only
+   * will be deleted.
+   * @param lock An explicit row lock to use with this request.
+   * @since 1.2
+   */
+  public DeleteRequest(final byte[] table,
+                       final KeyValue kv,
+                       final RowLock lock) {
+    this(table, kv.key(), kv.family(), new byte[][] { kv.qualifier() },
+         kv.timestamp(), lock.id());
   }
 
   /** Private constructor.  */
@@ -217,12 +381,12 @@ public final class DeleteRequest extends HBaseRpc
                         final byte[] key,
                         final byte[] family,
                         final byte[][] qualifiers,
+                        final long timestamp,
                         final long lockid) {
-    super(DELETE, table, key);
+    super(DELETE, table, key, family == null ? WHOLE_ROW : family, timestamp, lockid);
     if (family != null) {
       KeyValue.checkFamily(family);
     }
-    this.family = family;
 
     if (qualifiers != null) {
       if (family == null) {
@@ -237,10 +401,9 @@ public final class DeleteRequest extends HBaseRpc
       this.qualifiers = qualifiers;
     } else {
       // No specific qualifier to delete: delete the entire family.  Not that
-      // if `family == null', we'll delete and setting this is harmless.
+      // if `family == null', we'll delete the whole row anyway.
       this.qualifiers = DELETE_FAMILY_MARKER;
     }
-    this.lockid = lockid;
   }
 
   @Override
@@ -251,11 +414,6 @@ public final class DeleteRequest extends HBaseRpc
   @Override
   public byte[] key() {
     return key;
-  }
-
-  @Override
-  public byte[] family() {
-    return family;
   }
 
   @Override
@@ -270,6 +428,40 @@ public final class DeleteRequest extends HBaseRpc
   // ---------------------- //
   // Package private stuff. //
   // ---------------------- //
+
+  @Override
+  byte version(final byte unused_server_version) {
+    // Versions are:
+    //   1: Before 0.92.0.  This method only gets called for 0.92 and above.
+    //   2: HBASE-3921 in 0.92.0 added "attributes" at the end.
+    //   3: HBASE-3961 in 0.92.0 allowed skipping the WAL.
+    return 3;  // 3 because we allow skipping the WAL.
+  }
+
+  @Override
+  byte code() {
+    return CODE;
+  }
+
+  @Override
+  int numKeyValues() {
+    return qualifiers.length;
+  }
+
+  @Override
+  void serializePayload(final ChannelBuffer buf) {
+    if (family == null) {
+      return;  // No payload when deleting whole rows.
+    }
+    // Are we deleting a whole family at once or just a bunch of columns?
+    final byte type = (qualifiers == DELETE_FAMILY_MARKER
+                       ? KeyValue.DELETE_FAMILY : KeyValue.DELETE_COLUMN);
+    // Write the KeyValues
+    for (final byte[] qualifier : qualifiers) {
+      KeyValue.serialize(buf, type, Long.MAX_VALUE,
+                         key, family, qualifier, null);
+    }
+  }
 
   /**
    * Predicts a lower bound on the serialized size of this RPC.
@@ -299,11 +491,15 @@ public final class DeleteRequest extends HBaseRpc
     }
     size += family.length;  // The column family.
     size += 4;  // int:  Number of KeyValues for this family.
-    return size + sizeOfKeyValues();
+    return size + payloadSize();
   }
 
   /** Returns the serialized size of all the {@link KeyValue}s in this RPC.  */
-  private int sizeOfKeyValues() {
+  @Override
+  int payloadSize() {
+    if (family == WHOLE_ROW) {
+      return 0;  // No payload when deleting whole rows.
+    }
     int size = 0;
     size += 4;  // int:  Total length of the whole KeyValue.
     size += 4;  // int:  Total length of the key part of the KeyValue.
@@ -324,23 +520,24 @@ public final class DeleteRequest extends HBaseRpc
   }
 
   /** Serializes this request.  */
-  ChannelBuffer serialize(final byte unused_server_version) {
-    final ChannelBuffer buf = newBuffer(predictSerializedSize());
+  ChannelBuffer serialize(final byte server_version) {
+    final ChannelBuffer buf = newBuffer(server_version,
+                                        predictSerializedSize());
     buf.writeInt(2);  // Number of parameters.
 
     // 1st param: byte array containing region name
     writeHBaseByteArray(buf, region.name());
 
     // 2nd param: Delete object.
-    buf.writeByte(31);   // Code for a `Delete' parameter.
-    buf.writeByte(31);   // Code again (see HBASE-2877).
-    buf.writeByte(1);    // Delete#DELETE_VERSION.  Undocumented versioning.
+    buf.writeByte(CODE); // Code for a `Delete' parameter.
+    buf.writeByte(CODE); // Code again (see HBASE-2877).
+    buf.writeByte(1);    // Delete#DELETE_VERSION.  Stick to v1 here for now.
     writeByteArray(buf, key);
-    buf.writeLong(Long.MAX_VALUE);  // Maximum timestamp.
+    buf.writeLong(timestamp);  // Maximum timestamp.
     buf.writeLong(lockid);  // Lock ID.
 
     // Families.
-    if (family == null) {
+    if (family == WHOLE_ROW) {
       buf.writeInt(0);  // Number of families that follow.
       return buf;
     }
@@ -348,16 +545,8 @@ public final class DeleteRequest extends HBaseRpc
 
     // Each family is then written like so:
     writeByteArray(buf, family);  // Column family name.
-
-    // Are we deleting a whole family at once or just a bunch of columns?
-    final byte type = (qualifiers == DELETE_FAMILY_MARKER
-                       ? KeyValue.DELETE_FAMILY : KeyValue.DELETE_COLUMN);
-    // Write the KeyValues
-    buf.writeInt(qualifiers.length); // Number of KeyValues that follow
-    for (final byte[] qualifier : qualifiers) {
-      KeyValue.serialize(buf, type, Long.MAX_VALUE,
-                         key, family, qualifier, null);
-    }
+    buf.writeInt(qualifiers.length);  // How many KeyValues for this family?
+    serializePayload(buf);
     return buf;
   }
 

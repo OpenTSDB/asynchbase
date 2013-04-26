@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2010  StumbleUpon, Inc.  All rights reserved.
+ * Copyright (C) 2010-2012  The Async HBase Authors.  All rights reserved.
  * This file is part of Async HBase.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -49,6 +49,15 @@ public final class RemoteException extends NonRecoverableException {
    */
   public String getType() {
     return type;
+  }
+
+  @Override
+  RemoteException make(final Object msg, final HBaseRpc rpc) {
+    if (msg instanceof RemoteException) {
+      final RemoteException e = (RemoteException) msg;
+      return new RemoteException(e.getType(), e.getMessage());
+    }
+    return new RemoteException(msg.getClass().getName(), msg.toString());
   }
 
   private static final long serialVersionUID = 1279775242;

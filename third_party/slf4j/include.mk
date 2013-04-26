@@ -1,4 +1,4 @@
-# Copyright (c) 2011  StumbleUpon, Inc.  All rights reserved.
+# Copyright (C) 2011-2012  The Async HBase Authors.  All rights reserved.
 # This file is part of Async HBase.
 #
 # Redistribution and use in source and binary forms, with or without
@@ -23,14 +23,7 @@
 # ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 # POSSIBILITY OF SUCH DAMAGE.
 
-SLF4J_VERSION = 1.6.1
-
-JCL_OVER_SLF4J_VERSION := $(SLF4J_VERSION)
-JCL_OVER_SLF4J := third_party/slf4j/jcl-over-slf4j-$(JCL_OVER_SLF4J_VERSION).jar
-JCL_OVER_SLF4J_BASE_URL := $(ASYNCHBASE_THIRD_PARTY_BASE_URL)
-
-$(JCL_OVER_SLF4J): $(JCL_OVER_SLF4J).md5
-	set dummy "$(JCL_OVER_SLF4J_BASE_URL)" "$(JCL_OVER_SLF4J)"; shift; $(FETCH_DEPENDENCY)
+SLF4J_VERSION = 1.7.2
 
 
 LOG4J_OVER_SLF4J_VERSION := $(SLF4J_VERSION)

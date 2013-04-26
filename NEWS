@@ -1,6 +1,115 @@
-HBase Async - User visible changes.
+AsyncHBase - User visible and noteworthy changes.
+This project uses Semantic Versioning (see http://semver.org/).
 
-* Version 1.1.0 (2011-??-??) [???????]
+* Version 1.5.0 (2013-??-??) [???????]
+
+
+* Version 1.4.1 (2013-02-14) [1cbc303]
+
+Noteworthy bug fixes:
+  - Under certain failure modes, especially during RegionServer failures
+    or regions split, asynchbase could incorrectly discard an RPC instead
+    of retrying it.  This made the client look like it was stuck if the
+    RPC was a ROOT or META lookup (#1).
+  - Update all dependencies.  Due to new dependencies in Junit and PowerMock,
+    asynchbase now depends on hamcrest-core and objenesis respectively.
+    These are test-only dependencies.
+  - Maven releases are now signed with the GPG key of tsunanet@gmail.com
+
+
+* Version 1.4.0 (2012-11-10) [fae1a04]
+
+New public APIs:
+  - Scanners can now scan multiple qualifiers at a time (#35).
+  - Scanner and GetRequest now enable you to specify how many versions
+    to read from HBase.
+
+Noteworthy changes:
+  - Fixed cases where calling `flush()' or `shutdown()' while the
+    client is still starting up could cause it to terminate too early
+    and to not execute all pending/buffered RPCs (#2).
+  - Fixed an RPC serialization bug when batching whole-row deletes.
+    See issue #25.
+  - The Deferred returned by `flush()' now guarantees that buffered
+    atomic increments have also completed (#38).
+  - Upgraded to Netty 3.5.9 to avoid an IndexOutOfBoundsException
+    when deserializing a KeyValue with an empty qualifier or
+    value, under certain circumstances (#40).
+  - Fix increment coalescing to prevent overflowing Deferred callback
+    chains when too many increments pile up for some counter (#40).
+  - Increment coalescing now also supports negative values as well as
+    large positive values (previously the limit was 65535).
+  - Upgraded to suasync 1.3.1 and Netty 3.5.9.
+  - Added a series of integration tests to help ongoing QA.
+
+
+* Version 1.3.2 (2012-07-10) [2af9f55]
+
+Noteworthy changes:
+  - Upgraded to Netty 3.5.2.
+  - KeyValue now allows a timestamp of 0.
+
+
+* Version 1.3.1 (2012-06-16) [7ea151b]
+
+  - Critical bug fix of issue #27 that makes some keys unusable
+    given certain region boundaries, in rare circumstances.
+  - `ensureTableFamilyExists' and `ensureTableExists' are cheaper
+    as they partially work around HBASE-3170.
+
+
+* Version 1.3.0 (2012-05-06) [bb9168c]
+
+New public APIs:
+  - PleaseThrottleException can now give you a Deferred.
+  - There is now a `Counter' class that provides a highly concurrent
+    replacement for AtomicLong from jsr166e's LongAdder.
+  - HBaseClient now has a `bufferAtomicIncrement' method used to
+    coalesce atomic counter increments.
+  - A new method, `stats()', provides detailed statistics on the client's
+    activities (number of calls for various RPCs, number of connections
+    created, etc.)
+  - `HBaseClient' has a new `compareAndSet(PutRequests, byte[])' method
+    for atomic Compare-And-Set (CAS) operation.
+  - The Scanner has new methods to allow specifying a time range to scan.
+  - `PutRequest' has extra constructors so as to be able to affect multiple
+    columns in a row.  This is required to be able to atomically CAS more
+    than one column at a time on a given row.
+
+Deprecated public APIs:
+  - In HBaseClient, the methods `rootLookupCount()',
+    `uncontendedMetaLookupCount()', and `contendedMetaLookupCount()' are
+    deprecated in favor of the new `stats()' API.  These methods will be
+    removed in the 2.0 release.
+
+Noteworthy changes:
+  - Upgraded to Netty 3.4.3, suasync to 1.2.0.
+  - asynchbase now depends on Google's Guava library (v12.0).
+
+
+* Version 1.2.0 (2012-02-21) [a7ae238]
+
+Noteworthy changes:
+  - Add support for HBase 0.92, as the on-wire RPC format underwent
+    significant changes that aren't compatible with previous versions.
+    NOTE: HBase never had a release in the 0.91 branch, and as such
+    this branch isn't fully supported.
+  - When talking to HBase 0.92, we automatically batch `DeleteRequests'
+    with `PutRequests'.  Note that batching is enabled by default, and
+    will thus introduce a delay before sending out `DeleteRequests' to
+    HBase, whereas in earlier versions (or when talking to HBase 0.90
+    and before) the `DeleteRequests' are sent out immediately.
+
+New public APIs:
+  - KeyValue now supports timestamps.
+  - HBaseClient now accepts a custom socket factory or executor, which can
+    be used to share an existing thread pool instead of having its own.
+  - The Netty Timer used by asynchbase is now available through an API, so
+    that code dependent on asynchbase can re-use the existing Timer thread
+    instead of having to create its own.
+
+
+* Version 1.1.0 (2011-12-22) [1272a9e]
 
 Noteworthy changes:
   - Add support for CDH3b3's non-standard authentication code.  This support
@@ -53,7 +162,7 @@ Initial alpha release:
 
 -----
 
-Copyright (c) 2010, 2011  StumbleUpon, Inc.  All rights reserved.
+Copyright (C) 2010-2012  The Async HBase Authors.  All rights reserved.
 This file is part of Async HBase.
 
 Redistribution and use in source and binary forms, with or without
