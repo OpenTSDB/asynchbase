@@ -29,9 +29,26 @@ package org.hbase.async;
 import org.jboss.netty.buffer.ChannelBuffer;
 
 /**
+ * Abstract base class for {@link org.hbase.async.Scanner} filters.
+ * <p>
+ * These filters are executed on the server side, inside the
+ * {@code RegionServer}, while scanning.  They are useful to
+ * prune uninteresting data before it gets to the network,
+ * but remember that the {@code RegionServer} still has to
+ * load the data before it can know whether the filter passes
+ * or not, so it's generally not efficient to filter out large
+ * amounts of data.
+ * <p>
+ * Subclasses are guaranteed to be immutable and are thus
+ * thread-safe as well as usable concurrently on multiple
+ * {@link org.hbase.async.Scanner} instances.
  * @since 1.5
  */
 public abstract class ScanFilter {
+
+  /** Package-private constructor to avoid sub-classing outside this package. */
+  ScanFilter() {
+  }
 
   /**
    * Serializes the byte representation to the RPC channel buffer.
