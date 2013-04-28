@@ -55,6 +55,7 @@ asynchbase_SOURCES := \
 	src/HBaseRpc.java	\
 	src/HasFailedRpcException.java	\
 	src/InvalidResponseException.java	\
+	src/KeyRegexpFilter.java	\
 	src/KeyValue.java	\
 	src/MultiAction.java	\
 	src/NoSuchColumnFamilyException.java	\

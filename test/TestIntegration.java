@@ -469,6 +469,33 @@ final public class TestIntegration {
     return new GetRequest(table, key).family(family).qualifier(qual);
   }
 
+  /** Test regexp-based row key filtering.  */
+  @Test
+  public void keyRegexpFilter() throws Exception {
+    client.setFlushInterval(FAST_FLUSH);
+    final PutRequest put1 = new PutRequest(table, "krf accept:by the filter",
+                                           family, "q", "krfv1");
+    final PutRequest put2 = new PutRequest(table, "krf filtered out",
+                                           family, "q", "krfv2");
+    final PutRequest put3 = new PutRequest(table, "krf this is Accepted too",
+                                           family, "q", "krfv3");
+    Deferred.group(client.put(put1), client.put(put2),
+                   client.put(put3)).join();
+    final Scanner scanner = client.newScanner(table);
+    scanner.setFamily(family);
+    scanner.setStartKey("krf ");
+    scanner.setStopKey("krf!");
+    scanner.setKeyRegexp("[Aa]ccept(ed)?");
+    final ArrayList<ArrayList<KeyValue>> rows = scanner.nextRows().join();
+    assertEquals(2, rows.size());
+    ArrayList<KeyValue> kvs = rows.get(0);
+    assertEquals(1, kvs.size());
+    assertEq("krfv1", kvs.get(0).value());
+    kvs = rows.get(1);
+    assertEquals(1, kvs.size());
+    assertEq("krfv3", kvs.get(0).value());
+  }
+
   /** Regression test for issue #2. */
   @Test
   public void regression2() throws Exception {

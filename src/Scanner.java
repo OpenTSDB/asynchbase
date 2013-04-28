@@ -129,8 +129,8 @@ public final class Scanner {
   private byte[][] families;
   private byte[][][] qualifiers;
 
-  /** Pre-serialized filter to apply on the scanner.  */
-  private byte[] filter;
+  /** Filter to apply on the scanner.  */
+  private ScanFilter filter;
 
   /** Minimum {@link KeyValue} timestamp to scan.  */
   private long min_timestamp = 0;
@@ -304,7 +304,7 @@ public final class Scanner {
    * Specifies a particular column qualifier to scan.
    * <p>
    * Note that specifying a qualifier without a family has no effect.
-   * You need to call {@link setFamily(byte[])} too.
+   * You need to call {@link #setFamily(byte[])} too.
    * @param qualifier The column qualifier.
    * <strong>This byte array will NOT be copied.</strong>
    * @throws IllegalStateException if scanning already started.
@@ -324,7 +324,7 @@ public final class Scanner {
    * Specifies one or more column qualifiers to scan.
    * <p>
    * Note that specifying qualifiers without a family has no effect.
-   * You need to call {@link setFamily(byte[])} too.
+   * You need to call {@link #setFamily(byte[])} too.
    * @param qualifiers The column qualifiers.
    * <strong>These byte arrays will NOT be copied.</strong>
    * @throws IllegalStateException if scanning already started.
@@ -338,38 +338,51 @@ public final class Scanner {
     this.qualifiers = new byte[][][] { qualifiers };
   }
 
+  /**
+   * Specifies the filter to apply to this scanner.
+   * @param filter The filter.  If {@code null}, then no filter will be used.
+   * @since 1.5
+   */
+  public void setFilter(final ScanFilter filter) {
+    this.filter = filter;
+  }
+
+  /**
+   * Returns the possibly-{@code null} filter applied to this scanner.
+   * @since 1.5
+   */
+  public ScanFilter getFilter() {
+    return filter;
+  }
+
+  /**
+   * Clears any filter that was previously set on this scanner.
+   * <p>
+   * This is a shortcut for {@link #setFilter}{@code (null)}
+   * @since 1.5
+   */
+  public void clearFilter() {
+    filter = null;
+  }
 
   /**
    * Sets a regular expression to filter results based on the row key.
    * <p>
-   * This is equivalent to calling {@link #setKeyRegexp(String, Charset)}
-   * with the ISO-8859-1 charset in argument.
+   * This is equivalent to calling
+   * {@link #setFilter setFilter}{@code (new }{@link
+   * KeyRegexpFilter}{@code (regexp))}
    * @param regexp The regular expression with which to filter the row keys.
    */
   public void setKeyRegexp(final String regexp) {
-    setKeyRegexp(regexp, CharsetUtil.ISO_8859_1);
+    filter = new KeyRegexpFilter(regexp);
   }
-
-  private static final byte[] ROWFILTER = Bytes.ISO88591("org.apache.hadoop"
-    + ".hbase.filter.RowFilter");
-  private static final byte[] REGEXSTRINGCOMPARATOR = Bytes.ISO88591("org.apache.hadoop"
-    + ".hbase.filter.RegexStringComparator");
-  private static final byte[] EQUAL = new byte[] { 'E', 'Q', 'U', 'A', 'L' };
 
   /**
    * Sets a regular expression to filter results based on the row key.
    * <p>
-   * This regular expression will be applied on the server-side, on the row
-   * key.  Rows for which the key doesn't match will not be returned to this
-   * scanner, which can be useful to carefully select which rows are matched
-   * when you can't just do a prefix match, and cut down the amount of data
-   * transfered on the network.
-   * <p>
-   * Don't use an expensive regular expression, because Java's implementation
-   * uses backtracking and matching will happen on the server side, potentially
-   * on many many row keys.  See <a href="su.pr/2xaY8D">Regular Expression
-   * Matching Can Be Simple And Fast</a> for more details on regular expression
-   * performance (or lack thereof) and what "backtracking" means.
+   * This is equivalent to calling
+   * {@link #setFilter setFilter}{@code (new }{@link
+   * KeyRegexpFilter}{@code (regexp, charset))}
    * @param regexp The regular expression with which to filter the row keys.
    * @param charset The charset used to decode the bytes of the row key into a
    * string.  The RegionServer must support this charset, otherwise it will
@@ -377,29 +390,7 @@ public final class Scanner {
    * scanner.
    */
   public void setKeyRegexp(final String regexp, final Charset charset) {
-    final byte[] regex = Bytes.UTF8(regexp);
-    final byte[] chars = Bytes.UTF8(charset.name());
-    filter = new byte[(1 + 40 + 2 + 5 + 1 + 1 + 1 + 52
-                       + 2 + regex.length + 2 + chars.length)];
-    final ChannelBuffer buf = ChannelBuffers.wrappedBuffer(filter);
-    buf.clear();  // Set the writerIndex to 0.
-
-    buf.writeByte((byte) ROWFILTER.length);                     // 1
-    buf.writeBytes(ROWFILTER);                                  // 40
-    // writeUTF of the comparison operator
-    buf.writeShort(5);                                          // 2
-    buf.writeBytes(EQUAL);                                      // 5
-    // The comparator: a RegexStringComparator
-    buf.writeByte(54);  // Code for WritableByteArrayComparable // 1
-    buf.writeByte(0);   // Code for "this has no code".         // 1
-    buf.writeByte((byte) REGEXSTRINGCOMPARATOR.length);         // 1
-    buf.writeBytes(REGEXSTRINGCOMPARATOR);                      // 52
-    // writeUTF the regexp
-    buf.writeShort(regex.length);                               // 2
-    buf.writeBytes(regex);                                      // regex.length
-    // writeUTF the charset
-    buf.writeShort(chars.length);                               // 2
-    buf.writeBytes(chars);                                      // chars.length
+    filter = new KeyRegexpFilter(regexp, charset);
   }
 
   /**
@@ -855,6 +846,8 @@ public final class Scanner {
   public String toString() {
     final String region = this.region == null ? "null"
       : this.region == DONE ? "none" : this.region.toString();
+    final String filter = this.filter == null ? "null"
+      : this.filter.toString();
     int fam_length = 0;
     if (families == null) {
       fam_length = 4;
@@ -879,7 +872,8 @@ public final class Scanner {
       + 1 + start_key.length + 1 + 11 + 1 + stop_key.length + 1
       + 11 + 1 + fam_length + qual_length + 1
       + 23 + 5 + 15 + 5 + 14 + 6
-      + 14 + 1 + region.length() + 1
+      + 9 + 1 + region.length() + 1
+      + 9 + 1 + filter.length() + 1
       + 13 + 18 + 1);
     buf.append("Scanner(table=");
     Bytes.pretty(buf, table);
@@ -892,7 +886,8 @@ public final class Scanner {
     buf.append("}, populate_blockcache=").append(populate_blockcache)
       .append(", max_num_rows=").append(max_num_rows)
       .append(", max_num_kvs=").append(max_num_kvs)
-      .append(", region=").append(region);
+      .append(", region=").append(region)
+      .append(", filter=").append(filter);
     buf.append(", scanner_id=").append(Bytes.hex(scanner_id))
       .append(')');
     return buf.toString();
@@ -1025,7 +1020,7 @@ public final class Scanner {
       size += 1;  // bool: Whether or not to populate the blockcache.
       size += 1;  // byte: Whether or not to use a filter.
       if (filter != null) {
-        size += filter.length;
+        size += filter.predictSerializedSize();
       }
       size += 8;  // long: Minimum timestamp.
       size += 8;  // long: Maximum timestamp.
@@ -1082,7 +1077,7 @@ public final class Scanner {
         buf.writeByte(0x00); // boolean (false): don't use a filter.
       } else {
         buf.writeByte(0x01); // boolean (true): use a filter.
-        buf.writeBytes(filter);
+        filter.serialize(buf);
       }
 
       // TimeRange
