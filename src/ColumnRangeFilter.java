@@ -28,7 +28,11 @@ package org.hbase.async;
 
 import org.jboss.netty.buffer.ChannelBuffer;
 
-public class ColumnRangeFilter extends ScanFilter {
+/**
+ * Filters based on a range of column qualifiers.
+ * @since 1.5
+ */
+public final class ColumnRangeFilter extends ScanFilter {
 
   private static final byte[] NAME = Bytes.ISO88591("org.apache.hadoop.hbase"
       + ".filter.ColumnRangeFilter");
@@ -38,10 +42,48 @@ public class ColumnRangeFilter extends ScanFilter {
   private final byte[] stop_column;
   private final boolean stop_inclusive;
 
+  /**
+   * Constructor for UTF-8 strings.
+   * Equivalent to {@link #ColumnRangeFilter(byte[], boolean, byte[], boolean)
+   * ColumnRangeFilter}{@code (start_column, true, stop_inclusive, true)}
+   */
+  public ColumnRangeFilter(final String start_column, final String stop_column) {
+    this(Bytes.UTF8(start_column), true, Bytes.UTF8(stop_column), true);
+  }
+
+  /**
+   * Constructor.
+   * Equivalent to {@link #ColumnRangeFilter(byte[], boolean, byte[], boolean)
+   * ColumnRangeFilter}{@code (start_column, true, stop_inclusive, true)}
+   */
   public ColumnRangeFilter(final byte[] start_column, final byte[] stop_column) {
     this(start_column, true, stop_column, true);
   }
 
+  /**
+   * Constructor for UTF-8 strings.
+   * @param start_column The column from which to start returning values.
+   * If {@code null}, start scanning from the beginning of the row.
+   * @param start_inclusive If {@code true}, the start column is inclusive.
+   * @param stop_column The column up to which to return values.
+   * If {@code null}, continue scanning until the end of the row.
+   * @param stop_inclusive If {@code true}, the stop column is inclusive.
+   */
+  public ColumnRangeFilter(final String start_column, final boolean start_inclusive,
+                           final String stop_column, final boolean stop_inclusive) {
+    this(Bytes.UTF8(start_column), start_inclusive,
+         Bytes.UTF8(stop_column), stop_inclusive);
+  }
+
+  /**
+   * Constructor.
+   * @param start_column The column from which to start returning values.
+   * If {@code null}, start scanning from the beginning of the row.
+   * @param start_inclusive If {@code true}, the start column is inclusive.
+   * @param stop_column The column up to which to return values.
+   * If {@code null}, continue scanning until the end of the row.
+   * @param stop_inclusive If {@code true}, the stop column is inclusive.
+   */
   public ColumnRangeFilter(final byte[] start_column, final boolean start_inclusive,
                            final byte[] stop_column, final boolean stop_inclusive) {
     this.start_column = start_column;
@@ -63,22 +105,29 @@ public class ColumnRangeFilter extends ScanFilter {
     buf.writeBytes(NAME);                          // 48
 
     if (start_column == null) {
-      buf.writeByte(0);                            // 1: False
+      buf.writeByte(1);                            // 1: False
       buf.writeByte(0);                            // 1: vint
     } else {
-      buf.writeByte(1);                            // 1: True
+      buf.writeByte(0);                            // 1: True
       HBaseRpc.writeByteArray(buf, start_column);  // 3 + start_column.length
     }
     buf.writeByte(start_inclusive ? 1 : 0);        // 1
 
     if (stop_column == null) {
-      buf.writeByte(0);                            // 1: False
+      buf.writeByte(1);                            // 1: False
       buf.writeByte(0);                            // 1: vint
     } else {
-      buf.writeByte(1);                            // 1: True
+      buf.writeByte(0);                            // 1: True
       HBaseRpc.writeByteArray(buf, stop_column);   // 3 + stop_column.length
     }
     buf.writeByte(stop_inclusive ? 1 : 0);         // 1
+  }
+
+  public String toString() {
+    return "ColumnRangeFilter(start=" + Bytes.pretty(start_column)
+      + (start_inclusive ? " (in" : " (ex")
+      + "clusive), stop=" + Bytes.pretty(stop_column)
+      + (stop_inclusive ? " (in" : " (ex") + "clusive))";
   }
 
 }

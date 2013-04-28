@@ -61,11 +61,16 @@ import com.stumbleupon.async.Deferred;
 
 import org.hbase.async.AtomicIncrementRequest;
 import org.hbase.async.Bytes;
+import org.hbase.async.ColumnPrefixFilter;
+import org.hbase.async.ColumnRangeFilter;
 import org.hbase.async.DeleteRequest;
+import org.hbase.async.FilterList;
 import org.hbase.async.GetRequest;
 import org.hbase.async.HBaseClient;
+import org.hbase.async.KeyRegexpFilter;
 import org.hbase.async.KeyValue;
 import org.hbase.async.PutRequest;
+import org.hbase.async.ScanFilter;
 import org.hbase.async.Scanner;
 import org.hbase.async.TableNotFoundException;
 
@@ -494,6 +499,101 @@ final public class TestIntegration {
     kvs = rows.get(1);
     assertEquals(1, kvs.size());
     assertEq("krfv3", kvs.get(0).value());
+  }
+
+  /** Simple column prefix filter tests.  */
+  @Test
+  public void columnPrefixFilter() throws Exception {
+    client.setFlushInterval(FAST_FLUSH);
+    // Keep only rows with a column qualifier that starts with "qa".
+    final PutRequest put1 = new PutRequest(table, "cpf1", family, "qa1", "v1");
+    final PutRequest put2 = new PutRequest(table, "cpf1", family, "qa2", "v2");
+    final PutRequest put3 = new PutRequest(table, "cpf2", family, "qa3", "v3");
+    final PutRequest put4 = new PutRequest(table, "cpf2", family, "qb4", "v4");
+    Deferred.group(Deferred.group(client.put(put1), client.put(put2)),
+                   Deferred.group(client.put(put3), client.put(put4))).join();
+    final Scanner scanner = client.newScanner(table);
+    scanner.setFamily(family);
+    scanner.setStartKey("cpf1");
+    scanner.setStopKey("cpf3");
+    scanner.setFilter(new ColumnPrefixFilter("qa"));
+    final ArrayList<ArrayList<KeyValue>> rows = scanner.nextRows().join();
+    assertEquals(2, rows.size());
+    ArrayList<KeyValue> kvs = rows.get(0);
+    assertEquals(2, kvs.size());
+    assertEq("v1", kvs.get(0).value());
+    assertEq("v2", kvs.get(1).value());
+    kvs = rows.get(1);
+    assertEquals(1, kvs.size());
+    assertEq("v3", kvs.get(0).value());
+  }
+
+  /** Simple column range filter tests.  */
+  @Test
+  public void columnRangeFilter() throws Exception {
+    client.setFlushInterval(FAST_FLUSH);
+    // Keep rows that have a qualifier in between "qb" (inclusive) and "qd4"
+    // (exclusive).  So only v2 and v3 should be returned by the scanner.
+    final PutRequest put1 = new PutRequest(table, "crf1", family, "qa1", "v1");
+    final PutRequest put2 = new PutRequest(table, "crf1", family, "qb2", "v2");
+    final PutRequest put3 = new PutRequest(table, "crf2", family, "qc3", "v3");
+    final PutRequest put4 = new PutRequest(table, "crf2", family, "qd4", "v4");
+    Deferred.group(Deferred.group(client.put(put1), client.put(put2)),
+                   Deferred.group(client.put(put3), client.put(put4))).join();
+    final Scanner scanner = client.newScanner(table);
+    scanner.setFamily(family);
+    scanner.setStartKey("crf1");
+    scanner.setStopKey("crf3");
+    scanner.setFilter(new ColumnRangeFilter("qb", true, "qd4", false));
+    final ArrayList<ArrayList<KeyValue>> rows = scanner.nextRows().join();
+    assertEquals(2, rows.size());  // One KV from row "fl1" and one from "fl2".
+    ArrayList<KeyValue> kvs = rows.get(0);
+    assertEquals(1, kvs.size());
+    assertEq("v2", kvs.get(0).value());
+    kvs = rows.get(1);
+    assertEquals(1, kvs.size());
+    assertEq("v3", kvs.get(0).value());
+  }
+
+  /** Simple column filter list tests.  */
+  @Test
+  public void filterList() throws Exception {
+    client.setFlushInterval(FAST_FLUSH);
+    // Keep rows that have both:
+    //   - a row key that is exactly either "fl1" or "fl2".
+    //   - a qualifier in between "qb" (inclusive) and "qd4" (exclusive).
+    final ArrayList<ScanFilter> filters = new ArrayList<ScanFilter>(2);
+    filters.add(new ColumnRangeFilter("qb", true, "qd4", false));
+    filters.add(new KeyRegexpFilter("fl[12]$"));
+    // Filtered out as we're looking due to qualifier being out of range:
+    final PutRequest put1 = new PutRequest(table, "fl1", family, "qa1", "v1");
+    // Kept by the filter:
+    final PutRequest put2 = new PutRequest(table, "fl1", family, "qb2", "v2");
+    // Filtered out because the row key doesn't match the regexp:
+    final PutRequest put3 = new PutRequest(table, "fl1a", family, "qb3", "v3");
+    // Kept by the filter:
+    final PutRequest put4 = new PutRequest(table, "fl2", family, "qc4", "v4");
+    // Filtered out because the qualifier is on the exclusive upper bound:
+    final PutRequest put5 = new PutRequest(table, "fl2", family, "qd5", "v5");
+    // Filtered out because the qualifier is past the upper bound:
+    final PutRequest put6 = new PutRequest(table, "fl2", family, "qd6", "v6");
+    Deferred.group(Deferred.group(client.put(put1), client.put(put2),
+                                  client.put(put3)),
+                   Deferred.group(client.put(put4), client.put(put5),
+                                  client.put(put6))).join();
+    final Scanner scanner = client.newScanner(table);
+    scanner.setFamily(family);
+    scanner.setStartKey("fl0");
+    scanner.setStopKey("fl9");
+    scanner.setFilter(new FilterList(filters));
+    final ArrayList<ArrayList<KeyValue>> rows = scanner.nextRows().join();
+    assertEquals(2, rows.size());  // One KV from row "fl1" and one from "fl2".
+    ArrayList<KeyValue> kvs = rows.get(0);
+    assertEquals(1, kvs.size());   // KV from "fl1":
+    assertEq("v2", kvs.get(0).value());
+    kvs = rows.get(1);
+    assertEquals(1, kvs.size());   // KV from "fl2":
+    assertEq("v4", kvs.get(0).value());
   }
 
   /** Regression test for issue #2. */

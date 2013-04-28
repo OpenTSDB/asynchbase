@@ -28,13 +28,34 @@ package org.hbase.async;
 
 import org.jboss.netty.buffer.ChannelBuffer;
 
-public class ColumnPrefixFilter extends ScanFilter {
+/**
+ * Sets a binary prefix to filter results based on the column qualifier.
+ * <p>
+ * Efficiently compares the column qualifier bytes up to the length of the
+ * prefix to see if it matches.
+ * <p>
+ * Only setting this filter will return all rows that match the criteria
+ * but at the same will cost a full table scan.
+ * @since 1.5
+ */
+public final class ColumnPrefixFilter extends ScanFilter {
 
   private static final byte[] NAME = Bytes.ISO88591("org.apache.hadoop"
       + ".hbase.filter.ColumnPrefixFilter");
 
   private final byte[] prefix;
 
+  /**
+   * Constructor for a UTF-8 prefix string.
+   */
+  public ColumnPrefixFilter(final String prefix) {
+    this(Bytes.UTF8(prefix));
+  }
+
+  /**
+   * Constructor.
+   * @throws IllegalArgumentException if the prefix is an empty byte array.
+   */
   public ColumnPrefixFilter(final byte[] prefix) {
     if (prefix.length == 0) {
       throw new IllegalArgumentException("Empty prefix");
@@ -52,6 +73,10 @@ public class ColumnPrefixFilter extends ScanFilter {
     buf.writeByte((byte) NAME.length);     // 1
     buf.writeBytes(NAME);                  // 49
     HBaseRpc.writeByteArray(buf, prefix);  // 3 + prefix.length
+  }
+
+  public String toString() {
+    return "ColumnPrefixFilter(" + Bytes.pretty(prefix) + ")";
   }
 
 }

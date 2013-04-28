@@ -53,7 +53,7 @@ import java.nio.charset.Charset;
  * CPU cycles and cause the entire HBase node to time out.
  * @since 1.5
  */
-public class KeyRegexpFilter extends ScanFilter {
+public final class KeyRegexpFilter extends ScanFilter {
 
   private static final byte[] ROWFILTER = Bytes.ISO88591("org.apache.hadoop"
     + ".hbase.filter.RowFilter");

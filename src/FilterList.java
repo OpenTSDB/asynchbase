@@ -32,7 +32,11 @@ import org.slf4j.LoggerFactory;
 
 import java.util.List;
 
-public class FilterList extends ScanFilter {
+/**
+ * Combines a list of filters into one.
+ * Since 1.5
+ */
+public final class FilterList extends ScanFilter {
 
   private static final byte[] NAME = Bytes.ISO88591("org.apache.hadoop"
       + ".hbase.filter.FilterList");
@@ -40,15 +44,33 @@ public class FilterList extends ScanFilter {
   private final List<ScanFilter> filters;
   private final Operator op;
 
+  /**
+   * Operator to combine the list of filters together.
+   * since 1.5
+   */
   public enum Operator {
+    /** All the filters must pass ("and" semantic).  */
     MUST_PASS_ALL,
+    /** At least one of the filters must pass ("or" semantic).  */
     MUST_PASS_ONE,
   }
 
+  /**
+   * Constructor.
+   * Equivalent to {@link #FilterList(List, Operator)
+   * FilterList}{@code (filters, }{@link Operator#MUST_PASS_ALL}{@code )}
+   */
   public FilterList(final List<ScanFilter> filters) {
     this(filters, Operator.MUST_PASS_ALL);
   }
 
+  /**
+   * Constructor.
+   * @param filters The filters to combine.  <strong>This list does not get
+   * copied, do not mutate it after passing it to this object</strong>.
+   * @param op The operator to use to combine the filters together.
+   * @throws IllegalArgumentException if the list of filters is empty.
+   */
   public FilterList(final List<ScanFilter> filters, final Operator op) {
     if (filters.isEmpty()) {
       throw new IllegalArgumentException("Empty filter list");
@@ -78,6 +100,18 @@ public class FilterList extends ScanFilter {
       buf.writeByte(0);   // 1 : code for NOT_ENCODED
       filter.serialize(buf);
     }
+  }
+
+  public String toString() {
+    final StringBuilder buf = new StringBuilder(32 + filters.size() * 48);
+    buf.append("FilterList(filters=[");
+    for (final ScanFilter filter : filters) {
+      buf.append(filter.toString());
+      buf.append(", ");
+    }
+    buf.setLength(buf.length() - 2);  // Remove the last ", "
+    buf.append("], op=").append(op).append(")");
+    return buf.toString();
   }
 
 }
