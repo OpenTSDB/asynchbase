@@ -37,6 +37,7 @@ import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.util.ArrayList;
+import java.util.Collection;
 
 import org.jboss.netty.logging.InternalLoggerFactory;
 import org.jboss.netty.logging.Slf4JLoggerFactory;
@@ -182,7 +183,7 @@ final public class TestIntegration {
       .family(family).qualifier("q");
     client.put(put).join();
     final ArrayList<KeyValue> kvs = client.get(get).join();
-    assertEquals(1, kvs.size());
+    assertSizeIs(1, kvs);
     final KeyValue kv = kvs.get(0);
     assertEq("k", kv.key());
     assertEq(family, kv.family());
@@ -201,12 +202,12 @@ final public class TestIntegration {
       .family(family).qualifier("q");
     client.put(put).join();
     final ArrayList<KeyValue> kvs = client.get(get).join();
-    assertEquals(1, kvs.size());
+    assertSizeIs(1, kvs);
     assertEq("val", kvs.get(0).value());
     final DeleteRequest del = new DeleteRequest(table, "k", family, "q");
     client.delete(del).join();
     final ArrayList<KeyValue> kvs2 = client.get(get).join();
-    assertEquals(0, kvs2.size());
+    assertSizeIs(0, kvs2);
   }
 
   /** Basic scan test. */
@@ -233,10 +234,10 @@ final public class TestIntegration {
           }
           n++;
           try {
-            assertEquals(1, rows.size());
+            assertSizeIs(1, rows);
             final ArrayList<KeyValue> kvs = rows.get(0);
             final KeyValue kv = kvs.get(0);
-            assertEquals(1, kvs.size());
+            assertSizeIs(1, kvs);
             assertEq("s" + n, kv.key());
             assertEq("q", kv.qualifier());
             assertEq("v" + n, kv.value());
@@ -269,9 +270,9 @@ final public class TestIntegration {
     scanner.setFamily(family);
     scanner.setQualifiers(new byte[][] { { 'a' }, { 'c' } });
     final ArrayList<ArrayList<KeyValue>> rows = scanner.nextRows(2).join();
-    assertEquals(1, rows.size());
+    assertSizeIs(1, rows);
     final ArrayList<KeyValue> kvs = rows.get(0);
-    assertEquals(2, kvs.size());
+    assertSizeIs(2, kvs);
     assertEq("val1", kvs.get(0).value());
     assertEq("val3", kvs.get(1).value());
   }
@@ -339,7 +340,7 @@ final public class TestIntegration {
                                 mkGet(table, key2, family, qual) };
     for (final GetRequest get : gets) {
       final ArrayList<KeyValue> kvs = client.get(get).join();
-      assertEquals(1, kvs.size());
+      assertSizeIs(1, kvs);
       assertEquals(incr_per_thread * nthreads / 2,
                    Bytes.getLong(kvs.get(0).value()));
     }
@@ -372,7 +373,7 @@ final public class TestIntegration {
         return client.get(get);
       }
     }).join();
-    assertEquals(1, kvs.size());
+    assertSizeIs(1, kvs);
     assertEquals(big + big, Bytes.getLong(kvs.get(0).value()));
     // Check we sent the right number of RPCs.
     assertEquals(2, client.stats().atomicIncrements());
@@ -400,7 +401,7 @@ final public class TestIntegration {
     final GetRequest get = new GetRequest(table, key)
       .family(family).qualifier(qual);
     final ArrayList<KeyValue> kvs = client.get(get).join();
-    assertEquals(1, kvs.size());
+    assertSizeIs(1, kvs);
     assertEquals(big + 1 + big, Bytes.getLong(kvs.get(0).value()));
     // Check we sent the right number of RPCs.
     assertEquals(2, client.stats().atomicIncrements());
@@ -428,7 +429,7 @@ final public class TestIntegration {
     final GetRequest get = new GetRequest(table, key)
       .family(family).qualifier(qual);
     final ArrayList<KeyValue> kvs = client.get(get).join();
-    assertEquals(1, kvs.size());
+    assertSizeIs(1, kvs);
     assertEquals(big - 1 + big, Bytes.getLong(kvs.get(0).value()));
     // Check we sent the right number of RPCs.
     assertEquals(2, client.stats().atomicIncrements());
@@ -452,7 +453,7 @@ final public class TestIntegration {
     final GetRequest get = new GetRequest(table, key)
       .family(family).qualifier(qual);
     final ArrayList<KeyValue> kvs = client.get(get).join();
-    assertEquals(1, kvs.size());
+    assertSizeIs(1, kvs);
     assertEquals(0, Bytes.getLong(kvs.get(0).value()));
     // The sum was 0, but must have sent the increment anyway.
     assertEquals(1, client.stats().atomicIncrements());
@@ -492,12 +493,12 @@ final public class TestIntegration {
     scanner.setStopKey("krf!");
     scanner.setKeyRegexp("[Aa]ccept(ed)?");
     final ArrayList<ArrayList<KeyValue>> rows = scanner.nextRows().join();
-    assertEquals(2, rows.size());
+    assertSizeIs(2, rows);
     ArrayList<KeyValue> kvs = rows.get(0);
-    assertEquals(1, kvs.size());
+    assertSizeIs(1, kvs);
     assertEq("krfv1", kvs.get(0).value());
     kvs = rows.get(1);
-    assertEquals(1, kvs.size());
+    assertSizeIs(1, kvs);
     assertEq("krfv3", kvs.get(0).value());
   }
 
@@ -518,13 +519,13 @@ final public class TestIntegration {
     scanner.setStopKey("cpf3");
     scanner.setFilter(new ColumnPrefixFilter("qa"));
     final ArrayList<ArrayList<KeyValue>> rows = scanner.nextRows().join();
-    assertEquals(2, rows.size());
+    assertSizeIs(2, rows);
     ArrayList<KeyValue> kvs = rows.get(0);
-    assertEquals(2, kvs.size());
+    assertSizeIs(2, kvs);
     assertEq("v1", kvs.get(0).value());
     assertEq("v2", kvs.get(1).value());
     kvs = rows.get(1);
-    assertEquals(1, kvs.size());
+    assertSizeIs(1, kvs);
     assertEq("v3", kvs.get(0).value());
   }
 
@@ -546,12 +547,12 @@ final public class TestIntegration {
     scanner.setStopKey("crf3");
     scanner.setFilter(new ColumnRangeFilter("qb", true, "qd4", false));
     final ArrayList<ArrayList<KeyValue>> rows = scanner.nextRows().join();
-    assertEquals(2, rows.size());  // One KV from row "fl1" and one from "fl2".
+    assertSizeIs(2, rows);  // One KV from row "fl1" and one from "fl2".
     ArrayList<KeyValue> kvs = rows.get(0);
-    assertEquals(1, kvs.size());
+    assertSizeIs(1, kvs);
     assertEq("v2", kvs.get(0).value());
     kvs = rows.get(1);
-    assertEquals(1, kvs.size());
+    assertSizeIs(1, kvs);
     assertEq("v3", kvs.get(0).value());
   }
 
@@ -587,12 +588,12 @@ final public class TestIntegration {
     scanner.setStopKey("fl9");
     scanner.setFilter(new FilterList(filters));
     final ArrayList<ArrayList<KeyValue>> rows = scanner.nextRows().join();
-    assertEquals(2, rows.size());  // One KV from row "fl1" and one from "fl2".
+    assertSizeIs(2, rows);  // One KV from row "fl1" and one from "fl2".
     ArrayList<KeyValue> kvs = rows.get(0);
-    assertEquals(1, kvs.size());   // KV from "fl1":
+    assertSizeIs(1, kvs);   // KV from "fl1":
     assertEq("v2", kvs.get(0).value());
     kvs = rows.get(1);
-    assertEquals(1, kvs.size());   // KV from "fl2":
+    assertSizeIs(1, kvs);   // KV from "fl2":
     assertEq("v4", kvs.get(0).value());
   }
 
@@ -663,7 +664,7 @@ final public class TestIntegration {
     final GetRequest get = new GetRequest(table, key);
     client.put(put).join();
     final ArrayList<KeyValue> kvs = client.get(get).join();
-    assertEquals(1, kvs.size());
+    assertSizeIs(1, kvs);
     KeyValue kv = kvs.get(0);
     assertEq("q", kv.qualifier());
     assertEq("", kv.value());
@@ -688,8 +689,17 @@ final public class TestIntegration {
     final GetRequest get = new GetRequest(table, key)
       .family(family).qualifier(qual);
     final ArrayList<KeyValue> kvs = client.get(get).join();
-    assertEquals(1, kvs.size());
+    assertSizeIs(1, kvs);
     assertEquals(iterations, Bytes.getLong(kvs.get(0).value()));
+  }
+
+  private static <T> void assertSizeIs(final int size,
+                                       final Collection<T> list) {
+    final int actual = list.size();
+    if (size != actual) {
+      throw new AssertionError("List was expected to contain " + size
+                 + " items but was found to contain " + actual + ": " + list);
+    }
   }
 
   private static void assertEq(final String expect, final byte[] actual) {
