@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2010, 2011  StumbleUpon, Inc.  All rights reserved.
+ * Copyright (C) 2010-2012  The Async HBase Authors.  All rights reserved.
  * This file is part of Async HBase.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -24,7 +24,7 @@
  * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
  * POSSIBILITY OF SUCH DAMAGE.
  */
-// no package
+package org.hbase.async.test;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -39,22 +39,16 @@ import org.hbase.async.RowLock;
 import org.hbase.async.RowLockRequest;
 import org.hbase.async.Scanner;
 
-import org.jboss.netty.logging.InternalLoggerFactory;
-import org.jboss.netty.logging.Slf4JLoggerFactory;
-
 import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
+import org.hbase.async.test.Common;
 
 /**
  * Simple command-line interface to quickly test async HBase.
  */
 final class Test {
 
-  private static final Logger LOG = LoggerFactory.getLogger(Test.class);
-  static {
-    InternalLoggerFactory.setDefaultFactory(new Slf4JLoggerFactory());
-  }
+  private static final Logger LOG = Common.logger(Test.class);
 
   private static final HashMap<String, Cmd> commands;
   static {
@@ -70,6 +64,9 @@ final class Test {
     final delete delete = new delete();  // delete delete delete!!
     commands.put("delete", delete);
     commands.put("ldelete", delete);
+    final cas cas = new cas();  // cas cas cas!!
+    commands.put("cas", cas);
+    commands.put("lcas", cas);
   }
 
   private static void printUsage() {
@@ -81,10 +78,12 @@ final class Test {
                        + "  put <table> <key> <family> <qualifier> <value>\n"
                        + "  delete <table> <key> [<family> [<qualifier>]]\n"
                        + "  scan <table> [start] [family] [qualifier] [stop] [regexp]\n"
+                       + "  cas <table> <key> <family> <qualifier> <expected> <value>\n"
                        + "Variants that acquire an explicit row-lock:\n"
                        + "  lget <table> <key> [family] [qualifiers ...]\n"
                        + "  lput <table> <key> <family> <qualifier> <value>\n"
                        + "  ldelete <table> <key> <family> <qualifier>\n"
+                       + "  lcas <table> <key> <family> <qualifier> <expected> <value>\n"
                       );
   }
 
@@ -123,7 +122,6 @@ final class Test {
     System.out.println("Starting shutdown...");
     LOG.debug("Shutdown returned " + client.shutdown().joinUninterruptibly());
     System.out.println("Exiting...");
-    System.exit(0);
   }
 
   private static interface Cmd {
@@ -271,6 +269,35 @@ final class Test {
         }
       } catch (Exception e) {
         LOG.error("Scan failed", e);
+      }
+    }
+  }
+
+  private static final class cas implements Cmd {
+    public void execute(final HBaseClient client, String[] args) throws Exception {
+      ensureArguments(args, 8, 8);
+      RowLock lock = null;
+      if (args[1].charAt(0) == 'l') {  // locked version of the command
+        final RowLockRequest rlr = new RowLockRequest(args[2], args[3]);
+        lock = client.lockRow(rlr).joinUninterruptibly();
+        LOG.info("Acquired explicit row lock: " + lock);
+      }
+      final PutRequest put = lock == null
+        ? new PutRequest(args[2], args[3], args[4], args[5], args[7])
+        : new PutRequest(args[2], args[3], args[4], args[5], args[7], lock);
+      final String expected = args[6];
+      args = null;
+      try {
+        final boolean ok = client.compareAndSet(put, expected).joinUninterruptibly();
+        LOG.info("CAS "
+                 + (ok ? "succeeded" : "failed: value wasn't " + expected));
+      } catch (Exception e) {
+        LOG.error("CAS failed", e);
+      } finally {
+        if (lock != null) {
+          client.unlockRow(lock).joinUninterruptibly();
+          LOG.info("Released explicit row lock: " + lock);
+        }
       }
     }
   }

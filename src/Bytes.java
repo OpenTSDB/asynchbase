@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2010  StumbleUpon, Inc.  All rights reserved.
+ * Copyright (C) 2010-2012  The Async HBase Authors.  All rights reserved.
  * This file is part of Async HBase.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -27,6 +27,8 @@
 package org.hbase.async;
 
 import java.lang.reflect.Field;
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Method;
 
 import java.util.Arrays;
 import java.util.Comparator;
@@ -294,8 +296,8 @@ public final class Bytes {
 
   /**
    * Pretty-prints a byte array into a human-readable output buffer.
-   * @param outbuf The (possibly {@code null}) buffer where to write the output.
-   * @param array The array to pretty-print.
+   * @param outbuf The buffer where to write the output.
+   * @param array The (possibly {@code null}) array to pretty-print.
    */
   public static void pretty(final StringBuilder outbuf, final byte[] array) {
     pretty(outbuf, array, Integer.MAX_VALUE);
@@ -314,9 +316,11 @@ public final class Bytes {
     }
     int ascii = 0;
     final int start_length = outbuf.length();
-    outbuf.ensureCapacity(start_length + 1 + array.length + 1);
+    final int n = array.length;
+    outbuf.ensureCapacity(start_length + 1 + n + 1);
     outbuf.append('"');
-    for (final byte b : array) {
+    for (int i = 0; i < n; i++) {
+      final byte b = array[i];
       if (' ' <= b && b <= '~') {
         ascii++;
         outbuf.append((char) b);
@@ -334,12 +338,38 @@ public final class Bytes {
         break;
       }
     }
-    if (ascii < array.length / 2) {
+    if (ascii < n / 2) {
       outbuf.setLength(start_length);
       outbuf.append(Arrays.toString(array));
     } else {
       outbuf.append('"');
     }
+  }
+
+  /**
+   * Pretty-prints an array of byte arrays into a human-readable output buffer.
+   * @param outbuf The buffer where to write the output.
+   * @param arrays The (possibly {@code null}) array of arrays to pretty-print.
+   * @since 1.3
+   */
+  public static void pretty(final StringBuilder outbuf, final byte[][] arrays) {
+    if (arrays == null) {
+      outbuf.append("null");
+      return;
+    } else {  // Do some right-sizing.
+      int size = 2;
+      for (int i = 0; i < arrays.length; i++) {
+        size += 2 + 2 + arrays[i].length;
+      }
+      outbuf.ensureCapacity(outbuf.length() + size);
+    }
+    outbuf.append('[');
+    for (int i = 0; i < arrays.length; i++) {
+      Bytes.pretty(outbuf, arrays[i]);
+      outbuf.append(", ");
+    }
+    outbuf.setLength(outbuf.length() - 2);  // Remove the last ", "
+    outbuf.append(']');
   }
 
   /**
@@ -388,24 +418,46 @@ public final class Bytes {
     return new String(buf);
   }
 
-  // TODO(tsuna): Remove this unnecessary complication once Netty's
-  // ReplayingDecoderBuffer#array is fixed -- see NETTY-346.
+  // Ugly stuff
+  // ----------
   // Background: when using ReplayingDecoder (which makes it easy to deal with
   // unframed RPC responses), the ChannelBuffer we manipulate is in fact a
   // ReplayingDecoderBuffer, a package-private class that Netty uses.  This
   // class, for some reason, throws UnsupportedOperationException on its
   // array() method.  This method is unfortunately the only way to easily dump
   // the contents of a ChannelBuffer, which is useful for debugging or logging
-  // unexpected buffers.  So until Netty is fixed, we have to cheat the type
-  // system using reflection.
+  // unexpected buffers.  An issue (NETTY-346) has been filed to get access to
+  // the buffer, but the resolution was useless: instead of making the array()
+  // method work, a new internalBuffer() method was added on ReplayingDecoder,
+  // which would require that we keep a reference on the ReplayingDecoder all
+  // along in order to properly convert the buffer to a string.
+  // So we instead use ugly reflection to gain access to the underlying buffer
+  // while taking into account that the implementation of Netty has changed
+  // over time, so depending which version of Netty we're working with, we do
+  // a different hack.  Yes this is horrible, but it's for the greater good as
+  // this is what allows us to debug unexpected buffers when deserializing RPCs
+  // and what's more important than being able to debug unexpected stuff?
   private static final Class<?> ReplayingDecoderBuffer;
-  private static final Field RDB_buffer;
+  private static final Field RDB_buffer;  // For Netty 3.5.0 and before.
+  private static final Method RDB_buf;    // For Netty 3.5.1 and above.
   static {
     try {
       ReplayingDecoderBuffer = Class.forName("org.jboss.netty.handler.codec."
                                              + "replay.ReplayingDecoderBuffer");
-      RDB_buffer = ReplayingDecoderBuffer.getDeclaredField("buffer");
-      RDB_buffer.setAccessible(true);
+      Field field = null;
+      try {
+        field = ReplayingDecoderBuffer.getDeclaredField("buffer");
+        field.setAccessible(true);
+      } catch (NoSuchFieldException e) {
+        // Ignore.  Field has been removed in Netty 3.5.1.
+      }
+      RDB_buffer = field;
+      if (field != null) {  // Netty 3.5.0 or before.
+        RDB_buf = null;
+      } else {
+        RDB_buf = ReplayingDecoderBuffer.getDeclaredMethod("buf");
+        RDB_buf.setAccessible(true);
+      }
     } catch (Exception e) {
       throw new RuntimeException("static initializer failed", e);
     }
@@ -430,17 +482,22 @@ public final class Bytes {
       return "null";
     }
     byte[] array;
-    if (buf.getClass() != ReplayingDecoderBuffer) {
-      array = buf.array();
-    } else {
-      // TODO(tsuna): Remove this unnecessary complication once Netty's
-      // ReplayingDecoderBuffer#array is fixed -- see NETTY-346.
-      try {
+    try {
+      if (buf.getClass() != ReplayingDecoderBuffer) {
+        array = buf.array();
+      } else if (RDB_buf != null) {  // Netty 3.5.1 and above.
+        array = ((ChannelBuffer) RDB_buf.invoke(buf)).array();
+      } else {  // Netty 3.5.0 and before.
         final ChannelBuffer wrapped_buf = (ChannelBuffer) RDB_buffer.get(buf);
         array = wrapped_buf.array();
-      } catch (IllegalAccessException e) {
-        throw new AssertionError("Should not happen: " + e);
       }
+    } catch (UnsupportedOperationException e) {
+      return "(failed to extract content of buffer of type "
+        + buf.getClass().getName() + ')';
+    } catch (IllegalAccessException e) {
+      throw new AssertionError("Should not happen: " + e);
+    } catch (InvocationTargetException e) {
+      throw new AssertionError("Should not happen: " + e);
     }
     return pretty(array, limit);
   }

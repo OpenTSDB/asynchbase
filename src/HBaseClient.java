@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2010, 2011  StumbleUpon, Inc.  All rights reserved.
+ * Copyright (C) 2010-2012  The Async HBase Authors.  All rights reserved.
  * This file is part of Async HBase.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -41,8 +41,9 @@ import java.util.concurrent.ConcurrentSkipListMap;
 import java.util.concurrent.Executor;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ThreadFactory;
-import java.util.concurrent.atomic.AtomicLong;
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
+
+import com.google.common.cache.LoadingCache;
 
 import org.apache.zookeeper.AsyncCallback;
 import org.apache.zookeeper.KeeperException.Code;
@@ -55,6 +56,7 @@ import org.jboss.netty.channel.ChannelEvent;
 import org.jboss.netty.channel.ChannelPipeline;
 import org.jboss.netty.channel.ChannelStateEvent;
 import org.jboss.netty.channel.DefaultChannelPipeline;
+import org.jboss.netty.channel.socket.ClientSocketChannelFactory;
 import org.jboss.netty.channel.socket.SocketChannel;
 import org.jboss.netty.channel.socket.SocketChannelConfig;
 import org.jboss.netty.channel.socket.nio.NioClientSocketChannelFactory;
@@ -174,25 +176,6 @@ import com.stumbleupon.async.Deferred;
  */
 public final class HBaseClient {
   /*
-   * Internal implementation documentation
-   * -------------------------------------
-   *
-   * This class is the heart of the HBase client.  Being an HBase client
-   * essentially boils down to keeping track of where regions are and
-   * sending RPCs to the right RegionServer.  RegionServers don't know
-   * much about tables, they only care about regions.  In order to be
-   * efficient (read: usable), a good HBase client *must* cache where
-   * each region is found to be (until this knowledge is invalidated).
-   *
-   * As the user of this class uses HBaseClient with different tables and
-   * different rows, this HBaseClient will slowly build a local cached copy
-   * of the -ROOT- and .META. tables.  It's like for virtual memory: the
-   * first time you access a page, there's a TLB miss, and you need to go
-   * through (typically) a 2-layer page table to find the actual address,
-   * which is then cached in the TLB before the faulty instruction gets
-   * restarted.  Well, we do pretty much the same thing here, except at
-   * an abstraction level that's a bazillion light years away from the TLB.
-   *
    * TODO(tsuna): Address the following.
    *
    * - Properly handle disconnects.
@@ -200,17 +183,7 @@ public final class HBaseClient {
    *      network blip.
    *    - If the -ROOT- region is unavailable when we start, we should
    *      put a watch in ZK instead of polling it every second.
-   * - Use a global Timer (Netty's HashedWheelTimer is good) to handle all
-   *   the timed tasks.
-   *     - Exponential backoff for things like reconnecting, retrying to
-   *       talk to ZK to find the -ROOT- region and such.
-   *     - Handling RPC timeouts.
-   * - Proper retry logic in various places:
-   *     - Retry to find -ROOT- when -ROOT- is momentarily dead.
-   *     - Don't retry to find a region forever, if there's a hole in .META.
-   *       we'll simply never find that region.
-   *     - I don't think NSREs are properly handled everywhere, e.g. when
-   *       opening a scanner.
+   * - Handling RPC timeouts.
    * - Stats:
    *     - QPS per RPC type.
    *     - Latency histogram per RPC type (requires open-sourcing the SU Java
@@ -237,42 +210,36 @@ public final class HBaseClient {
   private static final byte[] SERVER = new byte[] { 's', 'e', 'r', 'v', 'e', 'r' };
 
   /**
-   * Executor with which we create all our threads.
-   * TODO(tsuna): Get it through the ctor to share it with others.
-   * NOTE(avh): create daemon threads to work around incomplete netty shutdown
-   */
-  private final Executor executor = Executors.newCachedThreadPool(new ThreadFactory() {
-            public Thread newThread(Runnable r)
-            {
-                Thread t = new Thread(r);
-                t.setDaemon(true);
-                return t;
-            }
-        });
-
-  /**
    * Timer we use to handle all our timeouts.
-   * <p>
-   * This is package-private so that this timer can easily be shared with the
-   * other classes in this package.
    * TODO(tsuna): Get it through the ctor to share it with others.
+   * TODO(tsuna): Make the tick duration configurable?
    */
-  final Timer timer = new HashedWheelTimer(20, MILLISECONDS);
+  private final HashedWheelTimer timer = new HashedWheelTimer(20, MILLISECONDS);
 
   /** Up to how many milliseconds can we buffer an edit on the client side.  */
   private volatile short flush_interval = 1000;  // ms
 
   /**
+   * How many different counters do we want to keep in memory for buffering.
+   * Each entry requires storing the table name, row key, family name and
+   * column qualifier, plus 4 small objects.
+   *
+   * Assuming an average table name of 10 bytes, average key of 20 bytes,
+   * average family name of 10 bytes and average qualifier of 8 bytes, this
+   * would require 65535 * (10 + 20 + 10 + 8 + 4 * 32) / 1024 / 1024 = 11MB
+   * of RAM, which isn't too excessive for a default value.  Of course this
+   * might bite people with large keys or qualifiers, but then it's normal
+   * to expect they'd tune this value to cater to their unusual requirements.
+   */
+  private volatile int increment_buffer_size = 65535;
+
+  /**
    * Factory through which we will create all its channels / sockets.
    */
-  private final NioClientSocketChannelFactory channel_factory
-    = new NioClientSocketChannelFactory(executor, executor);;
+  private final ClientSocketChannelFactory channel_factory;
 
   /** Watcher to keep track of the -ROOT- region in ZooKeeper.  */
   private final ZKClient zkclient;
-
-  /** How many {@code -ROOT-} lookups were made.  */
-  private final AtomicLong root_lookups = new AtomicLong();
 
   /**
    * The client currently connected to the -ROOT- region.
@@ -325,12 +292,6 @@ public final class HBaseClient {
    */
   private final ConcurrentHashMap<RegionInfo, RegionClient> region2client =
     new ConcurrentHashMap<RegionInfo, RegionClient>();
-
-  /** How many {@code .META.} lookups were made (with a permit).  */
-  private final AtomicLong meta_lookups_with_permit = new AtomicLong();
-
-  /** How many {@code .META.} lookups were made (without a permit).  */
-  private final AtomicLong meta_lookups_wo_permit = new AtomicLong();
 
   /**
    * Maps a client connected to a RegionServer to the list of regions we know
@@ -391,6 +352,68 @@ public final class HBaseClient {
     new ConcurrentSkipListMap<byte[], ArrayList<HBaseRpc>>(RegionInfo.REGION_NAME_CMP);
 
   /**
+   * Buffer for atomic increment coalescing.
+   * This buffer starts out null, and remains so until the first time we need
+   * to buffer an increment.  Once lazily initialized, this buffer will never
+   * become null again.
+   * <p>
+   * We do this so that we can lazily schedule the flush timer only if we ever
+   * have buffered increments.  Applications without buffered increments don't
+   * need to pay any memory for the buffer or any CPU time for a useless timer.
+   * @see #setupIncrementCoalescing
+   */
+  private volatile LoadingCache<BufferedIncrement, BufferedIncrement.Amount> increment_buffer;
+
+  // ------------------------ //
+  // Client usage statistics. //
+  // ------------------------ //
+
+  /** Number of connections created by {@link #newClient}.  */
+  private final Counter num_connections_created = new Counter();
+
+  /** How many {@code -ROOT-} lookups were made.  */
+  private final Counter root_lookups = new Counter();
+
+  /** How many {@code .META.} lookups were made (with a permit).  */
+  private final Counter meta_lookups_with_permit = new Counter();
+
+  /** How many {@code .META.} lookups were made (without a permit).  */
+  private final Counter meta_lookups_wo_permit = new Counter();
+
+  /** Number of calls to {@link #flush}.  */
+  private final Counter num_flushes = new Counter();
+
+  /** Number of NSREs handled by {@link #handleNSRE}.  */
+  private final Counter num_nsres = new Counter();
+
+  /** Number of RPCs delayed by {@link #handleNSRE}.  */
+  private final Counter num_nsre_rpcs = new Counter();
+
+  /** Number of {@link MultiAction} sent to the network.  */
+  final Counter num_multi_rpcs = new Counter();
+
+  /** Number of calls to {@link #get}.  */
+  private final Counter num_gets = new Counter();
+
+  /** Number of calls to {@link #openScanner}.  */
+  private final Counter num_scanners_opened = new Counter();
+
+  /** Number of calls to {@link #scanNextRows}.  */
+  private final Counter num_scans = new Counter();
+
+  /** Number calls to {@link #put}.  */
+  private final Counter num_puts = new Counter();
+
+  /** Number calls to {@link #lockRow}.  */
+  private final Counter num_row_locks = new Counter();
+
+  /** Number calls to {@link #delete}.  */
+  private final Counter num_deletes = new Counter();
+
+  /** Number of {@link AtomicIncrementRequest} sent.  */
+  private final Counter num_atomic_increments = new Counter();
+
+  /**
    * Constructor.
    * @param quorum_spec The specification of the quorum, e.g.
    * {@code "host1,host2,host3"}.
@@ -407,7 +430,108 @@ public final class HBaseClient {
    * -ROOT- region.
    */
   public HBaseClient(final String quorum_spec, final String base_path) {
+    this(quorum_spec, base_path, defaultChannelFactory());
+  }
+
+  /** Creates a default channel factory in case we haven't been given one.  */
+  /** NOTE(avh): create daemon threads to work around incomplete netty shutdown  */
+  private static NioClientSocketChannelFactory defaultChannelFactory() {
+    final Executor executor = Executors.newCachedThreadPool(
+        new ThreadFactory() {
+            public Thread newThread(Runnable r)
+            {
+                Thread t = new Thread(r);
+                t.setDaemon(true);
+                return t;
+            }
+        });
+    return new NioClientSocketChannelFactory(executor, executor);
+  }
+
+  /**
+   * Constructor for advanced users with special needs.
+   * <p>
+   * <strong>NOTE:</strong> Only advanced users who really know what they're
+   * doing should use this constructor.  Passing an inappropriate thread
+   * pool, or blocking its threads will prevent this {@code HBaseClient}
+   * from working properly or lead to poor performance.
+   * @param quorum_spec The specification of the quorum, e.g.
+   * {@code "host1,host2,host3"}.
+   * @param base_path The base path under which is the znode for the
+   * -ROOT- region.
+   * @param executor The executor from which to obtain threads for NIO
+   * operations.  It is <strong>strongly</strong> encouraged to use a
+   * {@link Executors#newCachedThreadPool} or something equivalent unless
+   * you're sure to understand how Netty creates and uses threads.
+   * Using a fixed-size thread pool will not work the way you expect.
+   * <p>
+   * Note that calling {@link #shutdown} on this client will <b>NOT</b>
+   * shut down the executor.
+   * @see NioClientSocketChannelFactory
+   * @since 1.2
+   */
+  public HBaseClient(final String quorum_spec, final String base_path,
+                     final Executor executor) {
+    this(quorum_spec, base_path, new CustomChannelFactory(executor));
+  }
+
+  /** A custom channel factory that doesn't shutdown its executor.  */
+  private static final class CustomChannelFactory
+    extends NioClientSocketChannelFactory {
+      CustomChannelFactory(final Executor executor) {
+        super(executor, executor);
+      }
+      @Override
+      public void releaseExternalResources() {
+        // Do nothing, we don't want to shut down the executor.
+      }
+  }
+
+  /**
+   * Constructor for advanced users with special needs.
+   * <p>
+   * Most users don't need to use this constructor.
+   * @param quorum_spec The specification of the quorum, e.g.
+   * {@code "host1,host2,host3"}.
+   * @param base_path The base path under which is the znode for the
+   * -ROOT- region.
+   * @param channel_factory A custom factory to use to create sockets.
+   * <p>
+   * Note that calling {@link #shutdown} on this client will also cause the
+   * shutdown and release of the factory and its underlying thread pool.
+   * @since 1.2
+   */
+  public HBaseClient(final String quorum_spec, final String base_path,
+                     final ClientSocketChannelFactory channel_factory) {
+    this.channel_factory = channel_factory;
     zkclient = new ZKClient(quorum_spec, base_path);
+  }
+
+  /**
+   * Returns a snapshot of usage statistics for this client.
+   * @since 1.3
+   */
+  public ClientStats stats() {
+    final LoadingCache<BufferedIncrement, BufferedIncrement.Amount> cache =
+      increment_buffer;
+    return new ClientStats(
+      num_connections_created.get(),
+      root_lookups.get(),
+      meta_lookups_with_permit.get(),
+      meta_lookups_wo_permit.get(),
+      num_flushes.get(),
+      num_nsres.get(),
+      num_nsre_rpcs.get(),
+      num_multi_rpcs.get(),
+      num_gets.get(),
+      num_scanners_opened.get(),
+      num_scans.get(),
+      num_puts.get(),
+      num_row_locks.get(),
+      num_deletes.get(),
+      num_atomic_increments.get(),
+      cache != null ? cache.stats() : BufferedIncrement.ZERO_STATS
+    );
   }
 
   /**
@@ -415,24 +539,55 @@ public final class HBaseClient {
    * <p>
    * @return A {@link Deferred}, whose callback chain will be invoked when
    * everything that was buffered at the time of the call has been flushed.
+   * <p>
+   * Note that this doesn't guarantee that <b>ALL</b> outstanding RPCs have
+   * completed.  This doesn't introduce any sort of global sync point.  All
+   * it does really is it sends any buffered RPCs to HBase.
    */
   public Deferred<Object> flush() {
+    {
+      // If some RPCs are waiting for -ROOT- to be discovered, we too must wait
+      // because some of those RPCs could be edits that we must wait on.
+      final Deferred<Object> d = zkclient.getDeferredRootIfBeingLookedUp();
+      if (d != null) {
+        LOG.debug("Flush needs to wait on -ROOT- to come back");
+        final class RetryFlush implements Callback<Object, Object> {
+          public Object call(final Object arg) {
+            LOG.debug("Flush retrying after -ROOT- came back");
+            return flush();
+          }
+          public String toString() {
+            return "retry flush";
+          }
+        }
+        return d.addBoth(new RetryFlush());
+      }
+    }
+
+    num_flushes.increment();
+    final boolean need_sync;
+    {
+      final LoadingCache<BufferedIncrement, BufferedIncrement.Amount> buf =
+        increment_buffer;  // Single volatile-read.
+      if (buf != null && !buf.asMap().isEmpty()) {
+        flushBufferedIncrements(buf);
+        need_sync = true;
+      } else {
+        need_sync = false;
+      }
+    }
     final ArrayList<Deferred<Object>> d =
       new ArrayList<Deferred<Object>>(client2regions.size()
                                       + got_nsre.size() * 8);
     // Bear in mind that we're traversing a ConcurrentHashMap, so we may get
     // clients that have been removed from the map since we started iterating.
     for (final RegionClient client : client2regions.keySet()) {
-      d.add(client.flush());
+      d.add(need_sync ? client.sync() : client.flush());
     }
     for (final ArrayList<HBaseRpc> nsred : got_nsre.values()) {
       synchronized (nsred) {
         for (final HBaseRpc rpc : nsred) {
-          // TODO(tsuna): This is brittle, need to remember to edit this when
-          // adding new RPCs that change data in HBase.  Not good.
-          if (rpc instanceof PutRequest
-              || rpc instanceof AtomicIncrementRequest
-              || rpc instanceof DeleteRequest) {
+          if (rpc instanceof HBaseRpc.IsEdit) {
             d.add(rpc.getDeferred());
           }
         }
@@ -467,13 +622,88 @@ public final class HBaseClient {
    * @throws IllegalArgumentException if {@code flush_interval < 0}.
    */
   public short setFlushInterval(final short flush_interval) {
+    // Note: if we have buffered increments, they'll pick up the new flush
+    // interval next time the current timer fires.
     if (flush_interval < 0) {
       throw new IllegalArgumentException("Negative: " + flush_interval);
     }
+    final short prev = this.flush_interval;
+    this.flush_interval = flush_interval;
+    return prev;
+  }
+
+  /**
+   * Changes the size of the increment buffer.
+   * <p>
+   * <b>NOTE:</b> because there is no way to resize the existing buffer,
+   * this method will flush the existing buffer and create a new one.
+   * This side effect might be unexpected but is unfortunately required.
+   * <p>
+   * This determines the maximum number of counters this client will keep
+   * in-memory to allow increment coalescing through
+   * {@link #bufferAtomicIncrement}.
+   * <p>
+   * The greater this number, the more memory will be used to buffer
+   * increments, and the more efficient increment coalescing can be
+   * if you have a high-throughput application with a large working
+   * set of counters.
+   * <p>
+   * If your application has excessively large keys or qualifiers, you might
+   * consider using a lower number in order to reduce memory usage.
+   * @param increment_buffer_size The new size of the buffer.
+   * @return The previous size of the buffer.
+   * @throws IllegalArgumentException if {@code increment_buffer_size < 0}.
+   * @since 1.3
+   */
+  public int setIncrementBufferSize(final int increment_buffer_size) {
+    if (increment_buffer_size < 0) {
+      throw new IllegalArgumentException("Negative: " + increment_buffer_size);
+    }
+    final int current = this.increment_buffer_size;
+    if (current == increment_buffer_size) {
+      return current;
+    }
+    this.increment_buffer_size = increment_buffer_size;
+    final LoadingCache<BufferedIncrement, BufferedIncrement.Amount> prev =
+      increment_buffer;  // Volatile-read.
+    if (prev != null) {  // Need to resize.
+      makeIncrementBuffer();  // Volatile-write.
+      flushBufferedIncrements(prev);
+    }
+    return current;
+  }
+
+  /**
+   * Returns the timer used by this client.
+   * <p>
+   * All timeouts, retries and other things that need to "sleep
+   * asynchronously" use this timer.  This method is provided so
+   * that you can also schedule your own timeouts using this timer,
+   * if you wish to share this client's timer instead of creating
+   * your own.
+   * <p>
+   * The precision of this timer is implementation-defined but is
+   * guaranteed to be no greater than 20ms.
+   * @since 1.2
+   */
+  public Timer getTimer() {
+    return timer;
+  }
+
+  /**
+   * Schedules a new timeout.
+   * @param task The task to execute when the timer times out.
+   * @param timeout_ms The timeout, in milliseconds (strictly positive).
+   */
+  void newTimeout(final TimerTask task, final long timeout_ms) {
     try {
-      return this.flush_interval;
-    } finally {
-      this.flush_interval = flush_interval;
+      timer.newTimeout(task, timeout_ms, MILLISECONDS);
+    } catch (IllegalStateException e) {
+      // This can happen if the timer fires just before shutdown()
+      // is called from another thread, and due to how threads get
+      // scheduled we tried to call newTimeout() after timer.stop().
+      LOG.warn("Failed to schedule timer."
+               + "  Ignore this if we're shutting down.", e);
     }
   }
 
@@ -482,10 +712,25 @@ public final class HBaseClient {
    * <p>
    * The default value is an unspecified and implementation dependant, but is
    * guaranteed to be non-zero.
+   * <p>
+   * A return value of 0 indicates that edits are sent directly to HBase
+   * without being buffered.
    * @see #setFlushInterval
    */
   public short getFlushInterval() {
     return flush_interval;
+  }
+
+  /**
+   * Returns the capacity of the increment buffer.
+   * <p>
+   * Note this returns the <em>capacity</em> of the buffer, not the number of
+   * items currently in it.  There is currently no API to get the current
+   * number of items in it.
+   * @since 1.3
+   */
+  public int getIncrementBufferSize() {
+    return increment_buffer_size;
   }
 
   /**
@@ -518,8 +763,7 @@ public final class HBaseClient {
         super("HBaseClient@" + HBaseClient.super.hashCode() + " shutdown");
       }
       public void run() {
-        // This terminates the Executor.  TODO(tsuna): Don't do this if
-        // the executor doesn't belong to us (right now it always does).
+        // This terminates the Executor.
         channel_factory.releaseExternalResources();
       }
     };
@@ -551,8 +795,10 @@ public final class HBaseClient {
     // because some of those RPCs could be edits that we must not lose.
     final Deferred<Object> d = zkclient.getDeferredRootIfBeingLookedUp();
     if (d != null) {
+      LOG.debug("Shutdown needs to wait on -ROOT- to come back");
       final class RetryShutdown implements Callback<Object, Object> {
         public Object call(final Object arg) {
+          LOG.debug("Shutdown retrying after -ROOT- came back");
           return shutdown();
         }
         public String toString() {
@@ -665,12 +911,14 @@ public final class HBaseClient {
                                                   final byte[] family) {
     // Just "fault in" the first region of the table.  Not the most optimal or
     // useful thing to do but gets the job done for now.  TODO(tsuna): Improve.
-    final GetRequest dummy = new GetRequest(table, EMPTY_ARRAY);
-    if (family != EMPTY_ARRAY) {
-      dummy.family(family);
+    final HBaseRpc dummy;
+    if (family == EMPTY_ARRAY) {
+      dummy = GetRequest.exists(table, EMPTY_ARRAY);
+    } else {
+      dummy = GetRequest.exists(table, EMPTY_ARRAY, family);
     }
     @SuppressWarnings("unchecked")
-    final Deferred<Object> d = (Deferred) get(dummy);
+    final Deferred<Object> d = (Deferred) sendRpcToRegion(dummy);
     return d;
   }
 
@@ -717,6 +965,7 @@ public final class HBaseClient {
    * @return A deferred list of key-values that matched the get request.
    */
   public Deferred<ArrayList<KeyValue>> get(final GetRequest request) {
+    num_gets.increment();
     return sendRpcToRegion(request).addCallbacks(got, Callback.PASSTHROUGH);
   }
 
@@ -800,6 +1049,7 @@ public final class HBaseClient {
    * @return A deferred scanner ID.
    */
   Deferred<Long> openScanner(final Scanner scanner) {
+    num_scanners_opened.increment();
     return sendRpcToRegion(scanner.getOpenRequest()).addCallbacks(
       scanner_opened,
       new Callback<Object, Object>() {
@@ -849,6 +1099,7 @@ public final class HBaseClient {
       final Deferred<Object> d = (Deferred) scanner.nextRows();
       return d;  // ... this will re-open it ______.^
     }
+    num_scans.increment();
     final HBaseRpc next_request = scanner.getNextRowsRequest();
     final Deferred<Object> d = next_request.getDeferred();
     client.sendRpc(next_request);
@@ -889,8 +1140,155 @@ public final class HBaseClient {
    * @return The deferred {@code long} value that results from the increment.
    */
   public Deferred<Long> atomicIncrement(final AtomicIncrementRequest request) {
+    num_atomic_increments.increment();
     return sendRpcToRegion(request).addCallbacks(icv_done,
                                                  Callback.PASSTHROUGH);
+  }
+
+  /**
+   * Buffers a durable atomic increment for coalescing.
+   * <p>
+   * This increment will be held in memory up to the amount of time allowed
+   * by {@link #getFlushInterval} in order to allow the client to coalesce
+   * increments.
+   * <p>
+   * Increment coalescing can dramatically reduce the number of RPCs and write
+   * load on HBase if you tend to increment multiple times the same working
+   * set of counters.  This is very common in user-facing serving systems that
+   * use HBase counters to keep track of user actions.
+   * <p>
+   * If client-side buffering is disabled ({@link #getFlushInterval} returns
+   * 0) then this function has the same effect as calling
+   * {@link #atomicIncrement(AtomicIncrementRequest)} directly.
+   * @param request The increment request.
+   * @return The deferred {@code long} value that results from the increment.
+   * @since 1.3
+   * @since 1.4 This method works with negative increment values.
+   */
+  public Deferred<Long> bufferAtomicIncrement(final AtomicIncrementRequest request) {
+    final long value = request.getAmount();
+    if (!BufferedIncrement.Amount.checkOverflow(value)  // Value too large.
+        || flush_interval == 0) {           // Client-side buffer disabled.
+      return atomicIncrement(request);
+    }
+
+    final BufferedIncrement incr =
+      new BufferedIncrement(request.table(), request.key(), request.family(),
+                            request.qualifier());
+
+    do {
+      BufferedIncrement.Amount amount;
+      // Semi-evil: the very first time we get here, `increment_buffer' will
+      // still be null (we don't initialize it in our constructor) so we catch
+      // the NPE that ensues to allocate the buffer and kick off a timer to
+      // regularly flush it.
+      try {
+        amount = increment_buffer.getUnchecked(incr);
+      } catch (NullPointerException e) {
+        setupIncrementCoalescing();
+        amount = increment_buffer.getUnchecked(incr);
+      }
+      if (amount.update(value)) {
+        final Deferred<Long> deferred = new Deferred<Long>();
+        amount.deferred.chain(deferred);
+        return deferred;
+      }
+      // else: Loop again to retry.
+      increment_buffer.refresh(incr);
+    } while (true);
+  }
+
+  /**
+   * Called the first time we get a buffered increment.
+   * Lazily creates the increment buffer and sets up a timer to regularly
+   * flush buffered increments.
+   */
+  private synchronized void setupIncrementCoalescing() {
+    // If multiple threads attempt to setup coalescing at the same time, the
+    // first one to get here will make `increment_buffer' non-null, and thus
+    // subsequent ones will return immediately.  This is important to avoid
+    // creating more than one FlushBufferedIncrementsTimer below.
+    if (increment_buffer != null) {
+      return;
+    }
+    makeIncrementBuffer();  // Volatile-write.
+
+    // Start periodic buffered increment flushes.
+    final class FlushBufferedIncrementsTimer implements TimerTask {
+      public void run(final Timeout timeout) {
+        try {
+          flushBufferedIncrements(increment_buffer);
+        } finally {
+          final short interval = flush_interval; // Volatile-read.
+          // Even if we paused or disabled the client side buffer by calling
+          // setFlushInterval(0), we will continue to schedule this timer
+          // forever instead of pausing it.  Pausing it is troublesome because
+          // we don't keep a reference to this timer, so we can't cancel it or
+          // tell if it's running or not.  So let's just KISS and assume that
+          // if we need the timer once, we'll need it forever.  If it's truly
+          // not needed anymore, we'll just cause a bit of extra work to the
+          // timer thread every 100ms, no big deal.
+          newTimeout(this, interval > 0 ? interval : 100);
+        }
+      }
+    }
+    final short interval = flush_interval; // Volatile-read.
+    // Handle the extremely unlikely yet possible racy case where:
+    //   flush_interval was > 0
+    //   A buffered increment came in
+    //   It was the first one ever so we landed here
+    //   Meanwhile setFlushInterval(0) to disable buffering
+    // In which case we just flush whatever we have in 1ms.
+    timer.newTimeout(new FlushBufferedIncrementsTimer(),
+                     interval > 0 ? interval : 1, MILLISECONDS);
+  }
+
+  /**
+   * Flushes all buffered increments.
+   * @param increment_buffer The buffer to flush.
+   */
+  private static void flushBufferedIncrements(// JAVA Y U NO HAVE TYPEDEF? F U!
+    final LoadingCache<BufferedIncrement, BufferedIncrement.Amount> increment_buffer) {
+    // Calling this method to clean up before shutting down works solely
+    // because `invalidateAll()' will *synchronously* remove everything.
+    // The Guava documentation says "Discards all entries in the cache,
+    // possibly asynchronously" but in practice the code in `LocalCache'
+    // works as follows:
+    //
+    //   for each segment:
+    //     segment.clear
+    //
+    // Where clearing a segment consists in:
+    //
+    //   lock the segment
+    //   for each active entry:
+    //     add entry to removal queue
+    //   null out the hash table
+    //   unlock the segment
+    //   for each entry in removal queue:
+    //     call the removal listener on that entry
+    //
+    // So by the time the call to `invalidateAll()' returns, every single
+    // buffered increment will have been dealt with, and it is thus safe
+    // to shutdown the rest of the client to let it complete all outstanding
+    // operations.
+    if (LOG.isDebugEnabled()) {
+      LOG.debug("Flushing " + increment_buffer.size() + " buffered increments");
+    }
+    synchronized (increment_buffer) {
+      increment_buffer.invalidateAll();
+    }
+  }
+
+  /**
+   * Creates the increment buffer according to current configuration.
+   */
+  private void makeIncrementBuffer() {
+    final int size = increment_buffer_size;
+    increment_buffer = BufferedIncrement.newCache(this, size);
+    if (LOG.isDebugEnabled()) {
+      LOG.debug("Created increment buffer of " + size + " entries");
+    }
   }
 
   /** Singleton callback to handle responses of incrementColumnValue RPCs.  */
@@ -937,8 +1335,99 @@ public final class HBaseClient {
    * TODO(tsuna): Document failures clients are expected to handle themselves.
    */
   public Deferred<Object> put(final PutRequest request) {
+    num_puts.increment();
     return sendRpcToRegion(request);
   }
+
+  /**
+   * Atomic Compare-And-Set (CAS) on a single cell.
+   * <p>
+   * Note that edits sent through this method <b>cannot be batched</b>, and
+   * won't be subject to the {@link #setFlushInterval flush interval}.  This
+   * entails that write throughput will be lower with this method as edits
+   * have to be sent out to the wire one by one.
+   * <p>
+   * This request enables you to atomically update the value of an existing
+   * cell in HBase using a CAS operation.  It's like a {@link PutRequest}
+   * except that you also pass an expected value.  If the last version of the
+   * cell identified by your {@code PutRequest} matches the expected value,
+   * HBase will atomically update it to the new value.
+   * <p>
+   * If the expected value is the empty byte array, HBase will atomically
+   * create the cell provided that it doesn't exist already. This can be used
+   * to ensure that your RPC doesn't overwrite an existing value.  Note
+   * however that this trick cannot be used the other way around to delete
+   * an expected value atomically.
+   * @param edit The new value to write.
+   * @param expected The expected value of the cell to compare against.
+   * <strong>This byte array will NOT be copied.</strong>
+   * @return A deferred boolean, if {@code true} the CAS succeeded, otherwise
+   * the CAS failed because the value in HBase didn't match the expected value
+   * of the CAS request.
+   * @since 1.3
+   */
+  public Deferred<Boolean> compareAndSet(final PutRequest edit,
+                                         final byte[] expected) {
+    return sendRpcToRegion(new CompareAndSetRequest(edit, expected))
+      .addCallback(CAS_CB);
+  }
+
+  /**
+   * Atomic Compare-And-Set (CAS) on a single cell.
+   * <p>
+   * Note that edits sent through this method <b>cannot be batched</b>.
+   * @see #compareAndSet(PutRequest, byte[])
+   * @param edit The new value to write.
+   * @param expected The expected value of the cell to compare against.
+   * This string is assumed to use the platform's default charset.
+   * @return A deferred boolean, if {@code true} the CAS succeeded, otherwise
+   * the CAS failed because the value in HBase didn't match the expected value
+   * of the CAS request.
+   * @since 1.3
+   */
+  public Deferred<Boolean> compareAndSet(final PutRequest edit,
+                                         final String expected) {
+    return compareAndSet(edit, expected.getBytes());
+  }
+
+  /**
+   * Atomically insert a new cell in HBase.
+   * <p>
+   * Note that edits sent through this method <b>cannot be batched</b>.
+   * <p>
+   * This is equivalent to calling
+   * {@link #compareAndSet(PutRequest, byte[]) compareAndSet}{@code (edit,
+   * EMPTY_ARRAY)}
+   * @see #compareAndSet(PutRequest, byte[])
+   * @param edit The new value to insert.
+   * @return A deferred boolean, {@code true} if the edit got atomically
+   * inserted in HBase, {@code false} if there was already a value in the
+   * given cell.
+   * @since 1.3
+   */
+  public Deferred<Boolean> atomicCreate(final PutRequest edit) {
+    return compareAndSet(edit, EMPTY_ARRAY);
+  }
+
+  /** Callback to type-check responses of {@link CompareAndSetRequest}.  */
+  private static final class CompareAndSetCB implements Callback<Boolean, Object> {
+
+    public Boolean call(final Object response) {
+      if (response instanceof Boolean) {
+        return (Boolean)response;
+      } else {
+        throw new InvalidResponseException(Boolean.class, response);
+      }
+    }
+
+    public String toString() {
+      return "type compareAndSet response";
+    }
+
+  }
+
+  /** Singleton callback for responses of {@link CompareAndSetRequest}.  */
+  private static final CompareAndSetCB CAS_CB = new CompareAndSetCB();
 
   /**
    * Acquires an explicit row lock.
@@ -949,6 +1438,7 @@ public final class HBaseClient {
    * @see #unlockRow
    */
   public Deferred<RowLock> lockRow(final RowLockRequest request) {
+    num_row_locks.increment();
     return sendRpcToRegion(request).addCallbacks(
       new Callback<RowLock, Object>() {
         public RowLock call(final Object response) {
@@ -1007,6 +1497,7 @@ public final class HBaseClient {
    * at least an errback to this {@code Deferred} to handle failures.
    */
   public Deferred<Object> delete(final DeleteRequest request) {
+    num_deletes.increment();
     return sendRpcToRegion(request);
   }
 
@@ -1032,6 +1523,7 @@ public final class HBaseClient {
     final class RetryRpc implements Callback<Deferred<Object>, Object> {
       public Deferred<Object> call(final Object arg) {
         if (arg instanceof NonRecoverableException) {
+          request.callback(arg);
           return Deferred.fromError((NonRecoverableException) arg);
         }
         return sendRpcToRegion(request);
@@ -1074,7 +1566,11 @@ public final class HBaseClient {
    * the {@code -ROOT-} region itself is located.  This happens even more
    * rarely and a message is logged at the INFO whenever it does.
    * @since 1.1
+   * @deprecated This method will be removed in release 2.0.  Use
+   * {@link #stats}{@code .}{@link ClientStats#rootLookups rootLookups()}
+   * instead.
    */
+  @Deprecated
   public long rootLookupCount() {
     return root_lookups.get();
   }
@@ -1087,7 +1583,12 @@ public final class HBaseClient {
    * the thread was able to acquire a "permit" to do a {@code .META.} lookup.
    * The majority of the {@code .META.} lookups should fall in this category.
    * @since 1.1
+   * @deprecated This method will be removed in release 2.0.  Use
+   * {@link #stats}{@code
+   * .}{@link ClientStats#uncontendedMetaLookups uncontendedMetaLookups()}
+   * instead.
    */
+  @Deprecated
   public long uncontendedMetaLookupCount() {
     return meta_lookups_with_permit.get();
   }
@@ -1103,7 +1604,12 @@ public final class HBaseClient {
    * back-pressure on the caller, to avoid creating {@code .META.} storms.
    * The minority of the {@code .META.} lookups should fall in this category.
    * @since 1.1
+   * @deprecated This method will be removed in release 2.0.  Use
+   * {@link #stats}{@code
+   * .}{@link ClientStats#contendedMetaLookups contendedMetaLookups()}
+   * instead.
    */
+  @Deprecated
   public long contendedMetaLookupCount() {
     return meta_lookups_wo_permit.get();
   }
@@ -1192,9 +1698,9 @@ public final class HBaseClient {
             }
           };
           d.addBoth(new ReleaseMetaLookupPermit());
-          meta_lookups_with_permit.incrementAndGet();
+          meta_lookups_with_permit.increment();
         } else {
-          meta_lookups_wo_permit.incrementAndGet();
+          meta_lookups_wo_permit.increment();
         }
         // This errback needs to run *after* the callback above.
         return d.addErrback(newLocateRegionErrback(table, key));
@@ -1214,7 +1720,7 @@ public final class HBaseClient {
     final byte[] root_key = createRegionSearchKey(META, meta_key);
     final RegionInfo root_region = new RegionInfo(ROOT, ROOT_REGION,
                                                   EMPTY_ARRAY);
-    root_lookups.incrementAndGet();
+    root_lookups.increment();
     return rootregion.getClosestRowBefore(root_region, ROOT, root_key, INFO)
       .addCallback(root_lookup_done)
       // This errback needs to run *after* the callback above.
@@ -1462,7 +1968,7 @@ public final class HBaseClient {
     // RegionServer, Netty delivers a CLOSED ChannelStateEvent from a "boss"
     // thread while we may still be handling the OPEN event in an NIO thread.
     // Locking the client prevents it from being able to buffer requests when
-    // this happens.  After we release the lock, the it will find it's dead.
+    // this happens.  After we release the lock, then it will find it's dead.
     synchronized (client) {
       // Don't put any code between here and the next put (see next comment).
 
@@ -1478,14 +1984,7 @@ public final class HBaseClient {
       // 3. Update the reverse mapping created in step 1.
       // This is done last because it's only used to gracefully handle
       // disconnections and isn't used for serving.
-      ArrayList<RegionInfo> regions = client2regions.get(client);
-      if (regions == null) {
-        final ArrayList<RegionInfo> newlist = new ArrayList<RegionInfo>();
-        regions = client2regions.putIfAbsent(client, newlist);
-        if (regions == null) {   // We've just put `newlist'.
-          regions = newlist;
-        }
-      }
+      final ArrayList<RegionInfo> regions = client2regions.get(client);
       synchronized (regions) {
         regions.add(region);
         nregions = regions.size();
@@ -1642,6 +2141,7 @@ public final class HBaseClient {
   void handleNSRE(HBaseRpc rpc,
                   final byte[] region_name,
                   final NotServingRegionException e) {
+    num_nsre_rpcs.increment();
     final boolean can_retry_rpc = !cannotRetryRequest(rpc);
     boolean known_nsre = true;  // We already aware of an NSRE for this region?
     ArrayList<HBaseRpc> nsred_rpcs = got_nsre.get(region_name);
@@ -1742,12 +2242,14 @@ public final class HBaseClient {
         }
         if (reject) {
           rpc.callback(new PleaseThrottleException(size + " RPCs waiting on "
-            + Bytes.pretty(region_name) + " to come back online", e, rpc));
+            + Bytes.pretty(region_name) + " to come back online", e, rpc,
+            exists_rpc.getDeferred()));
         }
         return;  // This NSRE is already known and being handled.
       }
     }
 
+    num_nsres.increment();
     // Mark this region as being NSRE'd in our regions_cache.
     invalidateRegionCache(region_name, true, (known_nsre ? "still " : "")
                           + "seems to be splitting or closing it.");
@@ -1866,7 +2368,7 @@ public final class HBaseClient {
     final int wait_ms = probe.attempt < 4
       ? 200 * (probe.attempt + 2)     // 400, 600, 800, 1000
       : 1000 + (1 << probe.attempt);  // 1016, 1032, 1064, 1128, 1256, 1512, ..
-    timer.newTimeout(new NSRETimer(), wait_ms, MILLISECONDS);
+    newTimeout(new NSRETimer(), wait_ms);
   }
 
   // ----------------------------------------------------------------- //
@@ -1905,30 +2407,19 @@ public final class HBaseClient {
       // We don't use Netty's ClientBootstrap class because it makes it
       // unnecessarily complicated to have control over which ChannelPipeline
       // exactly will be given to the channel.  It's over-designed.
-      chan = channel_factory.newChannel(new RegionClientPipeline());
-      client = chan.getPipeline().get(RegionClient.class);
+      final RegionClientPipeline pipeline = new RegionClientPipeline();
+      client = pipeline.init();
+      chan = channel_factory.newChannel(pipeline);
       ip2client.put(hostport, client);  // This is guaranteed to return null.
     }
+    client2regions.put(client, new ArrayList<RegionInfo>());
+    num_connections_created.increment();
     // Configure and connect the channel without locking ip2client.
     final SocketChannelConfig config = chan.getConfig();
     config.setConnectTimeoutMillis(5000);
     config.setTcpNoDelay(true);
     config.setKeepAlive(true);  // TODO(tsuna): Is this really needed?
     chan.connect(new InetSocketAddress(host, port));  // Won't block.
-
-    if (server_version < 0) {
-      synchronized (this) {
-        try {
-          client.getProtocolVersion().join();
-        } catch (Exception e) {
-          e.printStackTrace();
-        }
-        System.out.println("Got protocol version: " + server_version);
-      }
-    } else {
-      client.setProtocolVersion(server_version);
-    }
-
     return client;
   }
 
@@ -1957,9 +2448,17 @@ public final class HBaseClient {
     private boolean disconnected = false;
 
     RegionClientPipeline() {
-      // "hello" handler will remove itself from the pipeline after 1st RPC.
-      super.addLast("hello", RegionClient.SayHelloFirstRpc.INSTANCE);
-      super.addLast("handler", new RegionClient(HBaseClient.this));
+    }
+
+    /**
+     * Initializes this pipeline.
+     * This method <strong>MUST</strong> be called on each new instance
+     * before it's used as a pipeline for a channel.
+     */
+    RegionClient init() {
+      final RegionClient client = new RegionClient(HBaseClient.this);
+      super.addLast("handler", client);
+      return client;
     }
 
     @Override
@@ -2194,6 +2693,12 @@ public final class HBaseClient {
    */
   private final class ZKClient implements Watcher {
 
+    /**
+     * HBASE-3065 (r1151751) prepends meta-data in ZooKeeper files.
+     * The meta-data always starts with this magic byte.
+     */
+    private static final byte MAGIC = (byte) 0xFF;
+
     /** The specification of the quorum, e.g. "host1,host2,host3"  */
     private final String quorum_spec;
 
@@ -2378,7 +2883,7 @@ public final class HBaseClient {
 
     /** Schedule a timer to retry {@link #getRootRegion} after some time.  */
     private void retryGetRootRegionLater(final AsyncCallback.DataCallback cb) {
-      timer.newTimeout(new TimerTask() {
+      newTimeout(new TimerTask() {
           public void run(final Timeout timeout) {
             if (zk != null) {
               LOG.debug("Retrying to find the -ROOT- region in ZooKeeper");
@@ -2388,7 +2893,7 @@ public final class HBaseClient {
               connectZK();
             }
           }
-        }, 1000, MILLISECONDS);
+        }, 1000 /* milliseconds */);
     }
 
     /**
@@ -2397,6 +2902,7 @@ public final class HBaseClient {
      */
     private void getRootRegion() {
       final AsyncCallback.DataCallback cb = new AsyncCallback.DataCallback() {
+        @SuppressWarnings("fallthrough")
         public void processResult(final int rc, final String path,
                                   final Object ctx, final byte[] data,
                                   final Stat stat) {
@@ -2411,25 +2917,81 @@ public final class HBaseClient {
             connectZK();
             return;
           }
-          final String root = new String(data);
-          final int portsep = root.lastIndexOf(':');
-          if (portsep < 0) {
-            LOG.error("Couldn't find the port of the -ROOT- region in "
-                      + Bytes.pretty(data));
+          if (data == null || data.length == 0 || data.length > Short.MAX_VALUE) {
+            LOG.error("The location of the -ROOT- region in ZooKeeper is "
+                      + (data == null || data.length == 0 ? "empty"
+                         : "too large (" + data.length + " bytes!)"));
             retryGetRootRegionLater(this);
             return;  // TODO(tsuna): Add a watch to wait until the file changes.
           }
-          final String host = getIP(root.substring(0, portsep));
-          if (host == null) {
+          // There are 3 cases.  Older versions of HBase encode the location
+          // of the root region as "host:port", 0.91 uses "host,port,startcode"
+          // and newer versions of 0.91 use "<metadata>host,port,startcode"
+          // where the <metadata> starts with MAGIC, then a 4 byte integer,
+          // then that many bytes of meta data.
+          boolean newstyle;     // True if we expect a 0.91 style location.
+          final short offset;   // Bytes to skip at the beginning of data.
+          short firstsep = -1;  // Index of the first separator (':' or ',').
+          if (data[0] == MAGIC) {
+            newstyle = true;
+            final int metadata_length = Bytes.getInt(data, 1);
+            if (metadata_length < 1 || metadata_length > 65000) {
+              LOG.error("Malformed meta-data in " + Bytes.pretty(data)
+                        + ", invalid metadata length=" + metadata_length);
+              retryGetRootRegionLater(this);
+              return;  // TODO(tsuna): Add a watch to wait until the file changes.
+            }
+            offset = (short) (1 + 4 + metadata_length);
+          } else {
+            newstyle = false;  // Maybe true, the loop below will tell us.
+            offset = 0;
+          }
+          final short n = (short) data.length;
+          // Look for the first separator.  Skip the offset, and skip the
+          // first byte, because we know the separate can only come after
+          // at least one byte.
+          loop: for (short i = (short) (offset + 1); i < n; i++) {
+             switch (data[i]) {
+              case ',':
+                newstyle = true;
+                /* fall through */
+              case ':':
+                firstsep = i;
+                break loop;
+            }
+          }
+          if (firstsep == -1) {
+            LOG.error("-ROOT- location doesn't contain a separator"
+                      + " (':' or ','): " + Bytes.pretty(data));
+            retryGetRootRegionLater(this);
+            return;  // TODO(tsuna): Add a watch to wait until the file changes.
+          }
+          final String host;
+          final short portend;  // Index past where the port number ends.
+          if (newstyle) {
+            host = new String(data, offset, firstsep - offset);
+            short i;
+            for (i = (short) (firstsep + 2); i < n; i++) {
+              if (data[i] == ',') {
+                break;
+              }
+            }
+            portend = i;  // Port ends on the comma.
+          } else {
+            host = new String(data, 0, firstsep);
+            portend = n;  // Port ends at the end of the array.
+          }
+          final int port = parsePortNumber(new String(data, firstsep + 1,
+                                                      portend - firstsep - 1));
+          final String ip = getIP(host);
+          if (ip == null) {
             LOG.error("Couldn't resolve the IP of the -ROOT- region from "
                       + host + " in \"" + Bytes.pretty(data) + '"');
             retryGetRootRegionLater(this);
             return;  // TODO(tsuna): Add a watch to wait until the file changes.
           }
-          final int port = parsePortNumber(root.substring(portsep + 1));
-          final String hostport = host + ':' + port;
-          LOG.info("Connecting to -ROOT- region @ " + hostport);
-          final RegionClient client = rootregion = newClient(host, port);
+          LOG.info("Connecting to -ROOT- region @ " + ip + ':' + port);
+          final RegionClient client = rootregion = newClient(ip, port);
           final ArrayList<Deferred<Object>> ds = atomicGetAndRemoveWaiters();
           if (ds != null) {
             for (final Deferred<Object> d : ds) {

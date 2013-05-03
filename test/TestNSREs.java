@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011  StumbleUpon, Inc.  All rights reserved.
+ * Copyright (C) 2011-2012  The Async HBase Authors.  All rights reserved.
  * This file is part of Async HBase.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -33,8 +33,8 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentSkipListMap;
 import java.util.concurrent.TimeUnit;
 
+import org.jboss.netty.util.HashedWheelTimer;
 import org.jboss.netty.util.Timeout;
-import org.jboss.netty.util.Timer;
 import org.jboss.netty.util.TimerTask;
 
 import com.stumbleupon.async.Deferred;
@@ -50,7 +50,6 @@ import static org.mockito.Mockito.any;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.eq;
 import static org.mockito.Mockito.never;
-import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -333,7 +332,7 @@ final class TestNSREs {
    * A fake {@link Timer} implementation that fires up tasks immediately.
    * Tasks are called immediately from the current thread.
    */
-  static final class FakeTimer implements Timer {
+  static final class FakeTimer extends HashedWheelTimer {
     @Override
     public Timeout newTimeout(final TimerTask task,
                               final long delay,

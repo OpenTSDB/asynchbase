@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2010, 2011  StumbleUpon, Inc.  All rights reserved.
+ * Copyright (C) 2010-2012  The Async HBase Authors.  All rights reserved.
  * This file is part of Async HBase.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -147,6 +147,35 @@ public abstract class HBaseRpc {
     public byte[] filterName();
   }
 
+  /**
+   * An RPC from which you can get multiple values.
+   * @since 1.3
+   */
+  public interface HasValues {
+    /**
+     * Returns the values contained in this RPC.
+     * <p>
+     * <strong>DO NOT MODIFY THE CONTENTS OF THE ARRAY RETURNED.</strong>
+     */
+    public byte[][] values();
+  }
+
+  /**
+   * An RPC from which you can get a timestamp.
+   * @since 1.2
+   */
+  public interface HasTimestamp {
+    /** Returns the strictly positive timestamp contained in this RPC.  */
+    public long timestamp();
+  }
+
+  /**
+   * Package-private interface to mark RPCs that are changing data in HBase.
+   * @since 1.4
+   */
+  interface IsEdit {
+  }
+
   /*
    * This class, although it's part of the public API, is mostly here to make
    * it easier for this library to manipulate the HBase RPC protocol.
@@ -168,7 +197,7 @@ public abstract class HBaseRpc {
    * 4 byte integer value is first written in order to specify how many bytes
    * are in the request (excluding the first 4 bytes themselves).  The size -1
    * is special.  The client uses it to send a "ping" to the server at regular
-   * intervals, and the server specifically ignores any RPC with this ID.  We
+   * intervals, and the server specifically ignores any RPC with size -1.  We
    * don't do this in this client, because it's mostly useless, and we rely on
    * TCP keepalive instead.
    *
@@ -184,6 +213,15 @@ public abstract class HBaseRpc {
    * bytes are the parameters of the request.  First, there is a 4-byte int
    * that specifies how many parameters follow (this way you can have up to
    * 2 147 483 648 parameters, which may come in handy in a few centuries).
+   *
+   * In HBase 0.92 and above, 3 more fields have been added in the header as
+   * previously described.  The first is a one byte version number that comes
+   * right before the method name, indicating how the parameters of the RPC
+   * have been serialized.  Then there is a 8 byte (!) client version that's
+   * right after the method name, followed by a 4 byte "fingerprint", which
+   * is a sort of hash code of the method's signature (name, return type, and
+   * parameters types).  Note that the client version seems to be always set
+   * to zero...
    *
    * In Hadoop RPC, the name of the class is first serialized (2 bytes
    * specifying the length of the string, followed by that number of bytes
@@ -209,13 +247,19 @@ public abstract class HBaseRpc {
    * Hadoop in certain (but not all) code paths.
    *
    * The way RPC responses are encoded is as follows.  First comes the 4-byte
-   * RPC ID.  Then 1 byte which is a boolean indicating whether or not the
-   * request failed on the remote side (if the byte is zero = false).  If
-   * the request failed, the rest of the response is just 2 Hadoop-encoded
+   * RPC ID.  Then 1 byte containing flags indicating whether or not the
+   * request failed (0x01) on the remote side, and whether the response is
+   * framed (0x02).  If flags are only 0x00, this is an old-style (pre 0.92)
+   * successful response that is not framed.  Framed responses contain a
+   * 4-byte integer with the length of the entire response, including the
+   * leading RPC ID, flags, and the length itself.  If there is a length, it
+   * is always followed by a 4-byte integer with the state of the RPC follows.
+   * As of 0.92, this state mostly useless.  If the request failed (flag 0x01
+   * is set), the rest of the response is just 2 Hadoop-encoded
    * strings (2-byte length, followed by a UTF-8 string).  The first string is
    * the name of the class of the exception and the second is the message of
    * the exception (which typically includes some of the server-side stack
-   * trace).  Note that the response is NOT framed, so it's not easy to tell
+   * trace).  Note that if the response is NOT framed, it's not easy to tell
    * ahead of time how many bytes to expect or where the next response starts.
    *
    * If the RPC was successful, the remaining of the payload is serialized
@@ -226,12 +270,47 @@ public abstract class HBaseRpc {
    * Then comes 4 bytes to specify the rest of the length of the "hello"
    * message.  The remaining is a `Writable' instance serialized that
    * specifies which authentication provider to use and give our credentials.
-   * I have a hunch that this is going to change imminently in Hadoop when
-   * they roll out the security stuff they've been working on for a while,
-   * and HBase will probably have to adopt that (unless they decide to stop
-   * using Hadoop RPC and switch to something more modern and reasonable).
-   * The "hello" message is implemented in `RegionClient.SayHelloFirstRpc'.
+   * In HBase 0.92 and above, the `Writable' should represent what protocol
+   * the client wants to speak, which should be the name of an interface.
+   * "org.apache.hadoop.hbase.ipc.HRegionInterface" should be used.
+   * The "hello" message is implemented in `RegionClient#helloRpc'.  In order
+   * to support HBase 0.92, we always piggy back a `getProtocolVersion' RPC
+   * right after the header, so we can tell what version the server is using
+   * and how to serialize RPCs and read its responses.
    */
+
+  // ------ //
+  // Flags. //
+  // ------ //
+  // 5th byte into the response.
+  // See ipc/ResponseFlag.java in HBase's source code.
+
+  static final byte RPC_SUCCESS = 0x00;
+  static final byte RPC_ERROR = 0x01;
+  /**
+   * Indicates that the next byte is an integer with the length of the response.
+   * This can be found on both successful ({@link RPC_SUCCESS}) or failed
+   * ({@link RPC_ERROR}) responses.
+   * @since HBase 0.92
+   */
+  static final byte RPC_FRAMED = 0x02;
+
+  // ----------- //
+  // RPC Status. //
+  // ----------- //
+  // 4 byte integer (on wire), located 9 byte into the response, only if
+  // {@link RPC_FRAMED} is set.
+  // See ipc/Status.java in HBase's source code.
+
+  /**
+   * Indicates that an error prevented the RPC from being executed.
+   * This is a somewhat misleading name.  It indicates that the RPC couldn't
+   * be executed, typically because of a protocol version mismatch, an
+   * incorrectly encoded RPC (or possibly corrupted on-wire such that the
+   * server couldn't deserialize it), or an authentication error (unsure about
+   * that one).
+   */
+  static final byte RPC_FATAL = -1;
 
   /**
    * To be implemented by the concrete sub-type.
@@ -245,12 +324,7 @@ public abstract class HBaseRpc {
    * Notice that this method is package-private, so only classes within this
    * package can use this as a base class.
    *
-   * @param server_version The RPC protocol version of the server this RPC is
-   * going to.  If the version of the server is unknown, this will be -1.  If
-   * this RPC cares a lot about the version of the server (due to backwards
-   * incompatible changes in the RPC serialization), the concrete class should
-   * override {@link #versionSensitive} to make sure it doesn't get -1, as the
-   * version is lazily fetched.
+   * @param server_version What RPC protocol version the server is running.
    */
   abstract ChannelBuffer serialize(byte server_version);
 
@@ -409,16 +483,6 @@ public abstract class HBaseRpc {
   }
 
   /**
-   * Is the encoding of this RPC sensitive to the RPC protocol version?.
-   * Override this method to return {@code true} in order to guarantee that
-   * the version of the remote server this RPC is going to will be known by
-   * the time this RPC gets serialized.
-   */
-  boolean versionSensitive() {
-    return false;
-  }
-
-  /**
    * Invokes the KeyValue filter, if present, to decide whether to keep the KeyValue
    * and add it to the collection.
    * @see RegionClient
@@ -437,7 +501,6 @@ public abstract class HBaseRpc {
       + 6 + (key == null ? 4 : key.length * 2)      // Assumption: binary => *2
       + 9 + (region == null ? 4 : region.stringSizeHint())
       + 10 + 1 + 1);
-    final int c = buf.capacity();
     buf.append("HBaseRpc(method=");
     Bytes.pretty(buf, method);
     buf.append(", table=");
@@ -467,7 +530,28 @@ public abstract class HBaseRpc {
   final String toStringWithQualifiers(final String classname,
                                       final byte[] family,
                                       final byte[][] qualifiers) {
-    final StringBuilder buf = new StringBuilder(256);  // min=182
+    return toStringWithQualifiers(classname, family, qualifiers, null, "");
+  }
+
+
+  /**
+   * Helper for subclass's {@link #toString} implementations.
+   * <p>
+   * This is used by subclasses such as {@link DeleteRequest}
+   * or {@link GetRequest}, to avoid code duplication.
+   * @param classname The name of the class of the caller.
+   * @param family A possibly null family name.
+   * @param qualifiers A non-empty list of qualifiers or null.
+   * @param values A non-empty list of values or null.
+   * @param fields Additional fields to include in the output.
+   */
+  final String toStringWithQualifiers(final String classname,
+                                      final byte[] family,
+                                      final byte[][] qualifiers,
+                                      final byte[][] values,
+                                      final String fields) {
+    final StringBuilder buf = new StringBuilder(256  // min=182
+                                                + fields.length());
     buf.append(classname).append("(table=");
     Bytes.pretty(buf, table);
     buf.append(", key=");
@@ -475,17 +559,12 @@ public abstract class HBaseRpc {
     buf.append(", family=");
     Bytes.pretty(buf, family);
     buf.append(", qualifiers=");
-    if (qualifiers == null) {
-      buf.append("null");
-    } else {
-      buf.append('[');
-      for (final byte[] qualifier : qualifiers) {
-        Bytes.pretty(buf, qualifier);
-        buf.append(", ");
-      }
-      buf.setLength(buf.length() - 2);  // Remove the last ", "
-      buf.append(']');
+    Bytes.pretty(buf, qualifiers);
+    if (values != null) {
+      buf.append(", values=");
+      Bytes.pretty(buf, values);
     }
+    buf.append(fields);
     buf.append(", attempt=").append(attempt)
       .append(", region=");
     if (region == null) {
@@ -552,6 +631,7 @@ public abstract class HBaseRpc {
 
   /**
    * Creates a new fixed-length buffer on the heap.
+   * @param server_version What RPC protocol version the server is running.
    * @param max_payload_size A good approximation of the size of the payload.
    * The approximation must be an upper bound on the expected size of the
    * payload as trying to store more than {@code max_payload_size} bytes in
@@ -560,13 +640,20 @@ public abstract class HBaseRpc {
    * When no reasonable upper bound on the payload size can be easily
    * estimated ahead of time, you can use {@link #newDynamicBuffer} instead.
    */
-  final ChannelBuffer newBuffer(final int max_payload_size) {
+  final ChannelBuffer newBuffer(final byte server_version,
+                                final int max_payload_size) {
     // Add extra bytes for the RPC header:
     //   4 bytes: Payload size.
     //   4 bytes: RPC ID.
     //   2 bytes: Length of the method name.
     //   N bytes: The method name.
-    final int header = 4 + 4 + 2 + method.length;
+    final int header = 4 + 4 + 2 + method.length
+      // Add extra bytes for the RPC header used in HBase 0.92 and above:
+      //   1 byte:  RPC header version.
+      //   8 bytes: Client version.  Yeah, 8 bytes, WTF seriously.
+      //   4 bytes: Method fingerprint.
+      + (server_version < RegionClient.SERVER_VERSION_092_OR_ABOVE ? 0
+         : 1 + 8 + 4);
     final ChannelBuffer buf = ChannelBuffers.buffer(header + max_payload_size);
     buf.setIndex(0, header);  // Advance the writerIndex past the header.
     return buf;
@@ -574,6 +661,7 @@ public abstract class HBaseRpc {
 
   /**
    * Creates a new dynamic-length buffer on the heap.
+   * @param server_version What RPC protocol version the server is running.
    * @param max_payload_size A good approximation of the size of the payload.
    * The approximation should be an upper bound on the expected size of the
    * payload.  Trying to store more than {@code max_payload_size} bytes in
@@ -585,9 +673,12 @@ public abstract class HBaseRpc {
    * benchmark I did, writing to a dynamic-length buffer was about 16% slower
    * and that's without ever re-sizing the buffer!
    */
-  final ChannelBuffer newDynamicBuffer(final int max_payload_size) {
+  final ChannelBuffer newDynamicBuffer(final byte server_version,
+                                       final int max_payload_size) {
     // See the comment in newBuffer above.
-    final int header = 4 + 4 + 2 + method.length;
+    final int header = 4 + 4 + 2 + method.length
+      + (server_version < RegionClient.SERVER_VERSION_092_OR_ABOVE ? 0
+         : 1 + 8 + 4);
     final ChannelBuffer buf = ChannelBuffers.dynamicBuffer(header
                                                            + max_payload_size);
     buf.setIndex(0, header);  // Advance the writerIndex past the header.
@@ -654,6 +745,16 @@ public abstract class HBaseRpc {
   static void writeByteArray(final ChannelBuffer buf, final byte[] b) {
     writeVLong(buf, b.length);
     buf.writeBytes(b);
+  }
+
+  /**
+   * Serializes a `null' reference.
+   * @param buf The buffer to write to.
+   */
+  static void writeHBaseNull(final ChannelBuffer buf) {
+    buf.writeByte(14);  // Code type for `Writable'.
+    buf.writeByte(17);  // Code type for `NullInstance'.
+    buf.writeByte(14);  // Code type for `Writable'.
   }
 
   /**

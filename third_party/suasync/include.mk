@@ -1,4 +1,4 @@
-# Copyright (c) 2011  StumbleUpon, Inc.  All rights reserved.
+# Copyright (C) 2011-2012  The Async HBase Authors.  All rights reserved.
 # This file is part of Async HBase.
 #
 # Redistribution and use in source and binary forms, with or without
@@ -23,7 +23,7 @@
 # ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 # POSSIBILITY OF SUCH DAMAGE.
 
-SUASYNC_VERSION := 1.1.0
+SUASYNC_VERSION := 1.3.1
 SUASYNC := third_party/suasync/suasync-$(SUASYNC_VERSION).jar
 SUASYNC_BASE_URL := $(ASYNCHBASE_THIRD_PARTY_BASE_URL)
 

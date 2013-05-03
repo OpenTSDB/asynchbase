@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2010  StumbleUpon, Inc.  All rights reserved.
+ * Copyright (C) 2010-2012  The Async HBase Authors.  All rights reserved.
  * This file is part of Async HBase.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -100,7 +100,11 @@ final class RegionInfo implements Comparable<RegionInfo> {
                                  final byte[][] out_start_key) {
     final ChannelBuffer buf = ChannelBuffers.wrappedBuffer(kv.value());
     final byte version = buf.readByte();
-    if (version != 0) {
+    // version 1 was introduced in HBase 0.92 (see HBASE-451).
+    // The differences between v0 and v1 are irrelevant to us,
+    // as we only look at the first few fields, and they didn't
+    // change across these 2 versions.
+    if (version != 1 && version != 0) {
       LOG.warn("Unsupported region info version: " + version
                + " in .META.  entry: " + kv);
       // Keep going anyway, just in case the new version is backwards
@@ -271,28 +275,32 @@ final class RegionInfo implements Comparable<RegionInfo> {
       // If either `a' or `b' is followed immediately by another comma, then
       // they are the first region (it's the empty start key).
       i++;   // No need to check against `length', there MUST be more bytes.
-      if (a_comma != b_comma) {
-        if (a_comma == i) {
-          return -1002;  // a < b  because a is the start key, b is not.
-        } else if (b_comma == i) {
-          return 1002;   // a > b  because b is the start key, a is not.
+
+      // Compare keys.
+      final int first_comma = Math.min(a_comma, b_comma);
+      for (/*nothing*/; i < first_comma; i++) {
+        final byte ai = a[i];
+        final byte bi = b[i];
+        if (ai != bi) {  // The keys differ.
+          return (ai & 0xFF) - (bi & 0xFF);  // "promote" to unsigned.
+        }
+      }
+      if (a_comma < b_comma) {
+        return -1002;  // `a' has a shorter key.  a < b
+      } else if (b_comma < a_comma) {
+        return 1002;  // `b' has a shorter key.  a > b
+      }
+
+      // Keys have the same length and have compared identical.  Compare the
+      // rest, which essentially means: use start code as a tie breaker.
+      for (/*nothing*/; i < length; i++) {
+        final byte ai = a[i];
+        final byte bi = b[i];
+        if (ai != bi) {  // The start codes differ.
+          return (ai & 0xFF) - (bi & 0xFF);  // "promote" to unsigned.
         }
       }
 
-      // Now either both are the start key (in which case we need to keep
-      // comparing the "start codes" to pick up the most recent region)
-      // or neither is and we simply compare the start keys.
-      do {
-        if (a[i] != b[i]) {
-          if (i == a_comma) {
-            return -1003;  // `a' has a smaller start key.  a < b
-          } else if (i == b_comma) {
-            return 1003;   // `b' has a smaller start key.  a > b
-          }
-          return (a[i] & 0xFF) - (b[i] & 0xFF);  // The start keys differ.
-        }
-        i++;
-      } while (i < length);
       return a.length - b.length;
     }
 

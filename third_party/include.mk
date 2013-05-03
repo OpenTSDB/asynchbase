@@ -1,4 +1,4 @@
-# Copyright (c) 2011  StumbleUpon, Inc.  All rights reserved.
+# Copyright (C) 2011-2012  The Async HBase Authors.  All rights reserved.
 # This file is part of Async HBase.
 #
 # Redistribution and use in source and binary forms, with or without
@@ -27,11 +27,14 @@ ASYNCHBASE_THIRD_PARTY_BASE_URL := http://opentsdb.googlecode.com/files
 FETCH_DEPENDENCY := ./build-aux/fetchdep.sh "$$@"
 THIRD_PARTY =
 
+include third_party/guava/include.mk
+include third_party/hamcrest/include.mk
 include third_party/javassist/include.mk
 include third_party/junit/include.mk
 include third_party/logback/include.mk
 include third_party/mockito/include.mk
 include third_party/netty/include.mk
+include third_party/objenesis/include.mk
 include third_party/powermock/include.mk
 include third_party/slf4j/include.mk
 include third_party/suasync/include.mk

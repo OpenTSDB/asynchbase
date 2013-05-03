@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2010, 2011  StumbleUpon, Inc.  All rights reserved.
+ * Copyright (C) 2010-2012  The Async HBase Authors.  All rights reserved.
  * This file is part of Async HBase.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -92,8 +92,9 @@ public final class RowLockRequest extends HBaseRpc
   }
 
   /** Serializes this request.  */
-  ChannelBuffer serialize(final byte unused_server_version) {
-    final ChannelBuffer buf = newBuffer(predictSerializedSize());
+  ChannelBuffer serialize(final byte server_version) {
+    final ChannelBuffer buf = newBuffer(server_version,
+                                        predictSerializedSize());
     buf.writeInt(2);  // Number of parameters.
 
     writeHBaseByteArray(buf, region.name());
@@ -127,9 +128,10 @@ public final class RowLockRequest extends HBaseRpc
       this.lock = lock;
     }
 
-    ChannelBuffer serialize(final byte unused_server_version) {
+    ChannelBuffer serialize(final byte server_version) {
       // num param + type 1 + region length + region + type 2 + long
-      final ChannelBuffer buf = newBuffer(4 + 1 + 3 + region.name().length
+      final ChannelBuffer buf = newBuffer(server_version,
+                                          + 4 + 1 + 3 + region.name().length
                                           + 1 + 8);
       buf.writeInt(2);  // Number of parameters.
       writeHBaseByteArray(buf, region.name());

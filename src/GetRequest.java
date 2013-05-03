@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2010, 2011  StumbleUpon, Inc.  All rights reserved.
+ * Copyright (C) 2010-2012  The Async HBase Authors.  All rights reserved.
  * This file is part of Async HBase.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -54,6 +54,11 @@ public final class GetRequest extends HBaseRpc
   private byte[] filter;
   private byte[] filterName;
   /**
+   * How many versions of each cell to retrieve.
+   */
+  private int versions = 1;
+
+  /**
    * Constructor.
    * <strong>These byte arrays will NOT be copied.</strong>
    * @param table The non-empty name of the table to use.
@@ -103,6 +108,21 @@ public final class GetRequest extends HBaseRpc
    */
   static HBaseRpc exists(final byte[] table, final byte[] key) {
     return new GetRequest(0F, table, key);
+  }
+
+  /**
+   * Package-private factory method to build an "exists" RPC.
+   * @param table The non-empty name of the table to use.
+   * @param key The row key to get in that table.
+   * @param family The column family to get in the table.
+   * @return An {@link HBaseRpc} that will return a {@link Boolean}
+   * indicating whether or not the given table / key exists.
+   */
+  static HBaseRpc exists(final byte[] table,
+                         final byte[] key, final byte[] family) {
+    final GetRequest rpc = new GetRequest(0F, table, key);
+    rpc.family(family);
+    return rpc;
   }
 
   /**
@@ -198,6 +218,35 @@ public final class GetRequest extends HBaseRpc
     return this;
   }
 
+  /**
+   * Sets the maximum number of versions to return for each cell read.
+   * <p>
+   * By default only the most recent version of each cell is read.
+   * If you want to get all possible versions available, pass
+   * {@link Integer#MAX_VALUE} in argument.
+   * @param versions A strictly positive number of versions to return.
+   * @return {@code this}, always.
+   * @since 1.4
+   * @throws IllegalArgumentException if {@code versions <= 0}
+   */
+  public GetRequest maxVersions(final int versions) {
+    if (versions <= 0) {
+      throw new IllegalArgumentException("Need a strictly positive number: "
+                                         + versions);
+    }
+    this.versions = versions;
+    return this;
+  }
+
+  /**
+   * Returns the maximum number of versions to return for each cell scanned.
+   * @return A strictly positive integer.
+   * @since 1.4
+   */
+  public int maxVersions() {
+    return versions;
+  }
+
   @Override
   public byte[] table() {
     return table;
@@ -236,10 +285,6 @@ public final class GetRequest extends HBaseRpc
   // ---------------------- //
   // Package private stuff. //
   // ---------------------- //
-
-  boolean versionSensitive() {
-    return true;  // Sad.  HBASE-3174 broke backwards compatibilty!@#$%^  :(
-  }
 
   /**
    * Predicts a lower bound on the serialized size of this RPC.
@@ -287,12 +332,16 @@ public final class GetRequest extends HBaseRpc
         }
       }
     }
+    if (server_version >= RegionClient.SERVER_VERSION_092_OR_ABOVE) {
+      size += 4;  // int: Attributes map.  Always 0.
+    }
     return size;
   }
 
   /** Serializes this request.  */
   ChannelBuffer serialize(final byte server_version) {
-    final ChannelBuffer buf = newBuffer(predictSerializedSize(server_version));
+    final ChannelBuffer buf = newBuffer(server_version,
+                                        predictSerializedSize(server_version));
     buf.writeInt(2);  // Number of parameters.
 
     // 1st param: byte array containing region name
@@ -304,7 +353,8 @@ public final class GetRequest extends HBaseRpc
     buf.writeByte(1);    // Get#GET_VERSION.  Undocumented versioning of Get.
     writeByteArray(buf, key);
     buf.writeLong(lockid);  // Lock ID.
-    buf.writeInt(1);     // Max number of versions to return.
+    buf.writeInt(versions); // Max number of versions to return.
+
     if (filterName != null && filter != null) {
       buf.writeByte(0x01); // boolean (true): whether or not to use a filter.
       writeByteArray(buf, filterName); // the filter name
@@ -339,6 +389,9 @@ public final class GetRequest extends HBaseRpc
       } else {
         buf.writeByte(0x00);  // Boolean: we don't want specific qualifiers.
       }
+    }
+    if (server_version >= RegionClient.SERVER_VERSION_092_OR_ABOVE) {
+      buf.writeInt(0);  // Attributes map: number of elements.
     }
     return buf;
   }
