@@ -845,7 +845,8 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
       }
     }
     if (dead) {
-      if (rpc.getRegion() == null) {  // Can't retry.
+      if (rpc.getRegion() == null  // Can't retry, dunno where it should go.
+          || rpc.failfast()) {
         rpc.callback(new ConnectionResetException(null));
       } else {
         hbase_client.sendRpcToRegion(rpc);  // Re-schedule the RPC.
@@ -987,7 +988,8 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
                                final ConnectionResetException exception) {
     for (final HBaseRpc rpc : rpcs) {
       final RegionInfo region = rpc.getRegion();
-      if (region == null) {  // Can't retry, dunno where this RPC should go.
+      if (region == null  // Can't retry, dunno where this RPC should go.
+          || rpc.failfast()) {
         rpc.callback(exception);
       } else {
         final NotServingRegionException nsre =

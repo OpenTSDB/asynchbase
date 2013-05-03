@@ -6,6 +6,9 @@ This project uses Semantic Versioning (see http://semver.org/).
 New public APIs:
   - Scanners can now use a variety of different filters via the new
     `ScanFilter' interfaces and its various implementations.
+  - HBaseRpc now has a `failfast()' and a `setFailfast(boolean)' pair
+    of methods to allow RPCs to fail as soon as their encounter an
+    issue out of the ordinary (e.g. not just a `NotSuchRegionException').
 
 
 * Version 1.4.1 (2013-02-14) [1cbc303]

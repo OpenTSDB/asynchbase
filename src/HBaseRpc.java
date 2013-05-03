@@ -368,6 +368,34 @@ public abstract class HBaseRpc {
   byte attempt;  // package-private for RegionClient and HBaseClient only.
 
   /**
+   * If true, this RPC should fail-fast as soon as we know we have a problem.
+   */
+  boolean failfast = false;
+
+  /**
+   * Set whether or not the RPC not be retried upon encountering a problem.
+   * <p>
+   * RPCs can be retried for various legitimate reasons (e.g. NSRE due to a
+   * region moving), but under certain failure circumstances (such as a node
+   * going down) we want to give up and be alerted as soon as possible.
+   * @param failfast If {@code true}, this RPC should fail-fast as soon as
+   * we know we have a problem.
+   * @since 1.5
+   */
+  public final boolean setFailfast(final boolean failfast) {
+    return this.failfast = failfast;
+  }
+
+  /**
+   * Returns whether or not the RPC not be retried upon encountering a problem.
+   * @see #setFailfast
+   * @since 1.5
+   */
+  public final boolean failfast() {
+    return failfast;
+  }
+
+  /**
    * Package private constructor for RPCs that aren't for any region.
    * @param method The name of the method to invoke on the RegionServer.
    */
