@@ -30,6 +30,7 @@ import java.nio.charset.Charset;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Map;
 
 import com.google.common.collect.Lists;
 import org.jboss.netty.buffer.ChannelBuffer;
@@ -73,6 +74,7 @@ import static org.hbase.async.HBaseClient.EMPTY_ARRAY;
  * <p>
  * A {@code Scanner} is not re-usable.  Should you want to scan the same rows
  * or the same table again, you must create a new one.
+ *
  *
  * <h1>A note on passing {@code byte} arrays in argument</h1>
  * None of the method that receive a {@code byte[]} in argument will copy it.
@@ -182,6 +184,11 @@ public final class Scanner {
   private GetNextRowsRequest get_next_rows_request;
 
   /**
+   * Custom attributes required to be passed to the server as attributes of the Scan object
+   */
+  private Map<String, byte[]> attributes;
+
+    /**
    * Constructor.
    * <strong>This byte array will NOT be copied.</strong>
    * @param table The non-empty name of the table to use.
@@ -614,6 +621,22 @@ public final class Scanner {
   }
 
   /**
+   *
+   */
+  public Map<String, byte[]> getAttributes() {
+      return attributes;
+  }
+
+  /**
+   *
+   * @param attributes
+   */
+  public void setAttributes(Map<String, byte[]> attributes) {
+      this.attributes = attributes;
+  }
+
+
+    /**
    * Scans a number of rows.  Calling this method is equivalent to:
    * <pre>
    *   this.{@link #setMaxNumRows setMaxNumRows}(nrows);
@@ -1022,6 +1045,16 @@ public final class Scanner {
           }
         }
       }
+
+      size += 4; // int: number of attributes
+      if (attributes != null) {
+        for (Map.Entry<String, byte[]> entry: attributes.entrySet()) {
+          size += 4; // int: length of the key
+          size += entry.getKey().getBytes().length;
+          size += 1; // vint: length of the value
+          size += entry.getValue().length;
+        }
+      }
       return size;
     }
 
@@ -1037,7 +1070,7 @@ public final class Scanner {
       // 2nd param: Scan object
       buf.writeByte(39);   // Code for a `Scan' parameter.
       buf.writeByte(39);   // Code again (see HBASE-2877).
-      buf.writeByte(1);    // Manual versioning of Scan.
+      buf.writeByte(2);    // Manual versioning of Scan.
       writeByteArray(buf, start_key);
       writeByteArray(buf, stop_key);
       buf.writeInt(versions);  // Max number of versions to return.
@@ -1081,6 +1114,16 @@ public final class Scanner {
           for (byte[] qualifier : qualifiers) {
             writeByteArray(buf, qualifier);  // Column qualifier name.
           }
+        }
+      }
+
+      buf.writeInt(attributes == null ? 0 : attributes.size());
+      if (attributes != null) {
+        for (Map.Entry<String, byte[]> entry: attributes.entrySet()) {
+          buf.writeInt(entry.getKey().getBytes().length);
+          buf.writeBytes(entry.getKey().getBytes());
+          buf.writeByte((byte)entry.getValue().length);
+          buf.writeBytes(entry.getValue());
         }
       }
 
