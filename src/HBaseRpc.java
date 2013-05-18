@@ -30,6 +30,7 @@ import org.jboss.netty.buffer.ChannelBuffer;
 import org.jboss.netty.buffer.ChannelBuffers;
 import org.jboss.netty.util.CharsetUtil;
 
+import com.stumbleupon.async.Callback;
 import com.stumbleupon.async.Deferred;
 
 /**
@@ -368,6 +369,12 @@ public abstract class HBaseRpc {
   byte attempt;  // package-private for RegionClient and HBaseClient only.
 
   /**
+   * A Callback instance. If it is non-null it will be invoked for
+   * each KeyValue encountered during a scan or get.
+   */
+  Callback<Boolean,KeyValue> kvHandler;
+
+  /**
    * Package private constructor for RPCs that aren't for any region.
    * @param method The name of the method to invoke on the RegionServer.
    */
@@ -453,6 +460,25 @@ public abstract class HBaseRpc {
   /** Checks whether or not this RPC has a Deferred without creating one.  */
   final boolean hasDeferred() {
     return deferred != null;
+  }
+
+
+  /**
+   * If the KeyValue should be handled by a callback.
+   */
+  Boolean hasKvHandler() throws Exception {
+    return kvHandler != null;
+  }
+
+  /**
+   * Invokes the KeyValue callback if present.
+   * @see RegionClient
+   */
+  Boolean invokeKvHandler(KeyValue kv) throws Exception {
+    if (kvHandler != null) {
+      return kvHandler.call(kv);
+    }
+    return false;
   }
 
   public String toString() {
