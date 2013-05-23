@@ -44,7 +44,9 @@ import org.hbase.async.generated.ClientPB.MutationProto;
  * Irrespective of the order in which you send RPCs, a {@code DeleteRequest}
  * that is created with a specific timestamp in argument will only delete
  * values in HBase that were previously stored with a timestamp less than
- * or equal to that of the {@code DeleteRequest}.
+ * or equal to that of the {@code DeleteRequest} unless
+ * {@link #setDeleteAtTimestampOnly} is also called, in which case only the
+ * value at the specified timestamp is deleted.
  */
 public final class DeleteRequest extends BatchableRpc
   implements HBaseRpc.HasTable, HBaseRpc.HasKey,
@@ -65,6 +67,9 @@ public final class DeleteRequest extends BatchableRpc
   static final byte[] WHOLE_ROW = new byte[0];
 
   private final byte[][] qualifiers;
+
+  /** Whether to delete the value only at the specified timestamp. */
+  private boolean at_timestamp_only = false;
 
   /**
    * Constructor to delete an entire row.
@@ -409,6 +414,25 @@ public final class DeleteRequest extends BatchableRpc
     }
   }
 
+  /**
+   * Deletes only the cell value with the timestamp specified in the
+   * constructor.
+   * <p>
+   * Only applicable when qualifier(s) is also specified.
+   * @since 1.5
+   */
+  public void setDeleteAtTimestampOnly(final boolean at_timestamp_only) {
+    this.at_timestamp_only = at_timestamp_only;
+  }
+
+  /**
+   * Returns whether to only delete the cell value at the timestamp.
+   * @since 1.5
+   */
+  public boolean deleteAtTimestampOnly() {
+    return at_timestamp_only;
+  }
+
   @Override
   byte[] method(final byte server_version) {
     return (server_version >= RegionClient.SERVER_VERSION_095_OR_ABOVE
@@ -465,7 +489,11 @@ public final class DeleteRequest extends BatchableRpc
     }
     // Are we deleting a whole family at once or just a bunch of columns?
     final byte type = (qualifiers == DELETE_FAMILY_MARKER
-                       ? KeyValue.DELETE_FAMILY : KeyValue.DELETE_COLUMN);
+                       ? KeyValue.DELETE_FAMILY
+                       : (at_timestamp_only
+                          ? KeyValue.DELETE
+                          : KeyValue.DELETE_COLUMN));
+
     // Write the KeyValues
     for (final byte[] qualifier : qualifiers) {
       KeyValue.serialize(buf, type, timestamp,
@@ -541,7 +569,9 @@ public final class DeleteRequest extends BatchableRpc
       final MutationProto.DeleteType type =
         (qualifiers == DELETE_FAMILY_MARKER
          ? MutationProto.DeleteType.DELETE_FAMILY
-         : MutationProto.DeleteType.DELETE_MULTIPLE_VERSIONS);
+         : (at_timestamp_only
+            ? MutationProto.DeleteType.DELETE_ONE_VERSION
+            : MutationProto.DeleteType.DELETE_MULTIPLE_VERSIONS));
 
       // Now add all the qualifiers to delete.
       for (int i = 0; i < qualifiers.length; i++) {
