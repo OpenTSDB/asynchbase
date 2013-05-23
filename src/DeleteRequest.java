@@ -458,7 +458,7 @@ public final class DeleteRequest extends BatchableRpc
                        ? KeyValue.DELETE_FAMILY : KeyValue.DELETE_COLUMN);
     // Write the KeyValues
     for (final byte[] qualifier : qualifiers) {
-      KeyValue.serialize(buf, type, Long.MAX_VALUE,
+      KeyValue.serialize(buf, type, timestamp,
                          key, family, qualifier, null);
     }
   }
