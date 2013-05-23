@@ -48,6 +48,7 @@ import org.jboss.netty.channel.Channels;
 import org.jboss.netty.channel.ExceptionEvent;
 import org.jboss.netty.handler.codec.replay.ReplayingDecoder;
 import org.jboss.netty.handler.codec.replay.VoidEnum;
+import org.jboss.netty.handler.codec.replay.VoidEnum;
 import org.jboss.netty.util.Timeout;
 import org.jboss.netty.util.TimerTask;
 
@@ -192,6 +193,12 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
    * @see #acquireMetaLookupPermit
    */
   private final Semaphore meta_lookups = new Semaphore(100);
+
+  /**
+   * Current parser for a single result or an array of results. If null, we're at the top level and
+   * not parsing a row or rows.
+   */
+  private ResultParser current;
 
   /**
    * Constructor.
@@ -1129,6 +1136,335 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
   }
 
   /**
+   * Manages the parser state for the current inprogress RPC.
+   */
+  abstract private class ResultParser {
+    final HBaseRpc rpc;              // inflight rpc
+    final int rpcid;                 // ID of this rpc request
+    KeyValue prev;                   // previous parsed key value
+    int length = -1;                 // total expected bytes: -1 means unknown
+    int offset;                      // bytes processed so far
+    Throwable throwable;             // a KeyValue callback exception
+
+    protected ResultParser(int rpcid) {
+      this.rpcid = rpcid;
+      this.rpc = rpcs_inflight.get(rpcid);
+      if (rpc == null) {
+        throw new NonRecoverableException("Missing inflight rpc for rpcid=" + rpcid);
+      }
+      checkpoint();
+     }
+
+    /**
+     * Check if KeyValue callback handler is available.
+     */
+    protected boolean hasKvHandler() {
+      try {
+        return rpc.hasKvHandler();
+      } catch (Throwable t) {
+        throwable = t;
+      }
+      return false;
+    }
+
+    /**
+     * Handles a KeyValue via callback provided.
+     * @kv current KeyValue
+     * @return callback handler status: success(true) or fail(false).
+     */
+    protected Boolean invokeKvHandler(final KeyValue kv) {
+      try {
+        return rpc.invokeKvHandler(kv);
+      } catch (Throwable t) {
+        throwable = t;
+      }
+      return false;
+    }
+
+    /**
+     * Returns the completed value.
+     */
+    abstract protected Object completed();
+
+    /**
+     * Processes some more data from a channel.
+     */
+    abstract protected Object process(ChannelBuffer buf);
+
+    protected boolean done() {
+      return length >= 0 && offset == length;
+    }
+
+    /**
+     * Tries to read a complete KeyValue from the buffer. Return its if successful.
+     */
+    protected KeyValue readKeyValue(final ChannelBuffer buf) {
+        final int kv_length = buf.readInt();
+        HBaseRpc.checkArrayLength(buf, kv_length);
+
+        // check if we can read the whole key/value now
+        buf.markReaderIndex();
+        buf.skipBytes(kv_length);
+        buf.resetReaderIndex();
+
+        // apparently we can
+        KeyValue kv = KeyValue.fromBuffer(buf, prev);
+
+        final int key_length = (2 + kv.key().length + 1 + kv.family().length
+                                + kv.qualifier().length + 8 + 1);   // XXX DEBUG
+        if (key_length + kv.value().length + 4 + 4 != kv_length) {
+          badResponse("kv_length=" + kv_length
+                      + " doesn't match key_length + value_length ("
+                      + key_length + " + " + kv.value().length + ") in " + buf
+                      + '=' + Bytes.pretty(buf));
+        }
+
+        // adjust our offset
+        offset += 4 + kv_length;
+
+        return prev = kv;
+    }
+  }
+
+  /**
+   * Parser state for a single row/result.
+   */
+  private class HBaseResultParser extends ResultParser {
+    ArrayList<KeyValue> values;
+    HBaseResultParser(int rpcid) {
+      super(rpcid);
+    }
+
+    /**
+     * Handles a new KeyValue by adding it to the row or
+     * calling its callback handler.
+     */
+    protected void handle(final KeyValue kv) {
+      // run the callback
+      if (hasKvHandler()) {
+        invokeKvHandler(kv);
+        return;
+      }
+
+      if (values == null) {
+        values = new ArrayList<KeyValue>(10);
+      }
+      values.add(kv);
+    }
+
+    protected Object completed() {
+      if (throwable != null) {
+        return throwable;
+      }
+      return values == null ? new ArrayList<KeyValue>(0) : values;
+    }
+
+    /**
+     * De-serializes an {@code hbase.client.Result} object.
+     * @param buf The buffer that contains a serialized {@code Result}.
+     * @return The result parsed into a list of {@link KeyValue} objects.
+     */
+    protected Object process(final ChannelBuffer buf) {
+      if (length < 0) {
+        length = buf.readInt();
+        HBaseRpc.checkArrayLength(buf, length);
+
+        if (LOG.isDebugEnabled()) {
+          LOG.debug("rpc " + rpcid + " starting KeyValue parse: " + length + " total bytes");
+        }
+
+        if (length == 0) {
+          return completed();
+        }
+
+        checkpoint();
+      }
+
+      // Here we're always positioned at the beginning of a key/value
+      while (offset < length) {
+        KeyValue kv = readKeyValue(buf);
+        handle(kv);
+
+        // Checkpoint after each success
+        checkpoint();
+      }
+
+      // If we get here we're done - which can be null
+      if (offset != length) {
+        LOG.debug(offset + " != " + length);
+      }
+      LOG.debug("RPC " + rpcid + " RETURNING " + (values == null ? 0 : values.size()) + " values");
+      return completed();
+    }
+  }
+
+  static private ArrayList<ArrayList<KeyValue>> NULL_ROWS =
+    new ArrayList<ArrayList<KeyValue>>(0);
+
+  private class HBaseArrayResultParser extends ResultParser {
+    ArrayList<ArrayList<KeyValue>> values;  // results
+    int num_rows;  // Number of expected rows
+    int rows;  // Rows processed
+    int num_kvs;  // Number of expected kv's for current row
+    int kvs;  // Number of kvs processed so far
+
+    // Whether we should start a new row with the next item
+    boolean rowPending = true;
+
+    HBaseArrayResultParser(int rpcid) {
+      super(rpcid);
+      startRow();
+    }
+
+    public String toString()
+    {
+      return String.format(
+          "num_rows %d, rows %d, num_kvs %d, kvs %d, length %d, offset %d",
+          num_rows, rows, num_kvs, kvs, length, offset);
+    }
+
+    /**
+     * Handles a new KeyValue either via a callback or by adding it to the
+     * current row.
+     * @kv current KeyValue from Hbase.
+     */
+    protected void handle(final KeyValue kv) {
+      // run the callback
+      if (hasKvHandler()) {
+        invokeKvHandler(kv);
+        return;
+      }
+
+      if (rowPending) {
+        if (values == null) {
+          values = new ArrayList<ArrayList<KeyValue>>(10);
+        }
+        values.add(new ArrayList<KeyValue>(num_kvs));
+        rowPending = false;
+      }
+
+      values.get(values.size() - 1).add(kv);
+    }
+
+    /**
+     * Starts a new row.
+     */
+    private void startRow() {
+      rowPending = true;
+      num_kvs = -1;
+      kvs = 0;
+    }
+
+    protected Object completed() {
+      if (throwable != null) {
+        return throwable;
+      }
+
+      if (hasKvHandler()) {
+        return null;
+      }
+
+      if (values == null) {
+        if (num_rows == 0) {
+          // tells the caller that we're reached the end of this region
+          return null;
+        } else {
+          // Append a fake row with the last item in it so scanning can
+          // continue from the last key of this scan.
+          values = new ArrayList<ArrayList<KeyValue>>(1);
+          values.add(new ArrayList<KeyValue>(1));
+          values.get(0).add(prev);
+        }
+      }
+
+      return values;
+    }
+
+    /**
+     * De-serializes an {@code hbase.client.Result} array.
+     * @param buf The buffer that contains a serialized {@code Result[]}.
+     * @return The results parsed into a list of rows, where each row itself is
+     * a list of {@link KeyValue} objects. This list will be empty if KeyValues
+     * is handled by KeyValue callback.
+     */
+    protected Object process(final ChannelBuffer buf) {
+      // format
+      //   version: byte
+      //   nrows: int
+      //   total bytes for all rows: int
+      //   the rows:
+      //     num_kvs: int
+      //     kv0 ... vn(n - 1)
+
+      //
+      // Gather up the version, nrows and total length all at once,
+      // then checkpoint.
+      //
+      if (length < 0) {
+        int version = (int) buf.readByte() & 0xFF;
+        if (version != 0x01) {
+          LOG.warn("Received unsupported Result[] version: " + version);
+          // Keep going anyway, just in case the new version is backwards
+          // compatible somehow.  If it's not, we'll just fail later.
+        }
+
+        // Number of expected rows
+        num_rows = buf.readInt();
+        if (rows < 0) {
+          badResponse("Negative number of results=" + num_rows + " found in "
+                      + buf + '=' + Bytes.pretty(buf));
+        } else if (num_rows == 0) {
+          length = offset = 0;                    // indicates we're done
+          return completed();
+        }
+
+        // Length of the overall set of data, all rows, everything
+        length = buf.readInt();
+        HBaseRpc.checkNonEmptyArrayLength(buf, length);
+
+        // Checkpoint each successful step
+        checkpoint();
+      }
+
+      // We're always positioned at either a KeyValue or the beginning of a row
+      while (rows < num_rows) {
+        if (num_kvs < 0) {
+          // Start a new row
+          num_kvs = buf.readInt();
+          offset += 4;
+          kvs = 0;
+          checkpoint();
+        }
+
+        // Try to finish a row
+        while (kvs < num_kvs) {
+          KeyValue kv = readKeyValue(buf);
+          handle(kv);
+          kvs += 1;
+
+          checkpoint();
+        }
+
+        // If we get here we finished a row - only start a new one if necessary
+        if (++rows < num_rows) {
+          startRow();
+        }
+      }
+
+      //
+      // We are done if we get here. Perform some validation checks.
+      //
+      if (length != offset) {
+        badResponse("Result[" + num_rows + "] was supposed to be " + length
+                    + " bytes, but we only read " + offset + " bytes from "
+                    + buf + '=' + Bytes.pretty(buf));
+      }
+
+      return completed();
+    }
+  }
+
+  /**
    * Decodes the response of an RPC and triggers its {@link Deferred}.
    * <p>
    * This method is only invoked by Netty from a Netty IO thread and will not
@@ -1149,9 +1485,22 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
     final int rdx = buf.readerIndex();
     final long start = System.nanoTime();
     LOG.debug("------------------>> ENTERING DECODE >>------------------");
-    final int rpcid = buf.readInt();
-    final Object decoded = deserialize(buf, rpcid);
+
+    final Object decoded;
+    final int rpcid;
+    if (current != null) {
+      // already in mid parse - this never returns until it has the whole object
+      rpcid = current.rpcid;
+      decoded = current.process(buf);
+    } else {
+      // ready for a new object
+      rpcid = buf.readInt();
+      decoded = deserialize(buf, rpcid);
+    }
+
     final HBaseRpc rpc = rpcs_inflight.remove(rpcid);
+    current = null;
+
     if (LOG.isDebugEnabled()) {
       LOG.debug("rpcid=" + rpcid
                 + ", response size=" + (buf.readerIndex() - rdx) + " bytes"
@@ -1232,7 +1581,7 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
       return deserializeException(buf, rpc);
     }
     try {
-      return deserializeObject(buf, rpc);
+      return deserializeObject(buf, rpcid, rpc);
     } catch (IllegalArgumentException e) {  // The RPC didn't look good to us.
       return new InvalidResponseException(e.getMessage(), e);
     }
@@ -1264,23 +1613,26 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
    * @return The de-serialized object (which can be {@code null}).
    */
   @SuppressWarnings("fallthrough")
-  static Object deserializeObject(final ChannelBuffer buf,
-                                  final HBaseRpc request) {
+  Object deserializeObject(final ChannelBuffer buf,
+                           final int rpcid,
+                           final HBaseRpc request) {
     switch (buf.readByte()) {  // Read the type of the response.
       case  1:  // Boolean
         return buf.readByte() != 0x00;
       case  6:  // Long
         return buf.readLong();
       case 14:  // Writable
-        return deserializeObject(buf, request);  // Recursively de-serialize it.
+        return deserializeObject(buf, rpcid, request);  // Recursively de-serialize it.
       case 17:  // NullInstance
         buf.readByte();  // Consume the (useless) type of the "null".
         return null;
       case 37:  // Result
         buf.readByte();  // Read the type again.  See HBASE-2877.
-        return parseResult(buf);
+        current = new HBaseResultParser(rpcid);
+        return current.process(buf);
       case 38:  // Result[]
-        return parseResults(buf);
+        current = new HBaseArrayResultParser(rpcid);
+        return current.process(buf);
       case 58:  // MultiPutResponse
         // Fall through
       case 67:  // MultiResponse
@@ -1291,119 +1643,13 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
                                       + Bytes.pretty(buf));
   }
 
-  /**
-   * De-serializes an {@code hbase.client.Result} object.
-   * @param buf The buffer that contains a serialized {@code Result}.
-   * @return The result parsed into a list of {@link KeyValue} objects.
-   */
-  private static ArrayList<KeyValue> parseResult(final ChannelBuffer buf) {
-    final int length = buf.readInt();
-    HBaseRpc.checkArrayLength(buf, length);
-    // Immediately try to "fault" if `length' bytes aren't available.
-    buf.markReaderIndex();
-    buf.skipBytes(length);
-    buf.resetReaderIndex();
-    //LOG.debug("total Result response length={}", length);
-
-    // Pre-compute how many KVs we have so the array below will be rightsized.
-    int num_kv = 0;
-    {
-      int bytes_read = 0;
-      while (bytes_read < length) {
-        final int kv_length = buf.readInt();
-        HBaseRpc.checkArrayLength(buf, kv_length);
-        num_kv++;
-        bytes_read += kv_length + 4;
-        buf.skipBytes(kv_length);
-      }
-      buf.resetReaderIndex();
-    }
-
-    final ArrayList<KeyValue> results = new ArrayList<KeyValue>(num_kv);
-    KeyValue kv = null;
-    for (int i = 0; i < num_kv; i++) {
-      final int kv_length = buf.readInt();  // Previous loop checked it's >0.
-      // Now read a KeyValue that spans over kv_length bytes.
-      kv = KeyValue.fromBuffer(buf, kv);
-      final int key_length = (2 + kv.key().length + 1 + kv.family().length
-                              + kv.qualifier().length + 8 + 1);   // XXX DEBUG
-      if (key_length + kv.value().length + 4 + 4 != kv_length) {
-        badResponse("kv_length=" + kv_length
-                    + " doesn't match key_length + value_length ("
-                    + key_length + " + " + kv.value().length + ") in " + buf
-                    + '=' + Bytes.pretty(buf));
-      }
-      results.add(kv);
-    }
-    return results;
-  }
-
-  /**
-   * De-serializes an {@code hbase.client.Result} array.
-   * @param buf The buffer that contains a serialized {@code Result[]}.
-   * @return The results parsed into a list of rows, where each row itself is
-   * a list of {@link KeyValue} objects.
-   */
-  private static
-    ArrayList<ArrayList<KeyValue>> parseResults(final ChannelBuffer buf) {
-    final byte version = buf.readByte();
-    if (version != 0x01) {
-      LOG.warn("Received unsupported Result[] version: " + version);
-      // Keep going anyway, just in case the new version is backwards
-      // compatible somehow.  If it's not, we'll just fail later.
-    }
-    final int nresults = buf.readInt();
-    if (nresults < 0) {
-      badResponse("Negative number of results=" + nresults + " found in "
-                  + buf + '=' + Bytes.pretty(buf));
-    } else if (nresults == 0) {
-      return null;
-    }
-    final int length = buf.readInt();  // Guaranteed > 0 as we have > 0 Result.
-    HBaseRpc.checkNonEmptyArrayLength(buf, length);
-    // Immediately try to "fault" if `length' bytes aren't available.
-    buf.markReaderIndex();
-    buf.skipBytes(length);
-    buf.resetReaderIndex();
-    //LOG.debug("total Result[] response length={}", length);
-    //LOG.debug("Result[] "+nresults+" buf="+buf+'='+Bytes.pretty(buf));
-
-    final ArrayList<ArrayList<KeyValue>> results =
-      new ArrayList<ArrayList<KeyValue>>(nresults);
-    int bytes_read = 0;
-    for (int i = 0; i < nresults; i++) {
-      final int num_kv = buf.readInt();
-      //LOG.debug("num_kv="+num_kv);
-      bytes_read += 4;
-      if (num_kv < 0) {
-        badResponse("Negative number of KeyValues=" + num_kv + " for Result["
-                    + i + "] found in " + buf + '=' + Bytes.pretty(buf));
-      } else if (nresults == 0) {
-        continue;
-      }
-      final ArrayList<KeyValue> result = new ArrayList<KeyValue>(num_kv);
-      KeyValue kv = null;
-      for (int j = 0; j < num_kv; j++) {
-        final int kv_length = buf.readInt();
-        HBaseRpc.checkNonEmptyArrayLength(buf, kv_length);
-        //LOG.debug("kv_length="+kv_length);
-        kv = KeyValue.fromBuffer(buf, kv);
-        result.add(kv);
-        bytes_read += 4 + kv_length;
-      }
-      results.add(result);
-    }
-    if (length != bytes_read) {   // Sanity check.
-      badResponse("Result[" + nresults + "] was supposed to be " + length
-                  + " bytes, but we only read " + bytes_read + " bytes from "
-                  + buf + '=' + Bytes.pretty(buf));
-    }
-    return results;
-  }
-
   /** Throws an exception with the given error message.  */
-  private static void badResponse(final String errmsg) {
+  private void badResponse(final String errmsg) {
     LOG.error(errmsg);
+
+    // reset the current object
+    current = null;
+
     throw new InvalidResponseException(errmsg, null);
   }
 

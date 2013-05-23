@@ -517,7 +517,7 @@ final class MultiAction extends HBaseRpc implements HBaseRpc.IsEdit {
           final HBaseException e = RegionClient.deserializeException(buf, null);
           resp = e;
         } else {
-          resp = RegionClient.deserializeObject(buf, this);
+          resp = responseFromBuffer(buf);
           // A successful response to a `Put' will be an empty `Result'
           // object, which we de-serialize as an empty `ArrayList'.
           // There's no need to waste memory keeping these around.

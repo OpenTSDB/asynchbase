@@ -42,6 +42,8 @@ import org.slf4j.Logger;
 
 import org.hbase.async.test.Common;
 
+import com.stumbleupon.async.Callback;
+
 /**
  * Simple command-line interface to quickly test async HBase.
  */
@@ -54,10 +56,12 @@ final class Test {
     commands = new HashMap<String, Cmd>();
     commands.put("icv", new icv());
     commands.put("scan", new scan());
+    commands.put("hscan", new scan());
     commands.put("mscan", new mscan());
     final get get = new get();  // get get get!!
     commands.put("get", get);
     commands.put("lget", get);
+    commands.put("hget", get);
     final put put = new put();  // put put put!!
     commands.put("put", put);
     commands.put("lput", put);
@@ -85,6 +89,9 @@ final class Test {
                        + "  lput <table> <key> <family> <qualifier> <value>\n"
                        + "  ldelete <table> <key> <family> <qualifier>\n"
                        + "  lcas <table> <key> <family> <qualifier> <expected> <value>\n"
+                       + "Parse KeyValues via handlers from get or scan:\n"
+                       + "  hget <table> <key> [family] [qualifiers ...]\n"
+                       + "  hscan <table> [start] [family] [qualifier] [stop] [regexp]\n"
                       );
   }
 
@@ -153,10 +160,15 @@ final class Test {
         lock = client.lockRow(rlr).joinUninterruptibly();
         LOG.info("Acquired explicit row lock: " + lock);
       }
-      args = null;
       try {
-        final ArrayList<KeyValue> result = client.get(get).joinUninterruptibly();
-        LOG.info("Get result=" + result);
+        if (args[1].charAt(0) == 'h') { // Use keyvalue handlers to process each value
+          final KvHandler handler = new KvHandler();
+          client.get(get, handler).joinUninterruptibly();
+          LOG.info("Finished calling get with KvHandler");
+        } else {
+          final ArrayList<KeyValue> result = client.get(get).joinUninterruptibly();
+          LOG.info("Get result=" + result);
+        }
       } catch (Exception e) {
         LOG.error("Get failed", e);
       } finally {
@@ -253,7 +265,15 @@ final class Test {
     @SuppressWarnings("fallthrough")
     public void execute(final HBaseClient client, String[] args) {
       ensureArguments(args, 3, 8);
-      final Scanner scanner = client.newScanner(args[2]);
+      final Scanner scanner;
+      boolean hasKvHandler = false;
+      if (args[1].charAt(0) == 'h') {  // Use handlers to parse KeyValues
+        final KvHandler handler = new KvHandler();
+        scanner = client.newScanner(args[2], handler);
+        hasKvHandler = true;
+      } else {
+        scanner = client.newScanner(args[2]);
+      }
       switch (args.length) {
         case 8: scanner.setKeyRegexp(args[7]);
         case 7: scanner.setStopKey(args[6]);
@@ -266,7 +286,9 @@ final class Test {
       try {
         ArrayList<ArrayList<KeyValue>> rows;
         while ((rows = scanner.nextRows().joinUninterruptibly()) != null) {
-          LOG.info("scanned results=" + rows + " from " + scanner);
+          if (!hasKvHandler) {
+              LOG.info("scanned results=" + rows + " from " + scanner);
+          }
         }
       } catch (Exception e) {
         LOG.error("Scan failed", e);
@@ -344,5 +366,13 @@ final class Test {
       }
     }
   }
+
+  static class KvHandler implements Callback<Boolean,KeyValue> {
+    int count;
+    public Boolean call(KeyValue kv) {
+      LOG.info("callback with KeyValue: " + kv + ", total: " + count++);
+      return true;
+   }
+ }
 
 }

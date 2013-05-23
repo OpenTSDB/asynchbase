@@ -957,6 +957,23 @@ public final class HBaseClient {
     return sendRpcToRegion(request).addCallbacks(got, Callback.PASSTHROUGH);
   }
 
+  /**
+   * Retrieves data from HBase and invokes a callback for each KeyValue
+   * as they are processed and match the get request. It is up to the handler
+   * to keep or discard the KeyValue. This is a way to process items as they
+   * come in and free up the memory as you go.
+   * @param request The {@code get} request.
+   * @param handler The {@code Callback} to invoke, null is OK.
+   * @return A deferred list of key-values that matched the get request if
+   * handler is not null. Otherwise, the list is always empty.
+   */
+  public Deferred<ArrayList<KeyValue>> get(final GetRequest request,
+                            Callback<Boolean,KeyValue> kvHandler) {
+    request.kvHandler = kvHandler;
+    num_gets.increment();
+    return sendRpcToRegion(request).addCallbacks(got, Callback.PASSTHROUGH);
+  }
+
   /** Singleton callback to handle responses of "get" RPCs.  */
   private static final Callback<ArrayList<KeyValue>, Object> got =
     new Callback<ArrayList<KeyValue>, Object>() {
@@ -984,13 +1001,41 @@ public final class HBaseClient {
   }
 
   /**
+   * Creates a new {@link Scanner} for a particular table with the specified
+   * handler {@link Callback}. The handler is called for each KeyValue as they
+   * are processed. It is up to the handler to keep or discard the KeyValue.
+   * This is a way to process items as they come in and free up the memory as
+   * you go.
+   * @param table The name of the table you intend to scan.
+   * @param kvHandler The Callback to handle scanned KeyVales. null is OK.
+   * @return A new scanner for this table.
+   */
+  public Scanner newScanner(final byte[] table, Callback<Boolean,KeyValue> kvHandler) {
+    Scanner s = new Scanner(this, table);
+    s.kvHandler = kvHandler;
+    return s;
+  }
+
+  /**
    * Creates a new {@link Scanner} for a particular table.
    * @param table The name of the table you intend to scan.
    * The string is assumed to use the platform's default charset.
    * @return A new scanner for this table.
    */
   public Scanner newScanner(final String table) {
-    return new Scanner(this, table.getBytes());
+    return newScanner(table.getBytes(), null);
+  }
+
+  /**
+   * Creates a new {@link Scanner} for a particular table with the specified
+   * filtering {@link Callback}.
+   * @param table The name of the table you intend to scan.
+   * The string is assumed to use the platform's default charset.
+   * @param filter The filtering Callback, null is OK.
+   * @return A new scanner for this table.
+   */
+  public Scanner newScanner(final String table, Callback<Boolean,KeyValue> kvHandler) {
+    return newScanner(table.getBytes(), kvHandler);
   }
 
   /**
