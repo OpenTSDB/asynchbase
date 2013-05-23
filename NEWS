@@ -10,6 +10,9 @@ New public APIs:
     of methods to allow RPCs to fail as soon as their encounter an
     issue out of the ordinary (e.g. not just a `NotSuchRegionException').
 
+Noteworthy bug fixes:
+  - DeleteRequest wasn't honoring its timestamp if one was given (#58).
+
 
 * Version 1.4.1 (2013-02-14) [1cbc303]
 
