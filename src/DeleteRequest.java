@@ -41,7 +41,9 @@ import org.jboss.netty.buffer.ChannelBuffer;
  * Irrespective of the order in which you send RPCs, a {@code DeleteRequest}
  * that is created with a specific timestamp in argument will only delete
  * values in HBase that were previously stored with a timestamp less than
- * or equal to that of the {@code DeleteRequest}.
+ * or equal to that of the {@code DeleteRequest} unless
+ * {@link #setDeleteAtTimestampOnly} is also called, in which case only the
+ * value at the specified timestamp is deleted.
  */
 public final class DeleteRequest extends BatchableRpc
   implements HBaseRpc.HasTable, HBaseRpc.HasKey,
@@ -62,6 +64,9 @@ public final class DeleteRequest extends BatchableRpc
   static final byte[] WHOLE_ROW = new byte[0];
 
   private final byte[][] qualifiers;
+
+  /** Whether to delete the value only at the specified timestamp. */
+  private boolean at_timestamp_only = false;
 
   /**
    * Constructor to delete an entire row.
@@ -406,6 +411,23 @@ public final class DeleteRequest extends BatchableRpc
     }
   }
 
+  /**
+   * Delete only the cell value with the timestamp specified in the
+   * constructor. Only applicable when qualifier(s) is also specified.
+   * @since 1.5
+   */
+  public void setDeleteAtTimestampOnly(boolean at_timestamp_only) {
+      this.at_timestamp_only = at_timestamp_only;
+  }
+
+  /**
+   * Return whether to only delete the cell value at the timestamp.
+   * @since 1.5
+   */
+  public boolean deleteAtTimestampOnly() {
+      return at_timestamp_only;
+  }
+
   @Override
   public byte[] table() {
     return table;
@@ -455,10 +477,12 @@ public final class DeleteRequest extends BatchableRpc
     }
     // Are we deleting a whole family at once or just a bunch of columns?
     final byte type = (qualifiers == DELETE_FAMILY_MARKER
-                       ? KeyValue.DELETE_FAMILY : KeyValue.DELETE_COLUMN);
+                       ? KeyValue.DELETE_FAMILY : (at_timestamp_only
+                       ? KeyValue.DELETE : KeyValue.DELETE_COLUMN));
+
     // Write the KeyValues
     for (final byte[] qualifier : qualifiers) {
-      KeyValue.serialize(buf, type, Long.MAX_VALUE,
+      KeyValue.serialize(buf, type, timestamp,
                          key, family, qualifier, null);
     }
   }
