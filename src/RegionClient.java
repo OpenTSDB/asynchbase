@@ -1629,7 +1629,7 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
         // Fall through
       case 67:  // MultiResponse
         // Don't read the type again, responseFromBuffer() will need it.
-        return ((MultiAction) request).responseFromBuffer(buf);
+        return ((MultiAction) request).responseFromBuffer(buf, rpcid, this);
     }
     throw new NonRecoverableException("Couldn't de-serialize "
                                       + Bytes.pretty(buf, MAX_PRETTY_BYTES));

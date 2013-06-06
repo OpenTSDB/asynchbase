@@ -485,12 +485,12 @@ final class MultiAction extends HBaseRpc implements HBaseRpc.IsEdit {
    * De-serializes the response to a {@link MultiAction} RPC.
    * See HBase's {@code MultiResponse}.
    */
-  Response responseFromBuffer(final ChannelBuffer buf) {
+  Response responseFromBuffer(final ChannelBuffer buf, int rpcid, RegionClient rc) {
     switch (buf.readByte()) {
       case 58:
         return deserializeMultiPutResponse(buf);
       case 67:
-        return deserializeMultiResponse(buf);
+        return deserializeMultiResponse(buf, rpcid, rc);
     }
     throw new NonRecoverableException("Couldn't de-serialize "
                                       + Bytes.pretty(buf));
@@ -500,7 +500,7 @@ final class MultiAction extends HBaseRpc implements HBaseRpc.IsEdit {
    * De-serializes a {@code MultiResponse}.
    * This is only used when talking to HBase 0.92 and above.
    */
-  Response deserializeMultiResponse(final ChannelBuffer buf) {
+  Response deserializeMultiResponse(final ChannelBuffer buf, final int rpcid, RegionClient rc) {
     final int nregions = buf.readInt();
     HBaseRpc.checkNonEmptyArrayLength(buf, nregions);
     final Object[] resps = new Object[batch.size()];
@@ -517,8 +517,7 @@ final class MultiAction extends HBaseRpc implements HBaseRpc.IsEdit {
           final HBaseException e = RegionClient.deserializeException(buf, null);
           resp = e;
         } else {
-            //resp = RegionClient.deserializeObject(buf, this);
-          resp = responseFromBuffer(buf);
+          resp = rc.deserializeObject(buf, rpcid, this);
           // A successful response to a `Put' will be an empty `Result'
           // object, which we de-serialize as an empty `ArrayList'.
           // There's no need to waste memory keeping these around.
