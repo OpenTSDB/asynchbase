@@ -1023,7 +1023,9 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
       LOG.error("Unexpected exception from downstream on " + c, e);
     }
     if (c.isOpen()) {
-      Channels.close(c);
+      Channels.close(c);  // Will trigger channelClosed(), which will cleanup()
+    } else {              // else: presumably a connection timeout.
+      cleanup(c);         // => need to cleanup() from here directly.
     }
   }
 
