@@ -1473,10 +1473,21 @@ public final class HBaseClient {
     final class RetryRpc implements Callback<Deferred<Object>, Object> {
       public Deferred<Object> call(final Object arg) {
         if (arg instanceof NonRecoverableException) {
-          request.callback(arg);
-          return Deferred.fromError((NonRecoverableException) arg);
+          // No point in retrying here, so fail the RPC.
+          HBaseException e = (NonRecoverableException) arg;
+          if (e instanceof HasFailedRpcException
+              && ((HasFailedRpcException) e).getFailedRpc() != request) {
+            // If we get here it's because a dependent RPC (such as a META
+            // lookup) has failed.  Therefore the exception we're getting
+            // indicates that the META lookup failed, but we need to return
+            // to our caller here that it's their RPC that failed.  Here we
+            // re-create the exception but with the correct RPC in argument.
+            e = e.make(e, request);  // e is likely a PleaseThrottleException.
+          }
+          request.callback(e);
+          return Deferred.fromError(e);
         }
-        return sendRpcToRegion(request);
+        return sendRpcToRegion(request);  // Retry the RPC.
       }
       public String toString() {
         return "retry RPC";
