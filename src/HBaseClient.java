@@ -59,6 +59,7 @@ import org.jboss.netty.channel.socket.ClientSocketChannelFactory;
 import org.jboss.netty.channel.socket.SocketChannel;
 import org.jboss.netty.channel.socket.SocketChannelConfig;
 import org.jboss.netty.channel.socket.nio.NioClientSocketChannelFactory;
+import org.jboss.netty.handler.timeout.ReadTimeoutHandler;
 import org.jboss.netty.util.HashedWheelTimer;
 import org.jboss.netty.util.Timeout;
 import org.jboss.netty.util.Timer;
@@ -361,6 +362,25 @@ public final class HBaseClient {
    */
   private volatile LoadingCache<BufferedIncrement, BufferedIncrement.Amount> increment_buffer;
 
+
+  /**
+   * How many milliseconds of no read activity on a channel before we treat the remote
+   * regionserver as dead and close it.
+   *
+   * We periodically ping regionservers and if there is no response from a server
+   * for more than this time we think the server is unhealthy, and close its channel
+   * and fail all its pending rpcs.
+   * Also @see #ping_interval_ms
+   */
+  private volatile short read_timeout_ms = 5000;
+
+  /**
+   * How often we send a ping to regionservers. It's used to monitor the health of the
+   * server. It must be less than #read_timeout_ms.
+   * Also @see #read_timeout_ms
+   */
+  private volatile short ping_interval_ms = 3000;
+
   // ------------------------ //
   // Client usage statistics. //
   // ------------------------ //
@@ -662,6 +682,42 @@ public final class HBaseClient {
   }
 
   /**
+   * Sets the maximium time (in milliseconds) of no read activity from
+   * a regionserver before we treat it as unhealthy and close it channel.
+   *
+   * To avoid closing idle channels, we periodically send
+   * pings to regionservers (@see #setPingInterval).
+   *
+   * Setting it to a value less or equal to 0 disables the timeout
+   * and healthy check.
+   * @since 1.5
+   */
+  public void setReadTimeoutMs(short read_timeout_ms) {
+    this.read_timeout_ms = read_timeout_ms;
+  }
+
+  /**
+   * Sets the interval (in milliseconds) we send pings to regionservers
+   * to monitor its health.
+   * 
+   * If the value is greater than #read_timeout_ms, read_timeout_ms (minus
+   * a grace period (100ms)) will be used.
+   *
+   * Setting it to 0 will disable the ping. Then health-checking will rely
+   * on the normal read activities on the channel. Idle channels will be
+   * treated as unhealthy and get closed.
+   *
+   * Also @see #setReadTimeoutMs
+   * @since 1.5
+   */
+  public void setPingIntervalMs(short ping_interval_ms) {
+    if (ping_interval_ms < 0) {
+      throw new IllegalArgumentException("Negative: " + ping_interval_ms);
+    }
+    this.ping_interval_ms = ping_interval_ms;
+  }
+
+  /**
    * Returns the timer used by this client.
    * <p>
    * All timeouts, retries and other things that need to "sleep
@@ -719,6 +775,26 @@ public final class HBaseClient {
    */
   public int getIncrementBufferSize() {
     return increment_buffer_size;
+  }
+
+  /**
+   * Returns read timeout. See #read_timeout_ms.
+   * @since 1.5
+   */
+  public short getReadTimeoutMs() {
+    return read_timeout_ms;
+  }
+
+  /**
+   * Returns ping interval. See #ping_interval_ms.
+   * @since 1.5
+   */
+  public short getPingIntervalMs() {
+    if (ping_interval_ms > 0) {
+      return (ping_interval_ms >= read_timeout_ms)
+        ? (short) (read_timeout_ms - 100) : ping_interval_ms;
+    }
+    return ping_interval_ms;
   }
 
   /**
@@ -2407,6 +2483,11 @@ public final class HBaseClient {
      */
     RegionClient init() {
       final RegionClient client = new RegionClient(HBaseClient.this);
+      if (read_timeout_ms > 0) {
+        super.addLast(
+            "readtimeout",
+            new ReadTimeoutHandler(timer, read_timeout_ms, MILLISECONDS));
+      }
       super.addLast("handler", client);
       return client;
     }
