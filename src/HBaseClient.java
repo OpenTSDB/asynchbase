@@ -43,6 +43,7 @@ import java.util.concurrent.Executors;
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
 
 import com.google.common.cache.LoadingCache;
+import com.google.protobuf.InvalidProtocolBufferException;
 
 import org.apache.zookeeper.AsyncCallback;
 import org.apache.zookeeper.KeeperException.Code;
@@ -69,6 +70,8 @@ import org.slf4j.LoggerFactory;
 
 import com.stumbleupon.async.Callback;
 import com.stumbleupon.async.Deferred;
+
+import org.hbase.async.generated.ZooKeeperPB;
 
 /**
  * A fully asynchronous, thread-safe, modern HBase client.
@@ -207,6 +210,16 @@ public final class HBaseClient {
   private static final byte[] INFO = new byte[] { 'i', 'n', 'f', 'o' };
   private static final byte[] REGIONINFO = new byte[] { 'r', 'e', 'g', 'i', 'o', 'n', 'i', 'n', 'f', 'o' };
   private static final byte[] SERVER = new byte[] { 's', 'e', 'r', 'v', 'e', 'r' };
+
+  /**
+   * In HBase 0.95 and up, this magic number is found in a couple places.
+   * It's used in the znode that points to the .META. region, to
+   * indicate that the contents of the znode is a protocol buffer.
+   * It's also used in the value of the KeyValue found in the .META. table
+   * that contain a {@link RegionInfo}, to indicate that the value contents
+   * is a protocol buffer.
+   */
+  static final int PBUF_MAGIC = 1346524486;  // 4 bytes: "PBUF"
 
   /**
    * Timer we use to handle all our timeouts.
@@ -2654,12 +2667,6 @@ public final class HBaseClient {
    */
   private final class ZKClient implements Watcher {
 
-    /**
-     * HBASE-3065 (r1151751) prepends meta-data in ZooKeeper files.
-     * The meta-data always starts with this magic byte.
-     */
-    private static final byte MAGIC = (byte) 0xFF;
-
     /** The specification of the quorum, e.g. "host1,host2,host3"  */
     private final String quorum_spec;
 
@@ -2843,7 +2850,7 @@ public final class HBaseClient {
     }
 
     /** Schedule a timer to retry {@link #getRootRegion} after some time.  */
-    private void retryGetRootRegionLater(final AsyncCallback.DataCallback cb) {
+    private void retryGetRootRegionLater() {
       newTimeout(new TimerTask() {
           public void run(final Timeout timeout) {
             if (!getRootRegion()) {  // Try to read the znodes
@@ -2859,13 +2866,48 @@ public final class HBaseClient {
      */
     final class ZKCallback implements AsyncCallback.DataCallback {
 
-      @SuppressWarnings("fallthrough")
+      /**
+       * HBASE-3065 (r1151751) prepends meta-data in ZooKeeper files.
+       * The meta-data always starts with this magic byte.
+       */
+      private static final byte MAGIC = (byte) 0xFF;
+
+      private static final byte UNKNOWN = 0;  // Callback still pending.
+      private static final byte FOUND = 1;    // We found the znode.
+      private static final byte NOTFOUND = 2; // The znode didn't exist.
+
+      private byte found_root;
+      private byte found_meta;  // HBase 0.95 and up
+
       public void processResult(final int rc, final String path,
                                 final Object ctx, final byte[] data,
                                 final Stat stat) {
+        final boolean is_root;  // True if ROOT znode, false if META znode.
+        if (path.endsWith("/root-region-server")) {
+          is_root = true;
+        } else if (path.endsWith("/meta-region-server")) {
+          is_root = false;
+        } else {
+          LOG.error("WTF? We got a callback from ZooKeeper for a znode we did"
+                    + " not expect: " + path + " / stat: " + stat + " / data: "
+                    + Bytes.pretty(data));
+          retryGetRootRegionLater();
+          return;
+        }
+
         if (rc == Code.NONODE.intValue()) {
-          LOG.error("The znode for the -ROOT- region doesn't exist!");
-          retryGetRootRegionLater(this);
+          final boolean both_znode_failed;
+          if (is_root) {
+            found_root = NOTFOUND;
+            both_znode_failed = found_meta == NOTFOUND;
+          } else {  // META (HBase 0.95 and up)
+            found_meta = NOTFOUND;
+            both_znode_failed = found_root == NOTFOUND;
+          }
+          if (both_znode_failed) {
+            LOG.error("The znode for the -ROOT- region doesn't exist!");
+            retryGetRootRegionLater();
+          }
           return;
         } else if (rc != Code.OK.intValue()) {
           LOG.error("Looks like our ZK session expired or is broken, rc="
@@ -2878,9 +2920,49 @@ public final class HBaseClient {
           LOG.error("The location of the -ROOT- region in ZooKeeper is "
                     + (data == null || data.length == 0 ? "empty"
                        : "too large (" + data.length + " bytes!)"));
-          retryGetRootRegionLater(this);
+          retryGetRootRegionLater();
           return;  // TODO(tsuna): Add a watch to wait until the file changes.
         }
+
+        final RegionClient client;
+        if (is_root) {
+          found_root = FOUND;
+          client = handleRootZnode(data);
+        } else {  // META (HBase 0.95 and up)
+          found_meta = FOUND;
+          client = handleMetaZnode(data);
+        }
+
+        if (client == null) {         // We failed to get a client.
+          retryGetRootRegionLater();  // So retry later.
+          return;
+        }
+
+        final ArrayList<Deferred<Object>> ds = atomicGetAndRemoveWaiters();
+        if (ds != null) {
+          for (final Deferred<Object> d : ds) {
+            d.callback(client);
+          }
+        }
+
+        disconnectZK();
+        // By the time we're done, we may need to find -ROOT- again.  So
+        // check to see if there are people waiting to find it again, and if
+        // there are, re-open a new session with ZK.
+        // TODO(tsuna): This typically happens when the address of -ROOT- in
+        // ZK is stale.  In this case, we should setup a watch to get
+        // notified once the znode gets updated, instead of continuously
+        // polling ZK and creating new sessions.
+        synchronized (ZKClient.this) {
+          if (deferred_rootregion != null) {
+            connectZK();
+          }
+        }
+      }
+
+      /** Returns a new client for the RS found in the root-region-server.  */
+      @SuppressWarnings("fallthrough")
+      private RegionClient handleRootZnode(final byte[] data) {
         // There are 3 cases.  Older versions of HBase encode the location
         // of the root region as "host:port", 0.91 uses "host,port,startcode"
         // and newer versions of 0.91 use "<metadata>host,port,startcode"
@@ -2895,8 +2977,7 @@ public final class HBaseClient {
           if (metadata_length < 1 || metadata_length > 65000) {
             LOG.error("Malformed meta-data in " + Bytes.pretty(data)
                       + ", invalid metadata length=" + metadata_length);
-            retryGetRootRegionLater(this);
-            return;  // TODO(tsuna): Add a watch to wait until the file changes.
+            return null;  // TODO(tsuna): Add a watch to wait until the file changes.
           }
           offset = (short) (1 + 4 + metadata_length);
         } else {
@@ -2920,8 +3001,7 @@ public final class HBaseClient {
         if (firstsep == -1) {
           LOG.error("-ROOT- location doesn't contain a separator"
                     + " (':' or ','): " + Bytes.pretty(data));
-          retryGetRootRegionLater(this);
-          return;  // TODO(tsuna): Add a watch to wait until the file changes.
+          return null;  // TODO(tsuna): Add a watch to wait until the file changes.
         }
         final String host;
         final short portend;  // Index past where the port number ends.
@@ -2944,35 +3024,62 @@ public final class HBaseClient {
         if (ip == null) {
           LOG.error("Couldn't resolve the IP of the -ROOT- region from "
                     + host + " in \"" + Bytes.pretty(data) + '"');
-          retryGetRootRegionLater(this);
-          return;  // TODO(tsuna): Add a watch to wait until the file changes.
+          return null;  // TODO(tsuna): Add a watch to wait until the file changes.
         }
         LOG.info("Connecting to -ROOT- region @ " + ip + ':' + port);
         final RegionClient client = rootregion = newClient(ip, port);
-        final ArrayList<Deferred<Object>> ds = atomicGetAndRemoveWaiters();
-        if (ds != null) {
-          for (final Deferred<Object> d : ds) {
-            d.callback(client);
-          }
-        }
-        disconnectZK();
-        // By the time we're done, we may need to find -ROOT- again.  So
-        // check to see if there are people waiting to find it again, and if
-        // there are, re-open a new session with ZK.
-        // TODO(tsuna): This typically happens when the address of -ROOT- in
-        // ZK is stale.  In this case, we should setup a watch to get
-        // notified once the znode gets updated, instead of continuously
-        // polling ZK and creating new sessions.
-        synchronized (ZKClient.this) {
-          if (deferred_rootregion != null) {
-            connectZK();
-          }
-        }
+        return client;
       }
+
+      /**
+       * Returns a new client for the RS found in the meta-region-server.
+       * This is used in HBase 0.95 and up.
+       */
+      private RegionClient handleMetaZnode(final byte[] data) {
+        if (data[0] != MAGIC) {
+          LOG.error("Malformed META region meta-data in " + Bytes.pretty(data)
+                    + ", invalid leading magic number: " + data[0]);
+          return null;
+        }
+
+        final int metadata_length = Bytes.getInt(data, 1);
+        if (metadata_length < 1 || metadata_length > 65000) {
+          LOG.error("Malformed META region meta-data in " + Bytes.pretty(data)
+                    + ", invalid metadata length=" + metadata_length);
+          return null;  // TODO(tsuna): Add a watch to wait until the file changes.
+        }
+        short offset = (short) (1 + 4 + metadata_length);
+
+        final int pbuf_magic = Bytes.getInt(data, offset);
+        if (pbuf_magic != PBUF_MAGIC) {
+          LOG.error("Malformed META region meta-data in " + Bytes.pretty(data)
+                    + ", invalid magic number=" + pbuf_magic);
+          return null;  // TODO(tsuna): Add a watch to wait until the file changes.
+        }
+        offset += 4;
+
+        final String ip;
+        final int port;
+        try {
+          final ZooKeeperPB.MetaRegionServer meta =
+            ZooKeeperPB.MetaRegionServer.newBuilder()
+            .mergeFrom(data, offset, data.length - offset).build();
+          ip = getIP(meta.getServer().getHostName());
+          port = meta.getServer().getPort();
+        } catch (InvalidProtocolBufferException e) {
+          LOG.error("Failed to parse the protobuf in " + Bytes.pretty(data), e);
+          return null;  // TODO(tsuna): Add a watch to wait until the file changes.
+        }
+
+        LOG.info("Connecting to -META- region @ " + ip + ':' + port);
+        final RegionClient client = rootregion = newClient(ip, port);
+        return client;
+      }
+
     }
 
     /**
-     * Attempts to lookup the ROOT region.
+     * Attempts to lookup the ROOT region (or META, if 0.95 and up).
      * @return true if a lookup was kicked off, false if not because we
      * weren't connected to ZooKeeper.
      */
@@ -2982,6 +3089,7 @@ public final class HBaseClient {
           LOG.debug("Finding the -ROOT- region in ZooKeeper");
           final ZKCallback cb = new ZKCallback();
           zk.getData(base_path + "/root-region-server", this, cb, null);
+          zk.getData(base_path + "/meta-region-server", this, cb, null);
           return true;
         }
       }
