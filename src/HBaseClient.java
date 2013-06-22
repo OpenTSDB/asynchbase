@@ -210,6 +210,12 @@ public final class HBaseClient {
   private static final byte[] INFO = new byte[] { 'i', 'n', 'f', 'o' };
   private static final byte[] REGIONINFO = new byte[] { 'r', 'e', 'g', 'i', 'o', 'n', 'i', 'n', 'f', 'o' };
   private static final byte[] SERVER = new byte[] { 's', 'e', 'r', 'v', 'e', 'r' };
+  /** New for HBase 0.95 and up: the name of META is fixed.  */
+  private static final byte[] META_REGION_NAME =
+    new byte[] { 'h', 'b', 'a', 's', 'e', ':', 'm', 'e', 't', 'a', ',', ',', '1' };
+  /** New for HBase 0.95 and up: the region info for META is fixed.  */
+  private static final RegionInfo META_REGION =
+    new RegionInfo(META, META_REGION_NAME, EMPTY_ARRAY);
 
   /**
    * In HBase 0.95 and up, this magic number is found in a couple places.
@@ -258,8 +264,17 @@ public final class HBaseClient {
    * If this is {@code null} then we currently don't know where the -ROOT-
    * region is and we're waiting for a notification from ZooKeeper to tell
    * us where it is.
+   * Note that with HBase 0.95, {@link #has_root} would be false, and this
+   * would instead point to the .META. region.
    */
   private volatile RegionClient rootregion;
+
+  /**
+   * Whether or not there is a -ROOT- region.
+   * When connecting to HBase 0.95 and up, this would be set to false, so we
+   * would go straight to .META. instead.
+   */
+  volatile boolean has_root = true;
 
   /**
    * Maps {@code (table, start_key)} pairs to the {@link RegionInfo} that
@@ -551,10 +566,12 @@ public final class HBaseClient {
       // because some of those RPCs could be edits that we must wait on.
       final Deferred<Object> d = zkclient.getDeferredRootIfBeingLookedUp();
       if (d != null) {
-        LOG.debug("Flush needs to wait on -ROOT- to come back");
+        LOG.debug("Flush needs to wait on {} to come back",
+                  has_root ? "-ROOT-" : ".META.");
         final class RetryFlush implements Callback<Object, Object> {
           public Object call(final Object arg) {
-            LOG.debug("Flush retrying after -ROOT- came back");
+            LOG.debug("Flush retrying after {} came back",
+                      has_root ? "-ROOT-" : ".META.");
             return flush();
           }
           public String toString() {
@@ -796,10 +813,12 @@ public final class HBaseClient {
     // because some of those RPCs could be edits that we must not lose.
     final Deferred<Object> d = zkclient.getDeferredRootIfBeingLookedUp();
     if (d != null) {
-      LOG.debug("Shutdown needs to wait on -ROOT- to come back");
+      LOG.debug("Shutdown needs to wait on {} to come back",
+                has_root ? "-ROOT-" : ".META.");
       final class RetryShutdown implements Callback<Object, Object> {
         public Object call(final Object arg) {
-          LOG.debug("Shutdown retrying after -ROOT- came back");
+          LOG.debug("Shutdown retrying after {} came back",
+                    has_root ? "-ROOT-" : ".META.");
           return shutdown();
         }
         public String toString() {
@@ -1517,7 +1536,8 @@ public final class HBaseClient {
         handleNSRE(request, region.name(), nsre);
         return d;
       }
-      final RegionClient client = (Bytes.equals(region.table(), ROOT)
+      final RegionClient client = (Bytes.equals(region.table(),
+                                                has_root ? ROOT : META)
                                    ? rootregion : region2client.get(region));
       if (client != null && client.isAlive()) {
         request.setRegion(region);
@@ -1642,12 +1662,18 @@ public final class HBaseClient {
     // First, see if we already know where to look in .META.
     // Except, obviously, we don't wanna search in META for META or ROOT.
     final byte[] meta_key = is_root ? null : createRegionSearchKey(table, key);
-    final RegionInfo meta_region = (is_meta || is_root
-                                    ? null : getRegion(META, meta_key));
+    final RegionInfo meta_region;
+    if (has_root) {
+      meta_region = is_meta || is_root ? null : getRegion(META, meta_key);
+    } else {
+      meta_region = META_REGION;
+    }
 
-    if (meta_region != null) {
+    if (meta_region != null) {  // Always true with HBase 0.95 and up.
       // Lookup in .META. which region server has the region we want.
-      final RegionClient client = region2client.get(meta_region);
+      final RegionClient client = (has_root
+                                   ? region2client.get(meta_region) // Pre 0.95
+                                   : rootregion);                  // Post 0.95
       if (client != null && client.isAlive()) {
         final boolean has_permit = client.acquireMetaLookupPermit();
         if (!has_permit) {
@@ -1997,10 +2023,11 @@ public final class HBaseClient {
   private void invalidateRegionCache(final byte[] region_name,
                                      final boolean mark_as_nsred,
                                      final String reason) {
-    if (region_name == ROOT_REGION) {
+    if ((region_name == META_REGION_NAME && !has_root)  // HBase 0.95+
+        || region_name == ROOT_REGION) {                // HBase <= 0.94
       if (reason != null) {
-        LOG.info("Invalidated cache for -ROOT- as " + rootregion
-                 + ' ' + reason);
+        LOG.info("Invalidated cache for " + (has_root ? "-ROOT-" : ".META.")
+                 + " as " + rootregion + ' ' + reason);
       }
       rootregion = null;
       return;
@@ -2556,7 +2583,8 @@ public final class HBaseClient {
   private void removeClientFromCache(final RegionClient client,
                                      final SocketAddress remote) {
     if (client == rootregion) {
-      LOG.info("Lost connection with the -ROOT- region");
+      LOG.info("Lost connection with the "
+               + (has_root ? "-ROOT-" : ".META.") + " region");
       rootregion = null;
     }
     ArrayList<RegionInfo> regions = client2regions.remove(client);
@@ -2710,7 +2738,8 @@ public final class HBaseClient {
         try {
           connectZK();  // Kick off a connection if needed.
           if (deferred_rootregion == null) {
-            LOG.info("Need to find the -ROOT- region");
+            LOG.info("Need to find the "
+                     + (has_root ? "-ROOT-" : ".META.") + " region");
             deferred_rootregion = new ArrayList<Deferred<Object>>();
           }
           deferred_rootregion.add(d);
@@ -3027,6 +3056,7 @@ public final class HBaseClient {
           return null;  // TODO(tsuna): Add a watch to wait until the file changes.
         }
         LOG.info("Connecting to -ROOT- region @ " + ip + ':' + port);
+        has_root = true;
         final RegionClient client = rootregion = newClient(ip, port);
         return client;
       }
@@ -3071,7 +3101,8 @@ public final class HBaseClient {
           return null;  // TODO(tsuna): Add a watch to wait until the file changes.
         }
 
-        LOG.info("Connecting to -META- region @ " + ip + ':' + port);
+        LOG.info("Connecting to .META. region @ " + ip + ':' + port);
+        has_root = false;
         final RegionClient client = rootregion = newClient(ip, port);
         return client;
       }
@@ -3086,7 +3117,7 @@ public final class HBaseClient {
     private boolean getRootRegion() {
       synchronized (this) {
         if (zk != null) {
-          LOG.debug("Finding the -ROOT- region in ZooKeeper");
+          LOG.debug("Finding the -ROOT- or .META. region in ZooKeeper");
           final ZKCallback cb = new ZKCallback();
           zk.getData(base_path + "/root-region-server", this, cb, null);
           zk.getData(base_path + "/meta-region-server", this, cb, null);
