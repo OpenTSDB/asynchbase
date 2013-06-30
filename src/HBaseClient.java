@@ -2368,7 +2368,7 @@ public final class HBaseClient {
       // We don't use Netty's ClientBootstrap class because it makes it
       // unnecessarily complicated to have control over which ChannelPipeline
       // exactly will be given to the channel.  It's over-designed.
-      final RegionClientPipeline pipeline = new RegionClientPipeline();
+      final RegionClientPipeline pipeline = new RegionClientPipeline(host);
       client = pipeline.init();
       chan = channel_factory.newChannel(pipeline);
       ip2client.put(hostport, client);  // This is guaranteed to return null.
@@ -2398,6 +2398,8 @@ public final class HBaseClient {
    */
   private final class RegionClientPipeline extends DefaultChannelPipeline {
 
+    private String host;
+
     /**
      * Have we already disconnected?.
      * We use this to avoid doing the cleanup work for the same client more
@@ -2408,7 +2410,8 @@ public final class HBaseClient {
      */
     private boolean disconnected = false;
 
-    RegionClientPipeline() {
+    RegionClientPipeline(String host) {
+      this.host = host;
     }
 
     /**
@@ -2417,7 +2420,7 @@ public final class HBaseClient {
      * before it's used as a pipeline for a channel.
      */
     RegionClient init() {
-      final RegionClient client = new RegionClient(HBaseClient.this);
+      final RegionClient client = new RegionClient(HBaseClient.this, host);
       super.addLast("handler", client);
       return client;
     }

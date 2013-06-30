@@ -80,6 +80,11 @@ asynchbase_SOURCES := \
 	src/UnknownRowLockException.java	\
 	src/UnknownScannerException.java	\
 	src/VersionMismatchException.java	\
+	src/SecurityHelper.java	\
+	src/Login.java	\
+	src/Shell.java	\
+	src/KerberosName.java	\
+	src/KerberosUtil.java	\
 	src/jsr166e/LongAdder.java	\
 	src/jsr166e/Striped64.java	\
 
