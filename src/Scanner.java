@@ -1051,7 +1051,7 @@ public final class Scanner {
         for (Map.Entry<String, byte[]> entry: attributes.entrySet()) {
           size += 4; // int: length of the key
           size += entry.getKey().getBytes().length;
-          size += 1; // vint: length of the value
+          size += 3; // int: length of the value
           size += entry.getValue().length;
         }
       }
@@ -1120,10 +1120,10 @@ public final class Scanner {
       buf.writeInt(attributes == null ? 0 : attributes.size());
       if (attributes != null) {
         for (Map.Entry<String, byte[]> entry: attributes.entrySet()) {
+          LOG.debug("attributes: " + entry.getKey() + " " + new String(entry.getValue()));
           buf.writeInt(entry.getKey().getBytes().length);
           buf.writeBytes(entry.getKey().getBytes());
-          buf.writeByte((byte)entry.getValue().length);
-          buf.writeBytes(entry.getValue());
+          writeByteArray(buf, entry.getValue());
         }
       }
 
