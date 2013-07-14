@@ -26,6 +26,7 @@
  */
 package org.hbase.async;
 
+import java.io.IOException;
 import java.net.SocketAddress;
 import java.util.ArrayList;
 import java.util.Collection;
@@ -35,6 +36,8 @@ import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.atomic.AtomicInteger;
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
+
+import com.google.protobuf.CodedOutputStream;
 
 import org.jboss.netty.buffer.ChannelBuffer;
 import org.jboss.netty.buffer.ChannelBuffers;
@@ -56,6 +59,8 @@ import org.slf4j.LoggerFactory;
 
 import com.stumbleupon.async.Callback;
 import com.stumbleupon.async.Deferred;
+
+import org.hbase.async.generated.RPCPB;
 
 /**
  * Stateful handler that manages a connection to a specific RegionServer.
@@ -105,8 +110,16 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
   /** Protocol version we pretend to use for HBase 0.90 and before.  */
   static final byte SERVER_VERSION_090_AND_BEFORE = 24;
 
-  /** We know at least that the server uses 0.92 or above.  */
+  /** We know at that the server runs 0.92 to 0.94.  */
   static final byte SERVER_VERSION_092_OR_ABOVE = 29;
+
+  /**
+   * This is a made-up value for HBase 0.95 and above.
+   * As of 0.95 there is no longer a protocol version, because everything
+   * switched to Protocol Buffers.  Internally we use this made-up value
+   * to refer to the post-protobuf era.
+   */
+  static final byte SERVER_VERSION_095_OR_ABOVE = 95;
 
   /** The HBase client we belong to.  */
   private final HBaseClient hbase_client;
@@ -518,11 +531,7 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
         throw new InvalidResponseException("getProtocolVersion returned a "
           + (v <= 0 ? "negative" : "too large") + " value", version);
       }
-      server_version = (byte) v;
-      // The following line will make this client no longer queue incoming
-      // RPCs, as we're now ready to communicate with the server.
-      RegionClient.this.chan = this.chan;  // Volatile write.
-      sendQueuedRpcs();
+      becomeReady(chan, (byte) v);
       return version;
     }
 
@@ -530,6 +539,14 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
       return "handle getProtocolVersion response on " + chan;
     }
 
+  }
+
+  private void becomeReady(final Channel chan, final byte server_version) {
+    this.server_version = server_version;
+    // The following line will make this client no longer queue incoming
+    // RPCs, as we're now ready to communicate with the server.
+    this.chan = chan;  // Volatile write.
+    sendQueuedRpcs();
   }
 
   private static final byte[] GET_CLOSEST_ROW_BEFORE = new byte[] {
@@ -897,7 +914,12 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
                                final ChannelStateEvent e) {
     final Channel chan = e.getChannel();
     final ChannelBuffer header;
-    if (System.getProperty("org.hbase.async.cdh3b3") != null) {
+    if (!hbase_client.has_root) {
+      header = header095();
+      Channels.write(chan, header);
+      becomeReady(chan, SERVER_VERSION_095_OR_ABOVE);
+      return;
+    } else if (System.getProperty("org.hbase.async.cdh3b3") != null) {
       header = headerCDH3b3();
     } else {
       header = header090();
@@ -1475,8 +1497,17 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
   // Dealing with the handshake at the beginning. //
   // -------------------------------------------- //
 
-  /** Initial part of the header.  */
+  /** Initial part of the header until 0.94.  */
   private final static byte[] HRPC3 = new byte[] { 'h', 'r', 'p', 'c', 3 };
+
+  /** Authentication method (for HBase 0.95 and up). */
+  private final static byte SIMPLE_AUTH = (byte) 0x50;
+
+  /** Initial part of the header for 0.95 and up.  */
+  private final static byte[] HBASE = new byte[] { 'H', 'B', 'a', 's',
+                                                   0,     // RPC version.
+                                                   SIMPLE_AUTH,
+                                                   };
 
   /** Common part of the hello header: magic + version.  */
   private ChannelBuffer commonHeader(final byte[] buf, final byte[] hrpc) {
@@ -1486,11 +1517,38 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
     // Magic header.  See HBaseClient#writeHeader
     // "hrpc" followed by the version.
     // See HBaseServer#HEADER and HBaseServer#CURRENT_VERSION.
-    header.writeBytes(hrpc);  // 4 + 1
+    header.writeBytes(hrpc);  // for 0.94 and earlier: 4 + 1. For 0.95+: 4 + 2
     return header;
   }
 
-  /** Hello header for HBase 0.92 and later.  */
+  /** Hello header for HBase 0.95 and later.  */
+  private ChannelBuffer header095() {
+    final RPCPB.UserInformation user = RPCPB.UserInformation.newBuilder()
+      .setEffectiveUser(System.getProperty("user.name", "asynchbase"))
+      .build();
+    final RPCPB.ConnectionHeader pb = RPCPB.ConnectionHeader.newBuilder()
+      .setUserInfo(user)
+      .setServiceName("ClientService")
+      .build();
+    final int pblen = pb.getSerializedSize();
+    final byte[] buf = new byte[HBASE.length + 4 + pblen];
+    final ChannelBuffer header = commonHeader(buf, HBASE);
+    header.writeInt(pblen);  // 4 bytes
+    try {
+      final CodedOutputStream output =
+        CodedOutputStream.newInstance(buf, HBASE.length + 4, pblen);
+      pb.writeTo(output);
+      output.checkNoSpaceLeft();
+    } catch (IOException e) {
+      throw new RuntimeException("Should never happen", e);
+    }
+    // We wrote to the underlying buffer but Netty didn't see the writes,
+    // so move the write index forward.
+    header.writerIndex(buf.length);
+    return header;
+  }
+
+  /** Hello header for HBase 0.92 to 0.94.  */
   private ChannelBuffer header092() {
     final byte[] buf = new byte[4 + 1 + 4 + 1 + 44];
     final ChannelBuffer header = commonHeader(buf, HRPC3);
