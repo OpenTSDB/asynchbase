@@ -1,6 +1,6 @@
 # Copyright (C) 2011-2012  The Async HBase Authors.  All rights reserved.
 # This file is part of Async HBase.
-#
+# 
 # Redistribution and use in source and binary forms, with or without
 # modification, are permitted provided that the following conditions are met:
 #   - Redistributions of source code must retain the above copyright notice,
@@ -23,20 +23,11 @@
 # ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 # POSSIBILITY OF SUCH DAMAGE.
 
-ASYNCHBASE_THIRD_PARTY_BASE_URL := http://opentsdb.googlecode.com/files
-FETCH_DEPENDENCY := ./build-aux/fetchdep.sh "$$@"
-THIRD_PARTY =
+PROTOBUF_VERSION := 2.5.0
+PROTOBUF := third_party/protobuf/protobuf-java-$(PROTOBUF_VERSION).jar
+PROTOBUF_BASE_URL := http://search.maven.org/remotecontent?filepath=com/google/protobuf/protobuf-java/$(PROTOBUF_VERSION)
 
-include third_party/guava/include.mk
-include third_party/hamcrest/include.mk
-include third_party/javassist/include.mk
-include third_party/junit/include.mk
-include third_party/logback/include.mk
-include third_party/mockito/include.mk
-include third_party/netty/include.mk
-include third_party/objenesis/include.mk
-include third_party/powermock/include.mk
-include third_party/protobuf/include.mk
-include third_party/slf4j/include.mk
-include third_party/suasync/include.mk
-include third_party/zookeeper/include.mk
+$(PROTOBUF): $(PROTOBUF).md5
+	set dummy "$(PROTOBUF_BASE_URL)" "$(PROTOBUF)"; shift; $(FETCH_DEPENDENCY)
+
+THIRD_PARTY += $(PROTOBUF)

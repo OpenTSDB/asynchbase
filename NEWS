@@ -3,6 +3,9 @@ This project uses Semantic Versioning (see http://semver.org/).
 
 * Version 1.5.0 (2013-??-??) [???????]
 
+This release introduces compatibility with HBase 0.95 and up, and adds
+a dependency on Google's protobuf-java library.
+
 New public APIs:
   - Scanners can now use a variety of different filters via the new
     `ScanFilter' interfaces and its various implementations.

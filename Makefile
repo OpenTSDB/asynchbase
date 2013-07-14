@@ -33,11 +33,31 @@ PACKAGE_BUGREPORT := opentsdb@googlegroups.com
 
 top_builddir := build
 package := org.hbase.async
+proto_package := $(package).protobuf.generated
+proto_generated_builddir := $(top_builddir)/src
+proto_builddir := $(top_builddir)/protobuf
 spec_title := Asynchronous HBase Client
 spec_vendor := The Async HBase Authors
 # Semantic Versioning (see http://semver.org/).
 spec_version := 1.5.0-SNAPSHOT
 jar := $(top_builddir)/asynchbase-$(spec_version).jar
+
+asynchbase_PROTOS := \
+	protobuf/Cell.proto	\
+	protobuf/Client.proto	\
+	protobuf/Comparator.proto	\
+	protobuf/ErrorHandling.proto	\
+	protobuf/Filter.proto	\
+	protobuf/MultiRowMutation.proto	\
+	protobuf/RPC.proto	\
+	protobuf/Tracing.proto	\
+	protobuf/ZooKeeper.proto	\
+	protobuf/HBase.proto	\
+
+PROTOBUF_GEN_DIR = $(top_builddir)/src/org/hbase/async/generated
+
+BUILT_SOURCES := $(asynchbase_PROTOS:protobuf/%.proto=$(PROTOBUF_GEN_DIR)/%PB.java)
+
 asynchbase_SOURCES := \
 	src/AtomicIncrementRequest.java	\
 	src/BatchableRpc.java	\
@@ -89,6 +109,7 @@ asynchbase_LIBADD := \
 	$(ZOOKEEPER)	\
 	$(SUASYNC)	\
 	$(GUAVA)	\
+	$(PROTOBUF)	\
 
 test_SOURCES := \
 	test/Common.java	\
@@ -116,18 +137,23 @@ test_LIBADD := \
 package_dir := $(subst .,/,$(package))
 AM_JAVACFLAGS := -Xlint
 JVM_ARGS :=
-classes := $(asynchbase_SOURCES:src/%.java=$(top_builddir)/$(package_dir)/%.class)
+classes := $(asynchbase_SOURCES:src/%.java=$(top_builddir)/$(package_dir)/%.class) \
+ $(asynchbase_PROTOS:protobuf/%.proto=$(top_builddir)/$(package_dir)/generated/%PB.class)
 test_classes := $(test_SOURCES:test/%.java=$(top_builddir)/$(package_dir)/test/%.class)
 UNITTESTS := $(unittest_SRC:test/%.java=$(top_builddir)/$(package_dir)/%.class)
 
 jar: $(jar)
 
 get_dep_classpath = `echo $(asynchbase_LIBADD) | tr ' ' ':'`
-$(top_builddir)/.javac-stamp: $(asynchbase_SOURCES) $(asynchbase_LIBADD)
+$(top_builddir)/.javac-stamp: $(BUILT_SOURCES) $(asynchbase_SOURCES) $(asynchbase_LIBADD)
 	@mkdir -p $(top_builddir)
 	javac $(AM_JAVACFLAGS) -cp $(get_dep_classpath) \
-	  -d $(top_builddir) $(asynchbase_SOURCES)
+	  -d $(top_builddir) $(asynchbase_SOURCES) $(BUILT_SOURCES)
 	@touch "$@"
+
+$(PROTOBUF_GEN_DIR)/%PB.java: protobuf/%.proto
+	@mkdir -p $(proto_generated_builddir)
+	protoc -Iprotobuf --java_out=$(proto_generated_builddir) $<
 
 get_runtime_dep_classpath = `echo $(test_LIBADD) | tr ' ' ':'`
 $(test_classes): $(jar) $(test_SOURCES) $(test_LIBADD)
