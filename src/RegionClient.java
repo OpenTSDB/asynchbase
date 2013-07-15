@@ -1100,7 +1100,40 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
       // buffer without this extra space at the beginning, we're going to
       // corrupt the RPC at this point.
       final byte[] method = rpc.method();
-      if (server_version >= SERVER_VERSION_092_OR_ABOVE) {
+      if (server_version >= SERVER_VERSION_095_OR_ABOVE) {
+        final RPCPB.RequestHeader header = RPCPB.RequestHeader.newBuilder()
+          .setCallId(rpcid)                   // 1 + 1-to-5 bytes (vint)
+          .setMethodName(new String(method))  // 1 + 1 + N bytes
+          .setRequestParam(true)              // 1 + 1 bytes
+          .build();
+        final int pblen = header.getSerializedSize();
+        // In HBaseRpc.newBuffer() we reserved 19 bytes for the RPC header
+        // (without counting the leading 4 bytes for the overall size).
+        // Here the size is variable due to the nature of the protobuf
+        // encoding, but the expected absolute maximum size is 17 bytes
+        // if we ignore the method name.  So we have to offset the header
+        // by 2 to 13 bytes typically.  Note that the "-1" is for the varint
+        // that's at the beginning of the header that indicates how long the
+        // header itself is.
+        final int offset = 19 + method.length - pblen - 1;
+        assert offset >= 0 : ("RPC header too big (" + pblen + " bytes): "
+                              + header);
+        // Skip the few extraneous bytes we over-allocated for the header.
+        payload.readerIndex(offset);
+        // The first int is the size of the message, excluding the 4 bytes
+        // needed for the size itself, hence the `-4'.
+        payload.setInt(offset, payload.readableBytes() - 4); // 4 bytes
+        try {
+          final CodedOutputStream output =
+            CodedOutputStream.newInstance(payload.array(), 4 + offset,
+                                          1 + pblen);
+          output.writeRawByte(pblen);  // varint but always on 1 byte here.
+          header.writeTo(output);
+          output.checkNoSpaceLeft();
+        } catch (IOException e) {
+          throw new RuntimeException("Should never happen", e);
+        }
+      } else if (server_version >= SERVER_VERSION_092_OR_ABOVE) {
         // The first int is the size of the message, excluding the 4 bytes
         // needed for the size itself, hence the `-4'.
         payload.setInt(0, payload.readableBytes() - 4); // 4 bytes

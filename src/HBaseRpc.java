@@ -629,7 +629,7 @@ public abstract class HBaseRpc {
   final ChannelBuffer newBuffer(final byte server_version,
                                 final int max_payload_size) {
     // Add extra bytes for the RPC header:
-    //   4 bytes: Payload size.
+    //   4 bytes: Payload size (always present, even in HBase 0.95+).
     //   4 bytes: RPC ID.
     //   2 bytes: Length of the method name.
     //   N bytes: The method name.
@@ -640,6 +640,19 @@ public abstract class HBaseRpc {
       //   4 bytes: Method fingerprint.
       + (server_version < RegionClient.SERVER_VERSION_092_OR_ABOVE ? 0
          : 1 + 8 + 4);
+    // Note: with HBase 0.95 and up, the size of the protobuf header varies.
+    // It is currently made of (see RequestHeader in RPC.proto):
+    //   - uint32 callId: varint 1 to 5 bytes
+    //   - RPCTInfo traceInfo: two uint64 varint so 4 to 20 bytes.
+    //   - string methodName: varint length (1 byte) and method name.
+    //   - bool requestParam: 1 byte
+    //   - CellBlockMeta cellBlockMeta: one uint32 varint so 2 to 6 bytes.
+    // Additionally each field costs an extra 1 byte, and there is a varint
+    // prior to the header for the size of the header.  We don't set traceInfo
+    // right now so that leaves us with 4 fields for a total maximum size of
+    // 1 varint + 4 fields + 5 + 1 + N + 1 + 6 = 18 bytes max + method name.
+    // Since for HBase 0.92 we reserve 19 bytes, we're good, we over-allocate
+    // at most 1 bytes.  So the logic above doesn't need to change for 0.95+.
     final ChannelBuffer buf = ChannelBuffers.buffer(header + max_payload_size);
     buf.setIndex(0, header);  // Advance the writerIndex past the header.
     return buf;
