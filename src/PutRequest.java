@@ -330,7 +330,7 @@ public final class PutRequest extends BatchableRpc
   private PutRequest(final byte[] table,
                      final KeyValue kv,
                      final long lockid) {
-    super(PUT, table, kv.key(), kv.family(), kv.timestamp(), lockid);
+    super(table, kv.key(), kv.family(), kv.timestamp(), lockid);
     this.qualifiers = new byte[][] { kv.qualifier() };
     this.values = new byte[][] { kv.value() };
   }
@@ -355,7 +355,7 @@ public final class PutRequest extends BatchableRpc
                      final byte[][] values,
                      final long timestamp,
                      final long lockid) {
-    super(PUT, table, key, family, timestamp, lockid);
+    super(table, key, family, timestamp, lockid);
     KeyValue.checkFamily(family);
     if (qualifiers.length != values.length) {
       throw new IllegalArgumentException("Have " + qualifiers.length
@@ -369,6 +369,11 @@ public final class PutRequest extends BatchableRpc
     }
     this.qualifiers = qualifiers;
     this.values = values;
+  }
+
+  @Override
+  byte[] method(final byte unused_server_version) {
+    return PUT;
   }
 
   @Override

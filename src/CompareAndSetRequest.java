@@ -59,10 +59,15 @@ final class CompareAndSetRequest extends HBaseRpc
    */
   public CompareAndSetRequest(final PutRequest put,
                               final byte[] expected) {
-    super(CHECKANDPUT, put.table(), put.key());
+    super(put.table(), put.key());
     KeyValue.checkValue(expected);
     this.put = put;
     this.expected = expected;
+  }
+
+  @Override
+  byte[] method(final byte unused_server_version) {
+    return CHECKANDPUT;
   }
 
   @Override

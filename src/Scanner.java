@@ -990,7 +990,12 @@ public final class Scanner {
   private final class OpenScannerRequest extends HBaseRpc {
 
     public OpenScannerRequest() {
-      super(OPEN_SCANNER, Scanner.this.table, start_key);
+      super(Scanner.this.table, start_key);
+    }
+
+    @Override
+    byte[] method(final byte unused_server_version) {
+      return OPEN_SCANNER;
     }
 
     /**
@@ -1126,8 +1131,9 @@ public final class Scanner {
    */
   private final class GetNextRowsRequest extends HBaseRpc {
 
-    public GetNextRowsRequest() {
-      super(NEXT);  // "next"...  Great method name!
+    @Override
+    byte[] method(final byte unused_server_version) {
+      return NEXT;  // "next"...  Great method name!
     }
 
     /** Serializes this request.  */
@@ -1159,8 +1165,12 @@ public final class Scanner {
     private final long scanner_id;
 
     public CloseScannerRequest(final long scanner_id) {
-      super(CLOSE);  // "close"...  Great method name!
       this.scanner_id = scanner_id;
+    }
+
+    @Override
+    byte[] method(final byte unused_server_version) {
+      return CLOSE;  // "close"...  Great method name!
     }
 
     /** Serializes this request.  */

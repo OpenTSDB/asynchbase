@@ -473,8 +473,9 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
 
   private final static class GetProtocolVersionRequest extends HBaseRpc {
 
-    GetProtocolVersionRequest() {
-      super(GET_PROTOCOL_VERSION);
+    @Override
+    byte[] method(final byte unused_server_version) {
+      return GET_PROTOCOL_VERSION;
     }
 
     ChannelBuffer serialize(final byte server_version) {
@@ -611,7 +612,12 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
                                                       final byte[] family) {
     final class GetClosestRowBefore extends HBaseRpc {
       GetClosestRowBefore() {
-        super(GET_CLOSEST_ROW_BEFORE, tabl, row);
+        super(tabl, row);
+      }
+
+      @Override
+      byte[] method(final byte unused_server_version) {
+        return GET_CLOSEST_ROW_BEFORE;
       }
 
       @Override
@@ -678,7 +684,7 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
 
     synchronized (this) {
       if (batched_rpcs == null) {
-        batched_rpcs = new MultiAction(server_version);
+        batched_rpcs = new MultiAction();
         addMultiActionCallbacks(batched_rpcs);
         schedule_flush = true;
       }
@@ -691,7 +697,7 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
       } else {
         // Execute the edits buffered so far.  But first we must clear
         // the reference to the buffer we're about to send to HBase.
-        batched_rpcs = new MultiAction(server_version);
+        batched_rpcs = new MultiAction();
         addMultiActionCallbacks(batched_rpcs);
       }
     }
@@ -1099,7 +1105,7 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
       // automatically by HBaseRpc#newBuffer.  If someone creates their own
       // buffer without this extra space at the beginning, we're going to
       // corrupt the RPC at this point.
-      final byte[] method = rpc.method();
+      final byte[] method = rpc.method(server_version);
       if (server_version >= SERVER_VERSION_095_OR_ABOVE) {
         final RPCPB.RequestHeader header = RPCPB.RequestHeader.newBuilder()
           .setCallId(rpcid)                   // 1 + 1-to-5 bytes (vint)

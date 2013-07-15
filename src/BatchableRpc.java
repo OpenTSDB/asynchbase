@@ -68,7 +68,6 @@ abstract class BatchableRpc extends HBaseRpc
 
   /**
    * Package private constructor.
-   * @param method The name of the method to invoke on the RegionServer.
    * @param table The name of the table this RPC is for.
    * @param row The name of the row this RPC is for.
    * @param family The column family to edit in that table.  Subclass must
@@ -76,10 +75,10 @@ abstract class BatchableRpc extends HBaseRpc
    * @param timestamp The timestamp to use for {@link KeyValue}s of this RPC.
    * @param lockid Explicit row lock to use, or {@link RowLock#NO_LOCK}.
    */
-  BatchableRpc(final byte[] method, final byte[] table,
+  BatchableRpc(final byte[] table,
                final byte[] key, final byte[] family,
                final long timestamp, final long lockid) {
-    super(method, table, key);
+    super(table, key);
     this.family = family;
     this.timestamp = timestamp;
     this.lockid = lockid;

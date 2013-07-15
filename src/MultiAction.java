@@ -81,11 +81,9 @@ final class MultiAction extends HBaseRpc implements HBaseRpc.IsEdit {
    */
   private final ArrayList<BatchableRpc> batch = new ArrayList<BatchableRpc>();
 
-  /**
-   * Constructor.
-   */
-  public MultiAction(final byte server_version) {
-    super(server_version >= USE_MULTI ? MULTI : MULTI_PUT);
+  @Override
+  byte[] method(final byte server_version) {
+    return server_version >= USE_MULTI ? MULTI : MULTI_PUT;
   }
 
   /** Returns the number of RPCs in this batch.  */
@@ -130,7 +128,7 @@ final class MultiAction extends HBaseRpc implements HBaseRpc.IsEdit {
     size += 4;  // int:  How many regions do we want to affect?
 
     // Are we serializing a `multi' RPC, or `multiPut'?
-    final boolean use_multi = method() == MULTI;
+    final boolean use_multi = method(server_version) == MULTI;
 
     BatchableRpc prev = PutRequest.EMPTY_PUT;
     for (final BatchableRpc rpc : batch) {
@@ -210,7 +208,7 @@ final class MultiAction extends HBaseRpc implements HBaseRpc.IsEdit {
     buf.writeInt(1);  // Number of parameters.
 
     // Are we serializing a `multi' RPC, or `multiPut'?
-    final boolean use_multi = method() == MULTI;
+    final boolean use_multi = method(server_version) == MULTI;
 
     {  // 1st and only param.
       final int code = use_multi ? 66 : 57;  // `MultiAction' or `MultiPut'.
@@ -374,7 +372,7 @@ final class MultiAction extends HBaseRpc implements HBaseRpc.IsEdit {
     buf.setInt(nkeys_index, nkeys);
 
     // Monkey-patch the number of regions affected by this RPC.
-    int header_length = 4 + 4 + 2 + method().length;
+    int header_length = 4 + 4 + 2 + method(server_version).length;
     if (server_version >= RegionClient.SERVER_VERSION_092_OR_ABOVE) {
       header_length += 1 + 8 + 4;
     }

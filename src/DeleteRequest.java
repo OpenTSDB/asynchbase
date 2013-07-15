@@ -383,7 +383,7 @@ public final class DeleteRequest extends BatchableRpc
                         final byte[][] qualifiers,
                         final long timestamp,
                         final long lockid) {
-    super(DELETE, table, key, family == null ? WHOLE_ROW : family, timestamp, lockid);
+    super(table, key, family == null ? WHOLE_ROW : family, timestamp, lockid);
     if (family != null) {
       KeyValue.checkFamily(family);
     }
@@ -404,6 +404,11 @@ public final class DeleteRequest extends BatchableRpc
       // if `family == null', we'll delete the whole row anyway.
       this.qualifiers = DELETE_FAMILY_MARKER;
     }
+  }
+
+  @Override
+  byte[] method(final byte unused_server_version) {
+    return DELETE;
   }
 
   @Override

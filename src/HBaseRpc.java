@@ -309,12 +309,6 @@ public abstract class HBaseRpc {
   abstract ChannelBuffer serialize(byte server_version);
 
   /**
-   * Name of the method to invoke on the server side.
-   * This is the name of a method of {@code HRegionInterface}.
-   */
-  private final byte[] method;
-
-  /**
    * The Deferred that will be invoked when this RPC completes or fails.
    * In case of a successful completion, this Deferred's first callback
    * will be invoked with an {@link Object} containing the de-serialized
@@ -397,24 +391,20 @@ public abstract class HBaseRpc {
 
   /**
    * Package private constructor for RPCs that aren't for any region.
-   * @param method The name of the method to invoke on the RegionServer.
    */
-  HBaseRpc(final byte[] method) {
-    this.method = method;
+  HBaseRpc() {
     table = null;
     key = null;
   }
 
   /**
    * Package private constructor for RPCs that are for a region.
-   * @param method The name of the method to invoke on the RegionServer.
    * @param table The name of the table this RPC is for.
    * @param row The name of the row this RPC is for.
    */
-  HBaseRpc(final byte[] method, final byte[] table, final byte[] key) {
+  HBaseRpc(final byte[] table, final byte[] key) {
     KeyValue.checkTable(table);
     KeyValue.checkKey(key);
-    this.method = method;
     this.table = table;
     this.key = key;
   }
@@ -423,10 +413,11 @@ public abstract class HBaseRpc {
   // Package private stuff. //
   // ---------------------- //
 
-  /** Package private way of getting the name of the RPC method.  */
-  final byte[] method() {
-    return method;
-  }
+  /**
+   * Package private way of getting the name of the RPC method.
+   * @param server_version What RPC protocol version the server is running.
+   */
+  abstract byte[] method(byte server_version);
 
   /**
    * Sets the region this RPC is going to.
@@ -485,13 +476,14 @@ public abstract class HBaseRpc {
 
   public String toString() {
     // Try to rightsize the buffer.
-    final StringBuilder buf = new StringBuilder(16 + method.length + 2
+    final String method = new String(this.method((byte) 0));
+    final StringBuilder buf = new StringBuilder(16 + method.length() + 2
       + 8 + (table == null ? 4 : table.length + 2)  // Assumption: ASCII => +2
       + 6 + (key == null ? 4 : key.length * 2)      // Assumption: binary => *2
       + 9 + (region == null ? 4 : region.stringSizeHint())
       + 10 + 1 + 1);
     buf.append("HBaseRpc(method=");
-    Bytes.pretty(buf, method);
+    buf.append(method);
     buf.append(", table=");
     Bytes.pretty(buf, table);
     buf.append(", key=");
@@ -633,7 +625,7 @@ public abstract class HBaseRpc {
     //   4 bytes: RPC ID.
     //   2 bytes: Length of the method name.
     //   N bytes: The method name.
-    final int header = 4 + 4 + 2 + method.length
+    final int header = 4 + 4 + 2 + method(server_version).length
       // Add extra bytes for the RPC header used in HBase 0.92 and above:
       //   1 byte:  RPC header version.
       //   8 bytes: Client version.  Yeah, 8 bytes, WTF seriously.

@@ -51,8 +51,15 @@ public final class GetRequest extends HBaseRpc
 
   /**
    * How many versions of each cell to retrieve.
+   * The least significant bit is used as a flag to indicate when
+   * this Get request is in fact an Exist request (i.e. like Get
+   * except that instead of returning a result the RPC returns a
+   * boolean indicating whether the row exists or not).
    */
-  private int versions = 1;
+  private int versions = 1 << 1;
+
+  /** When set in the `versions' field, this is an Exist RPC. */
+  private static final int EXIST_FLAG = 0x1;
 
   /**
    * Constructor.
@@ -61,7 +68,7 @@ public final class GetRequest extends HBaseRpc
    * @param key The row key to get in that table.
    */
   public GetRequest(final byte[] table, final byte[] key) {
-    super(GET, table, key);
+    super(table, key);
   }
 
   /**
@@ -92,7 +99,8 @@ public final class GetRequest extends HBaseRpc
   private GetRequest(final float unused,
                      final byte[] table,
                      final byte[] key) {
-    super(EXISTS, table, key);
+    super(table, key);
+    this.versions |= EXIST_FLAG;
   }
 
   /**
@@ -119,6 +127,11 @@ public final class GetRequest extends HBaseRpc
     final GetRequest rpc = new GetRequest(0F, table, key);
     rpc.family(family);
     return rpc;
+  }
+
+  /** Returns true if this is actually an "Get" RPC. */
+  private boolean isGetRequest() {
+    return (versions & EXIST_FLAG) == 0;
   }
 
   /**
@@ -198,7 +211,7 @@ public final class GetRequest extends HBaseRpc
       throw new IllegalArgumentException("Need a strictly positive number: "
                                          + versions);
     }
-    this.versions = versions;
+    this.versions = (versions << 1) | (this.versions & EXIST_FLAG);
     return this;
   }
 
@@ -208,7 +221,12 @@ public final class GetRequest extends HBaseRpc
    * @since 1.4
    */
   public int maxVersions() {
-    return versions;
+    return versions >>> 1;
+  }
+
+  @Override
+  byte[] method(final byte unused_server_version) {
+    return isGetRequest() ? GET : EXISTS;
   }
 
   @Override
@@ -232,7 +250,7 @@ public final class GetRequest extends HBaseRpc
   }
 
   public String toString() {
-    final String klass = method() == GET ? "GetRequest" : "Exists";
+    final String klass = isGetRequest() ? "GetRequest" : "Exists";
     return super.toStringWithQualifiers(klass, family, qualifiers);
   }
 
@@ -302,7 +320,7 @@ public final class GetRequest extends HBaseRpc
     buf.writeByte(1);    // Get#GET_VERSION.  Undocumented versioning of Get.
     writeByteArray(buf, key);
     buf.writeLong(lockid);  // Lock ID.
-    buf.writeInt(versions); // Max number of versions to return.
+    buf.writeInt(maxVersions()); // Max number of versions to return.
     buf.writeByte(0x00); // boolean (false): whether or not to use a filter.
     // If the previous boolean was true:
     //   writeByteArray(buf, filter name as byte array);

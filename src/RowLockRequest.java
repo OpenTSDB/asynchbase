@@ -53,7 +53,7 @@ public final class RowLockRequest extends HBaseRpc
    * @param key The key of the row to lock in that table.
    */
   public RowLockRequest(final byte[] table, final byte[] key) {
-    super(LOCK_ROW, table, key);
+    super(table, key);
   }
 
   /**
@@ -63,6 +63,11 @@ public final class RowLockRequest extends HBaseRpc
    */
   public RowLockRequest(final String table, final String key) {
     this(table.getBytes(), key.getBytes());
+  }
+
+  @Override
+  byte[] method(final byte unused_server_version) {
+    return LOCK_ROW;
   }
 
   @Override
@@ -120,12 +125,17 @@ public final class RowLockRequest extends HBaseRpc
      * @param region The region corresponding to {@code lock.region()}.
      */
     ReleaseRequest(final RowLock lock, final RegionInfo region) {
-      super(UNLOCK_ROW, region.table(),
+      super(region.table(),
             // This isn't actually the key we locked, but it doesn't matter
             // as this information is useless for this RPC, we simply supply
             // a key to the parent constructor to make it happy.
             region.stopKey());
       this.lock = lock;
+    }
+
+    @Override
+    byte[] method(final byte unused_server_version) {
+      return UNLOCK_ROW;
     }
 
     ChannelBuffer serialize(final byte server_version) {
