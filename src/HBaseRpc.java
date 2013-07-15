@@ -295,7 +295,7 @@ public abstract class HBaseRpc {
   /**
    * To be implemented by the concrete sub-type.
    * This method is expected to instantiate a {@link ChannelBuffer} using
-   * either {@link #newBuffer} or {@link #newDynamicBuffer} and return it
+   * either {@link #newBuffer} and return it
    * properly populated so it's ready to be written out to the wire (except
    * for the "RPC header" that contains the RPC ID and method name and such,
    * which is going to be populated automatically just before sending the RPC
@@ -625,9 +625,6 @@ public abstract class HBaseRpc {
    * The approximation must be an upper bound on the expected size of the
    * payload as trying to store more than {@code max_payload_size} bytes in
    * the buffer returned will cause an {@link ArrayIndexOutOfBoundsException}.
-   * <p>
-   * When no reasonable upper bound on the payload size can be easily
-   * estimated ahead of time, you can use {@link #newDynamicBuffer} instead.
    */
   final ChannelBuffer newBuffer(final byte server_version,
                                 final int max_payload_size) {
@@ -644,32 +641,6 @@ public abstract class HBaseRpc {
       + (server_version < RegionClient.SERVER_VERSION_092_OR_ABOVE ? 0
          : 1 + 8 + 4);
     final ChannelBuffer buf = ChannelBuffers.buffer(header + max_payload_size);
-    buf.setIndex(0, header);  // Advance the writerIndex past the header.
-    return buf;
-  }
-
-  /**
-   * Creates a new dynamic-length buffer on the heap.
-   * @param server_version What RPC protocol version the server is running.
-   * @param max_payload_size A good approximation of the size of the payload.
-   * The approximation should be an upper bound on the expected size of the
-   * payload.  Trying to store more than {@code max_payload_size} bytes in
-   * this buffer will be automatically resized, which involves doubling the
-   * size of the buffer (or more) and copying the contents of the old buffer
-   * to the new one.
-   * <p>
-   * Whenever possible, {@link #newBuffer} should be used instead.  In a
-   * benchmark I did, writing to a dynamic-length buffer was about 16% slower
-   * and that's without ever re-sizing the buffer!
-   */
-  final ChannelBuffer newDynamicBuffer(final byte server_version,
-                                       final int max_payload_size) {
-    // See the comment in newBuffer above.
-    final int header = 4 + 4 + 2 + method.length
-      + (server_version < RegionClient.SERVER_VERSION_092_OR_ABOVE ? 0
-         : 1 + 8 + 4);
-    final ChannelBuffer buf = ChannelBuffers.dynamicBuffer(header
-                                                           + max_payload_size);
     buf.setIndex(0, header);  // Advance the writerIndex past the header.
     return buf;
   }
