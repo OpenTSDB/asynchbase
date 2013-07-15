@@ -38,6 +38,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
 
 import com.google.protobuf.CodedOutputStream;
+import com.google.protobuf.InvalidProtocolBufferException;
 
 import org.jboss.netty.buffer.ChannelBuffer;
 import org.jboss.netty.buffer.ChannelBuffers;
@@ -1211,18 +1212,38 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
                           final Channel chan,
                           final ChannelBuffer buf,
                           final VoidEnum unused) {
-    final int rdx = buf.readerIndex();
     final long start = System.nanoTime();
+    final int rdx = buf.readerIndex();
     LOG.debug("------------------>> ENTERING DECODE >>------------------");
-    final int rpcid = buf.readInt();
-    final Object decoded = deserialize(buf, rpcid);
-    final HBaseRpc rpc = rpcs_inflight.remove(rpcid);
-    if (LOG.isDebugEnabled()) {
-      LOG.debug("rpcid=" + rpcid
-                + ", response size=" + (buf.readerIndex() - rdx) + " bytes"
-                + ", " + actualReadableBytes() + " readable bytes left"
-                + ", rpc=" + rpc);
+    final int rpcid;
+    final RPCPB.ResponseHeader header;
+    if (server_version >= SERVER_VERSION_095_OR_ABOVE) {
+      final int size = buf.readInt();
+      HBaseRpc.checkArrayLength(buf, size);
+      final int header_length = HBaseRpc.readProtoBufVarint(buf);
+      HBaseRpc.checkArrayLength(buf, header_length);
+      final byte[] header_bytes = new byte[header_length];
+      // TODO XXX: avoid the buffer copy here.
+      buf.readBytes(header_bytes);
+      try {
+        header = RPCPB.ResponseHeader.parseFrom(header_bytes);
+      } catch (InvalidProtocolBufferException e) {
+        final String msg = "Invalid RPC response header: size=" + size
+          + ", header_length=" + header_length + ", buf=" + Bytes.pretty(buf);
+        throw new NonRecoverableException(msg, e);
+      }
+      if (!header.hasCallId()) {
+        final String msg = "RPC response (size: " + size + ") doesn't"
+          + " have a call ID: " + header + ", buf=" + Bytes.pretty(buf);
+        throw new NonRecoverableException(msg);
+      }
+      rpcid = header.getCallId();
+    } else {  // HBase 0.94 and before.
+      header = null;  // No protobuf back then.
+      rpcid = buf.readInt();
     }
+
+    final HBaseRpc rpc = rpcs_inflight.get(rpcid);
 
     if (rpc == null) {
       final String msg = "Invalid rpcid: " + rpcid + " found in "
@@ -1236,8 +1257,33 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
       // exception handler where we'll close this channel, which will cause
       // all RPCs in flight to be failed.
       throw new NonRecoverableException(msg);
-    } else if (decoded instanceof NotServingRegionException
-               && rpc.getRegion() != null) {
+    }
+
+    final Object decoded;
+    if (server_version >= SERVER_VERSION_095_OR_ABOVE) {
+      if (header.hasException()) {
+        decoded = decodeException(rpc, header.getException());
+      } else {
+        decoded = rpc.deserialize(buf);
+      }
+    } else {  // HBase 0.94 and before.
+      decoded = deserialize(buf, rpc);
+    }
+
+    if (LOG.isDebugEnabled()) {
+      LOG.debug("rpcid=" + rpcid
+                + ", response size=" + (buf.readerIndex() - rdx) + " bytes"
+                + ", " + actualReadableBytes() + " readable bytes left"
+                + ", rpc=" + rpc);
+    }
+
+    {
+      final HBaseRpc removed = rpcs_inflight.remove(rpcid);
+      assert rpc == removed;
+    }
+
+    if (decoded instanceof NotServingRegionException
+        && rpc.getRegion() != null) {
       // We only handle NSREs for RPCs targeted at a specific region, because
       // if we don't know which region caused the NSRE (e.g. during multiPut)
       // we can't do anything about it.
@@ -1262,12 +1308,11 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
   /**
    * De-serializes an RPC response.
    * @param buf The buffer from which to de-serialize the response.
-   * @param rpcid The ID of the RPC for which we're de-serializing the
-   * response.
+   * @param rpc The RPC for which we're de-serializing the response.
    * @return The de-serialized RPC response (which can be {@code null}
    * or an exception).
    */
-  private Object deserialize(final ChannelBuffer buf, final int rpcid) {
+  private Object deserialize(final ChannelBuffer buf, final HBaseRpc rpc) {
     // The 1st byte of the payload contains flags:
     //   0x00  Old style success (prior 0.92).
     //   0x01  RPC failed with an exception.
@@ -1292,7 +1337,6 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
       }
     }
 
-    final HBaseRpc rpc = rpcs_inflight.get(rpcid);
     if ((flags & HBaseRpc.RPC_ERROR) != 0) {
       return deserializeException(buf, rpc);
     }
@@ -1304,7 +1348,7 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
   }
 
   /**
-   * De-serializes an exception.
+   * De-serializes an exception from HBase 0.94 and before.
    * @param buf The buffer to read from.
    * @param request The RPC that caused this exception.
    */
@@ -1315,12 +1359,46 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
     // exception, the 2nd is the message and stack trace.
     final String type = HBaseRpc.readHadoopString(buf);
     final String msg = HBaseRpc.readHadoopString(buf);
+    return makeException(request, type, msg);
+  }
+
+  /**
+   * Creates an appropriate {@link HBaseException} for the given type.
+   * When we de-serialize an exception from the wire, we're given a string as
+   * a class name, which we use here to map to an appropriate subclass of
+   * {@link HBaseException}, for which we create an instance that we return.
+   * @param request The RPC in response of which the exception was received.
+   * @param type The fully qualified class name of the exception type from
+   * HBase's own code.
+   * @param msg Some arbitrary additional string that accompanies the
+   * exception, typically carrying a stringified stack trace.
+   */
+  private static final HBaseException makeException(final HBaseRpc request,
+                                                    final String type,
+                                                    final String msg) {
     final HBaseException exc = REMOTE_EXCEPTION_TYPES.get(type);
     if (exc != null) {
       return exc.make(msg, request);
     } else {
       return new RemoteException(type, msg);
     }
+  }
+
+  /**
+   * Decodes an exception from HBase 0.95 and up.
+   * @param e the exception protobuf obtained from the RPC response header
+   * containing the exception.
+   */
+  private
+    static HBaseException decodeException(final HBaseRpc request,
+                                          final RPCPB.ExceptionResponse e) {
+    final String type;
+    if (e.hasExceptionClassName()) {
+      type = e.getExceptionClassName();
+    } else {
+      type = "(missing exception type)";  // Shouldn't happen.
+    }
+    return makeException(request, type, e.getStackTrace());
   }
 
   /**

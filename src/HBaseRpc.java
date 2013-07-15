@@ -26,6 +26,11 @@
  */
 package org.hbase.async;
 
+import java.io.IOException;
+
+import com.google.protobuf.AbstractMessageLite;
+import com.google.protobuf.CodedOutputStream;
+
 import org.jboss.netty.buffer.ChannelBuffer;
 import org.jboss.netty.buffer.ChannelBuffers;
 import org.jboss.netty.util.CharsetUtil;
@@ -307,6 +312,23 @@ public abstract class HBaseRpc {
    * @param server_version What RPC protocol version the server is running.
    */
   abstract ChannelBuffer serialize(byte server_version);
+
+  /**
+   * To be implemented by the concrete sub-type.
+   * This method is expected to de-serialize a response received for the
+   * current RPC, when communicating with HBase 0.95 and newer.
+   *
+   * Notice that this method is package-private, so only classes within this
+   * package can use this as a base class.
+   *
+   * @param buf The buffer from which to de-serialize the response.
+   */
+   /*abstract*/ Object deserialize(ChannelBuffer buf) {
+     // This method ought to be abstract, and will be once we have all RPC
+     // objects converted to be HBase 0.95+ compatible.
+     throw new UnsupportedOperationException("Not implemented yet on "
+                                             + getClass().getName());
+  }
 
   /**
    * The Deferred that will be invoked when this RPC completes or fails.
@@ -648,6 +670,30 @@ public abstract class HBaseRpc {
     final ChannelBuffer buf = ChannelBuffers.buffer(header + max_payload_size);
     buf.setIndex(0, header);  // Advance the writerIndex past the header.
     return buf;
+  }
+
+  /**
+   * Serializes the given protobuf object into a Netty {@link ChannelBuffer}.
+   * @param method The name of the method of the RPC we're going to send.
+   * @param pb The protobuf to serialize.
+   * @return A new channel buffer containing the serialized protobuf, with
+   * enough free space at the beginning to tack on the RPC header.
+   */
+  static final ChannelBuffer toChannelBuffer(final byte[] method,
+                                             final AbstractMessageLite pb) {
+    final int pblen = pb.getSerializedSize();
+    final int vlen = CodedOutputStream.computeRawVarint32Size(pblen);
+    final byte[] buf = new byte[4 + 19 + method.length + vlen + pblen];
+    try {
+      final CodedOutputStream out = CodedOutputStream.newInstance(buf, 4 + 19 + method.length,
+                                                                  vlen + pblen);
+      out.writeRawVarint32(pblen);
+      pb.writeTo(out);
+      out.checkNoSpaceLeft();
+    } catch (IOException e) {
+      throw new RuntimeException("Should never happen", e);
+    }
+    return ChannelBuffers.wrappedBuffer(buf);
   }
 
   /**
