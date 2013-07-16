@@ -100,7 +100,7 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
   }
 
   /** We don't know the RPC protocol version of the server yet.  */
-  private static final byte SERVER_VERSION_UNKNWON = 0;
+  private static final byte SERVER_VERSION_UNKNOWN = 0;
 
   /** Protocol version we pretend to use for HBase 0.90 and before.  */
   static final byte SERVER_VERSION_090_AND_BEFORE = 24;
@@ -136,7 +136,7 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
    * No synchronization is typically used to read this value.
    * It is written only once by {@link ProtocolVersionCB}.
    */
-  private byte server_version = SERVER_VERSION_UNKNWON;
+  private byte server_version = SERVER_VERSION_UNKNOWN;
 
   /**
    * RPCs being batched together for efficiency.
@@ -475,7 +475,7 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
       // 2nd param: what protocol version to speak.  If we don't know what the
       // server expects, try an old version first (0.90 and before).
       // Otherwise tell the server we speak the same version as it does.
-      writeHBaseLong(buf, server_version == SERVER_VERSION_UNKNWON
+      writeHBaseLong(buf, server_version == SERVER_VERSION_UNKNOWN
                      ?  SERVER_VERSION_090_AND_BEFORE : server_version);
       return buf;
     }
@@ -493,7 +493,7 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
 
     public Long call(final Object response) throws Exception {
       if (response instanceof VersionMismatchException) {
-        if (server_version == SERVER_VERSION_UNKNWON) {
+        if (server_version == SERVER_VERSION_UNKNOWN) {
           // If we get here, it's because we tried to handshake with a server
           // running HBase 0.92 or above, but using a pre-0.92 handshake.  So
           // we know we have to handshake differently.
