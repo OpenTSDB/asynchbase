@@ -145,10 +145,15 @@ UNITTESTS := $(unittest_SRC:test/%.java=$(top_builddir)/$(package_dir)/%.class)
 jar: $(jar)
 
 get_dep_classpath = `echo $(asynchbase_LIBADD) | tr ' ' ':'`
-$(top_builddir)/.javac-stamp: $(BUILT_SOURCES) $(asynchbase_SOURCES) $(asynchbase_LIBADD)
+$(top_builddir)/.javac-protobuf-stamp: $(PROTOBUF) $(BUILT_SOURCES)
 	@mkdir -p $(top_builddir)
-	javac $(AM_JAVACFLAGS) -cp $(get_dep_classpath) \
-	  -d $(top_builddir) $(asynchbase_SOURCES) $(BUILT_SOURCES)
+	javac $(AM_JAVACFLAGS) -cp $(PROTOBUF) \
+	  -d $(top_builddir) $(BUILT_SOURCES)
+	@touch "$@"
+
+$(top_builddir)/.javac-stamp: $(top_builddir)/.javac-protobuf-stamp $(asynchbase_SOURCES) $(asynchbase_LIBADD)
+	javac $(AM_JAVACFLAGS) -cp $(get_dep_classpath):build \
+	  -d $(top_builddir) $(asynchbase_SOURCES)
 	@touch "$@"
 
 $(PROTOBUF_GEN_DIR)/%PB.java: protobuf/%.proto
@@ -230,6 +235,7 @@ $(top_builddir)/api/index.html: $(asynchbase_SOURCES)
 clean:
 	@rm -f $(top_builddir)/.javac*-stamp
 	rm -f $(top_builddir)/manifest
+	rm -rf $(proto_generated_builddir)
 	cd $(top_builddir) || exit 0 \
 	  && rm -f $(classes_with_nested_classes) \
 	           $(unittest_classes_with_nested_classes) \
