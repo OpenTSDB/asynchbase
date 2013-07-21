@@ -1028,4 +1028,39 @@ public abstract class HBaseRpc {
     return negate ? ~result : result;
   }
 
+  /**
+   * Reads a 32-bit variable-length integer value as used in Protocol Buffers.
+   * @param buf The buffer to read from.
+   * @return The integer read.
+   */
+  static int readProtoBufVarint(final ChannelBuffer buf) {
+    int result = buf.readByte();
+    if (result >= 0) {
+      return result;
+    }
+    result &= 0x7F;
+    result |= buf.readByte() << 7;
+    if (result >= 0) {
+      return result;
+    }
+    result &= 0x3FFF;
+    result |= buf.readByte() << 14;
+    if (result >= 0) {
+      return result;
+    }
+    result &= 0x1FFFFF;
+    result |= buf.readByte() << 21;
+    if (result >= 0) {
+      return result;
+    }
+    result &= 0x0FFFFFFF;
+    final byte b = buf.readByte();
+    result |= b << 28;
+    if (b >= 0) {
+      return result;
+    }
+    throw new IllegalArgumentException("Not a 32 bit varint: " + result
+                                       + " (5th byte: " + b + ")");
+  }
+
 }
