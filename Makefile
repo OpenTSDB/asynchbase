@@ -103,6 +103,8 @@ asynchbase_SOURCES := \
 	src/jsr166e/LongAdder.java	\
 	src/jsr166e/Striped64.java	\
 
+protobuf_SOURCES := src/protobuf/ZeroCopyLiteralByteString.java
+
 asynchbase_LIBADD := \
 	$(NETTY)	\
 	$(SLF4J_API)	\
@@ -138,6 +140,7 @@ package_dir := $(subst .,/,$(package))
 AM_JAVACFLAGS := -Xlint
 JVM_ARGS :=
 classes := $(asynchbase_SOURCES:src/%.java=$(top_builddir)/$(package_dir)/%.class) \
+ $(protobuf_SOURCES:src/%.java=$(top_builddir)/com/google/%.class) \
  $(asynchbase_PROTOS:protobuf/%.proto=$(top_builddir)/$(package_dir)/generated/%PB.class)
 test_classes := $(test_SOURCES:test/%.java=$(top_builddir)/$(package_dir)/test/%.class)
 UNITTESTS := $(unittest_SRC:test/%.java=$(top_builddir)/$(package_dir)/%.class)
@@ -145,10 +148,10 @@ UNITTESTS := $(unittest_SRC:test/%.java=$(top_builddir)/$(package_dir)/%.class)
 jar: $(jar)
 
 get_dep_classpath = `echo $(asynchbase_LIBADD) | tr ' ' ':'`
-$(top_builddir)/.javac-protobuf-stamp: $(PROTOBUF) $(BUILT_SOURCES)
+$(top_builddir)/.javac-protobuf-stamp: $(PROTOBUF) $(protobuf_SOURCES) $(BUILT_SOURCES)
 	@mkdir -p $(top_builddir)
 	javac $(AM_JAVACFLAGS) -cp $(PROTOBUF) \
-	  -d $(top_builddir) $(BUILT_SOURCES)
+	  -d $(top_builddir) $(protobuf_SOURCES) $(BUILT_SOURCES)
 	@touch "$@"
 
 $(top_builddir)/.javac-stamp: $(top_builddir)/.javac-protobuf-stamp $(asynchbase_SOURCES) $(asynchbase_LIBADD)
