@@ -217,7 +217,7 @@ public final class KeyValue implements Comparable<KeyValue> {
   }
 
   /**
-   * De-serializes {@link KeyValue} from a buffer.
+   * De-serializes {@link KeyValue} from a buffer (HBase 0.94 and before).
    * @param buf The buffer to de-serialize from.
    * @param prev Another {@link KeyValue} previously de-serialized from the
    * same buffer.  Can be {@code null}.  The idea here is that KeyValues
@@ -294,16 +294,33 @@ public final class KeyValue implements Comparable<KeyValue> {
   }
 
   /**
-   * Transforms a protobuf Cell message into a KeyValue.
+   * Transforms a protobuf Cell message into a KeyValue (HBase 0.95+).
+   * @param buf The buffer to de-serialize from.
+   * @param prev Another {@link KeyValue} previously de-serialized from the
+   * same buffer.  Can be {@code null}.  The idea here is that KeyValues
+   * often come in a sorted batch, and often share a number of byte arrays
+   * (e.g.  they all have the same row key and/or same family...).  When
+   * you specify another KeyValue, its byte arrays will be re-used in order
+   * to avoid having too much duplicate data in memory.  This costs a little
+   * bit of CPU time to compare the arrays but saves memory (which in turns
+   * saves CPU time later).
+   * @return a new instance (guaranteed non-{@code null}).
    */
-  static KeyValue fromCell(final CellPB.Cell cell) {
+  static KeyValue fromCell(final CellPB.Cell cell, final KeyValue prev) {
     final byte[] key = Bytes.get(cell.getRow());
     final byte[] family = Bytes.get(cell.getFamily());
     final byte[] qualifier = Bytes.get(cell.getQualifier());
     final long timestamp = cell.getTimestamp();
     final byte[] value = Bytes.get(cell.getValue());
-    // XXX dedup
-    return new KeyValue(key, family, qualifier, timestamp, value);
+    if (prev == null) {
+      return new KeyValue(key, family, qualifier, timestamp, /*key_type,*/
+                          value);
+    } else {
+      return new KeyValue(Bytes.deDup(prev.key, key),
+                          Bytes.deDup(prev.family, family),
+                          Bytes.deDup(prev.qualifier, qualifier),
+                          timestamp, /*key_type,*/ value);
+    }
   }
 
   // ------------------------------------------------------------ //

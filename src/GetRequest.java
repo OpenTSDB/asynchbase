@@ -375,8 +375,11 @@ public final class GetRequest extends HBaseRpc
     final ClientPB.Result res = resp.getResult();
     final int size = res.getCellCount();
     final ArrayList<KeyValue> rows = new ArrayList<KeyValue>(size);
+    KeyValue prev = null;
     for (int i = 0; i < size; i++) {
-      rows.add(KeyValue.fromCell(res.getCell(i)));
+      final KeyValue kv = KeyValue.fromCell(res.getCell(i), prev);
+      rows.add(kv);
+      prev = kv;
     }
     return rows;
   }
