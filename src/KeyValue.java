@@ -33,6 +33,8 @@ import org.jboss.netty.buffer.ChannelBuffer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import org.hbase.async.generated.CellPB;
+
 /**
  * A "cell" in an HBase table.
  * <p>
@@ -289,6 +291,19 @@ public final class KeyValue implements Comparable<KeyValue> {
 
   private static void invalid(final String errmsg) {
     throw new IllegalArgumentException(errmsg);
+  }
+
+  /**
+   * Transforms a protobuf Cell message into a KeyValue.
+   */
+  static KeyValue fromCell(final CellPB.Cell cell) {
+    final byte[] key = Bytes.get(cell.getRow());
+    final byte[] family = Bytes.get(cell.getFamily());
+    final byte[] qualifier = Bytes.get(cell.getQualifier());
+    final long timestamp = cell.getTimestamp();
+    final byte[] value = Bytes.get(cell.getValue());
+    // XXX dedup
+    return new KeyValue(key, family, qualifier, timestamp, value);
   }
 
   // ------------------------------------------------------------ //

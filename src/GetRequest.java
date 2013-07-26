@@ -26,7 +26,11 @@
  */
 package org.hbase.async;
 
+import java.util.ArrayList;
+
 import org.jboss.netty.buffer.ChannelBuffer;
+
+import org.hbase.async.generated.ClientPB;
 
 /**
  * Reads something from HBase.
@@ -42,6 +46,7 @@ public final class GetRequest extends HBaseRpc
              HBaseRpc.HasFamily, HBaseRpc.HasQualifiers {
 
   private static final byte[] GET = new byte[] { 'g', 'e', 't' };
+  static final byte[] GGET = new byte[] { 'G', 'e', 't' };  // HBase 0.95+
   private static final byte[] EXISTS =
     new byte[] { 'e', 'x', 'i', 's', 't', 's' };
 
@@ -357,6 +362,23 @@ public final class GetRequest extends HBaseRpc
       buf.writeInt(0);  // Attributes map: number of elements.
     }
     return buf;
+  }
+
+  /**
+   * Transforms a protobuf get response into a list of {@link KeyValue}.
+   * @param resp The protobuf response from which to extract the KVs.
+   */
+  static ArrayList<KeyValue> extractResponse(final ClientPB.GetResponse resp) {
+    if (!resp.hasResult()) {
+      return new ArrayList<KeyValue>(0);
+    }
+    final ClientPB.Result res = resp.getResult();
+    final int size = res.getCellCount();
+    final ArrayList<KeyValue> rows = new ArrayList<KeyValue>(size);
+    for (int i = 0; i < size; i++) {
+      rows.add(KeyValue.fromCell(res.getCell(i)));
+    }
+    return rows;
   }
 
 }

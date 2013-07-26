@@ -207,7 +207,7 @@ public final class HBaseClient {
   private static final byte[] ROOT = new byte[] { '-', 'R', 'O', 'O', 'T', '-' };
   private static final byte[] ROOT_REGION = new byte[] { '-', 'R', 'O', 'O', 'T', '-', ',', ',', '0' };
   private static final byte[] META = new byte[] { '.', 'M', 'E', 'T', 'A', '.' };
-  private static final byte[] INFO = new byte[] { 'i', 'n', 'f', 'o' };
+  static final byte[] INFO = new byte[] { 'i', 'n', 'f', 'o' };
   private static final byte[] REGIONINFO = new byte[] { 'r', 'e', 'g', 'i', 'o', 'n', 'i', 'n', 'f', 'o' };
   private static final byte[] SERVER = new byte[] { 's', 'e', 'r', 'v', 'e', 'r' };
   /** New for HBase 0.95 and up: the name of META is fixed.  */

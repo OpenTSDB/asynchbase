@@ -38,7 +38,6 @@ import java.util.concurrent.atomic.AtomicInteger;
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
 
 import com.google.protobuf.CodedOutputStream;
-import com.google.protobuf.InvalidProtocolBufferException;
 
 import org.jboss.netty.buffer.ChannelBuffer;
 import org.jboss.netty.buffer.ChannelBuffers;
@@ -61,6 +60,7 @@ import org.slf4j.LoggerFactory;
 import com.stumbleupon.async.Callback;
 import com.stumbleupon.async.Deferred;
 
+import org.hbase.async.generated.ClientPB;
 import org.hbase.async.generated.RPCPB;
 
 /**
@@ -558,6 +558,11 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
     'B', 'e', 'f', 'o', 'r', 'e'
   };
 
+  /** Piece of protobuf to specify the family during META lookups.  */
+  private static final ClientPB.Column FAM_INFO = ClientPB.Column.newBuilder()
+          .setFamily(Bytes.wrap(HBaseClient.INFO))
+          .build();
+
   /**
    * Attempts to acquire a permit before performing a META lookup.
    * <p>
@@ -617,12 +622,36 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
       }
 
       @Override
-      byte[] method(final byte unused_server_version) {
-        return GET_CLOSEST_ROW_BEFORE;
+      byte[] method(final byte server_version) {
+        return server_version >= SERVER_VERSION_095_OR_ABOVE
+          ? GetRequest.GGET : GET_CLOSEST_ROW_BEFORE;
+      }
+
+      @Override
+      Object deserialize(final ChannelBuffer buf) {
+        final ClientPB.GetResponse resp =
+          readProtobuf(buf, ClientPB.GetResponse.PARSER);
+        return GetRequest.extractResponse(resp);
       }
 
       @Override
       ChannelBuffer serialize(final byte server_version) {
+        if (server_version < SERVER_VERSION_095_OR_ABOVE) {
+          return serializeOld(server_version);
+        }
+        final ClientPB.Get getpb = ClientPB.Get.newBuilder()
+          .setRow(Bytes.wrap(row))
+          .addColumn(FAM_INFO)  // Fetch from one family only.
+          .build();
+        final ClientPB.GetRequest get = ClientPB.GetRequest.newBuilder()
+          .setRegion(region.toProtobuf())
+          .setGet(getpb)
+          .setClosestRowBefore(true)
+          .build();
+        return toChannelBuffer(GetRequest.GGET, get);
+      }
+
+      private ChannelBuffer serializeOld(final byte server_version) {
         // region.length and row.length will use at most a 3-byte VLong.
         // This is because VLong wastes 1 byte of meta-data + 2 bytes of
         // payload.  HBase's own KeyValue code uses a short to store the row
@@ -1220,18 +1249,7 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
     if (server_version >= SERVER_VERSION_095_OR_ABOVE) {
       final int size = buf.readInt();
       HBaseRpc.checkArrayLength(buf, size);
-      final int header_length = HBaseRpc.readProtoBufVarint(buf);
-      HBaseRpc.checkArrayLength(buf, header_length);
-      final byte[] header_bytes = new byte[header_length];
-      // TODO XXX: avoid the buffer copy here.
-      buf.readBytes(header_bytes);
-      try {
-        header = RPCPB.ResponseHeader.parseFrom(header_bytes);
-      } catch (InvalidProtocolBufferException e) {
-        final String msg = "Invalid RPC response header: size=" + size
-          + ", header_length=" + header_length + ", buf=" + Bytes.pretty(buf);
-        throw new NonRecoverableException(msg, e);
-      }
+      header = HBaseRpc.readProtobuf(buf, RPCPB.ResponseHeader.PARSER);
       if (!header.hasCallId()) {
         final String msg = "RPC response (size: " + size + ") doesn't"
           + " have a call ID: " + header + ", buf=" + Bytes.pretty(buf);
