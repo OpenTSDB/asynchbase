@@ -230,7 +230,10 @@ public final class GetRequest extends HBaseRpc
   }
 
   @Override
-  byte[] method(final byte unused_server_version) {
+  byte[] method(final byte server_version) {
+    if (server_version >= RegionClient.SERVER_VERSION_095_OR_ABOVE) {
+      return GGET;
+    }
     return isGetRequest() ? GET : EXISTS;
   }
 
@@ -312,6 +315,42 @@ public final class GetRequest extends HBaseRpc
 
   /** Serializes this request.  */
   ChannelBuffer serialize(final byte server_version) {
+    if (server_version < RegionClient.SERVER_VERSION_095_OR_ABOVE) {
+      return serializeOld(server_version);
+    }
+    final ClientPB.Get.Builder getpb = ClientPB.Get.newBuilder()
+      .setRow(Bytes.wrap(key));
+
+    if (family != null) {
+      final ClientPB.Column.Builder column = ClientPB.Column.newBuilder();
+      column.setFamily(Bytes.wrap(family));
+      if (qualifiers != null) {
+        for (final byte[] qualifier : qualifiers) {
+          column.addQualifier(Bytes.wrap(qualifier));
+        }
+      }
+      getpb.addColumn(column.build());
+    }
+
+    // TODO: Filters.
+
+    final int versions = maxVersions();  // Shadows this.versions
+    if (versions != 1) {
+      getpb.setMaxVersions(versions);
+    }
+
+    final ClientPB.GetRequest.Builder get = ClientPB.GetRequest.newBuilder()
+      .setRegion(region.toProtobuf())
+      .setGet(getpb.build());
+
+    if (!isGetRequest()) {
+      get.setExistenceOnly(true);
+    }
+    return toChannelBuffer(GetRequest.GGET, get.build());
+  }
+
+  /** Serializes this request for HBase 0.94 and before.  */
+  private ChannelBuffer serializeOld(final byte server_version) {
     final ChannelBuffer buf = newBuffer(server_version,
                                         predictSerializedSize(server_version));
     buf.writeInt(2);  // Number of parameters.
@@ -364,6 +403,17 @@ public final class GetRequest extends HBaseRpc
     return buf;
   }
 
+  @Override
+  Object deserialize(final ChannelBuffer buf) {
+    final ClientPB.GetResponse resp =
+      readProtobuf(buf, ClientPB.GetResponse.PARSER);
+    if (isGetRequest()) {
+      return extractResponse(resp);
+    } else {
+      return resp.getExists();
+    }
+  }
+
   /**
    * Transforms a protobuf get response into a list of {@link KeyValue}.
    * @param resp The protobuf response from which to extract the KVs.
@@ -372,7 +422,13 @@ public final class GetRequest extends HBaseRpc
     if (!resp.hasResult()) {
       return new ArrayList<KeyValue>(0);
     }
-    final ClientPB.Result res = resp.getResult();
+    return convertResult(resp.getResult());
+  }
+
+  /**
+   * Converts a protobuf result into a list of {@link KeyValue}.
+   */
+  static ArrayList<KeyValue> convertResult(final ClientPB.Result res) {
     final int size = res.getCellCount();
     final ArrayList<KeyValue> rows = new ArrayList<KeyValue>(size);
     KeyValue prev = null;

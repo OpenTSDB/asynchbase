@@ -204,6 +204,9 @@ public final class HBaseClient {
    */
   public static final byte[] EMPTY_ARRAY = new byte[0];
 
+  /** A byte array containing a single zero byte.  */
+  private static final byte[] ZERO_ARRAY = new byte[] { 0 };
+
   private static final byte[] ROOT = new byte[] { '-', 'R', 'O', 'O', 'T', '-' };
   private static final byte[] ROOT_REGION = new byte[] { '-', 'R', 'O', 'O', 'T', '-', ',', ',', '0' };
   private static final byte[] META = new byte[] { '.', 'M', 'E', 'T', 'A', '.' };
@@ -933,9 +936,9 @@ public final class HBaseClient {
     // useful thing to do but gets the job done for now.  TODO(tsuna): Improve.
     final HBaseRpc dummy;
     if (family == EMPTY_ARRAY) {
-      dummy = GetRequest.exists(table, EMPTY_ARRAY);
+      dummy = GetRequest.exists(table, ZERO_ARRAY);
     } else {
-      dummy = GetRequest.exists(table, EMPTY_ARRAY, family);
+      dummy = GetRequest.exists(table, ZERO_ARRAY, family);
     }
     @SuppressWarnings("unchecked")
     final Deferred<Object> d = (Deferred) sendRpcToRegion(dummy);
