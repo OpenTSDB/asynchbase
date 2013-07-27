@@ -30,6 +30,8 @@ import java.io.IOException;
 
 import com.google.protobuf.AbstractMessageLite;
 import com.google.protobuf.CodedOutputStream;
+import com.google.protobuf.InvalidProtocolBufferException;
+import com.google.protobuf.Parser;
 
 import org.jboss.netty.buffer.ChannelBuffer;
 import org.jboss.netty.buffer.ChannelBuffers;
@@ -866,6 +868,38 @@ public abstract class HBaseRpc {
     final byte[] s = new byte[length];
     buf.readBytes(s);
     return new String(s, CharsetUtil.UTF_8);
+  }
+
+  /**
+   * De-serializes a protobuf from the given buffer.
+   * <p>
+   * The protobuf is assumed to be prefixed by a varint indicating its size.
+   * @param buf The buffer to de-serialize the protobuf from.
+   * @param parser The protobuf parser to use for this type of protobuf.
+   * @return An instance of the de-serialized type.
+   * @throws InvalidResponseException if the buffer contained an invalid
+   * protobuf that couldn't be de-serialized.
+   */
+  static <T> T readProtobuf(final ChannelBuffer buf, final Parser<T> parser) {
+    final int length = HBaseRpc.readProtoBufVarint(buf);
+    HBaseRpc.checkArrayLength(buf, length);
+    final byte[] payload;
+    final int offset;
+    if (buf.hasArray()) {  // Zero copy.
+      payload = buf.array();
+      offset = buf.arrayOffset() + buf.readerIndex();
+    } else {  // We have to copy the entire payload out of the buffer :(
+      payload = new byte[length];
+      buf.readBytes(payload);
+      offset = 0;
+    }
+    try {
+      return parser.parseFrom(payload, offset, length);
+    } catch (InvalidProtocolBufferException e) {
+      final String msg = "Invalid RPC response: length=" + length
+        + ", payload=" + Bytes.pretty(payload);
+      throw new InvalidResponseException(msg, e);
+    }
   }
 
   // -------------------------------------- //
