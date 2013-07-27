@@ -1248,6 +1248,7 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
     final RPCPB.ResponseHeader header;
     if (server_version >= SERVER_VERSION_095_OR_ABOVE) {
       final int size = buf.readInt();
+      ensureReadable(buf, size);
       HBaseRpc.checkArrayLength(buf, size);
       header = HBaseRpc.readProtobuf(buf, RPCPB.ResponseHeader.PARSER);
       if (!header.hasCallId()) {
@@ -1324,6 +1325,20 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
   }
 
   /**
+   * Ensures that at least a {@code nbytes} are readable from the given buffer.
+   * If there aren't enough bytes in the buffer this will raise an exception
+   * and cause the {@link ReplayingDecoder} to undo whatever we did thus far
+   * so we can wait until we read more from the socket.
+   * @param buf Buffer to check.
+   * @param nbytes Number of bytes desired.
+   */
+  private static void ensureReadable(final ChannelBuffer buf, final int nbytes) {
+    buf.markReaderIndex();
+    buf.skipBytes(nbytes);
+    buf.resetReaderIndex();
+  }
+
+  /**
    * De-serializes an RPC response.
    * @param buf The buffer from which to de-serialize the response.
    * @param rpc The RPC for which we're de-serializing the response.
@@ -1347,9 +1362,7 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
         // Make sure we have that many bytes readable.
         // This will have to change to be able to do streaming RPCs where we
         // deserialize parts of the response as it comes off the wire.
-        buf.markReaderIndex();
-        buf.skipBytes(length);
-        buf.resetReaderIndex();
+        ensureReadable(buf, length);
       } catch (IllegalArgumentException e) {
         LOG.error("WTF?  RPC #" + rpcid + ": ", e);
       }
@@ -1461,9 +1474,7 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
     final int length = buf.readInt();
     HBaseRpc.checkArrayLength(buf, length);
     // Immediately try to "fault" if `length' bytes aren't available.
-    buf.markReaderIndex();
-    buf.skipBytes(length);
-    buf.resetReaderIndex();
+    ensureReadable(buf, length);
     //LOG.debug("total Result response length={}", length);
 
     // Pre-compute how many KVs we have so the array below will be rightsized.
@@ -1523,9 +1534,7 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
     final int length = buf.readInt();  // Guaranteed > 0 as we have > 0 Result.
     HBaseRpc.checkNonEmptyArrayLength(buf, length);
     // Immediately try to "fault" if `length' bytes aren't available.
-    buf.markReaderIndex();
-    buf.skipBytes(length);
-    buf.resetReaderIndex();
+    ensureReadable(buf, length);
     //LOG.debug("total Result[] response length={}", length);
     //LOG.debug("Result[] "+nresults+" buf="+buf+'='+Bytes.pretty(buf));
 
