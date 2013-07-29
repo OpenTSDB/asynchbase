@@ -26,8 +26,13 @@
  */
 package org.hbase.async;
 
+import java.util.ArrayList;
 
 import org.jboss.netty.buffer.ChannelBuffer;
+
+import org.hbase.async.generated.ClientPB.MutateRequest;
+import org.hbase.async.generated.ClientPB.MutateResponse;
+import org.hbase.async.generated.ClientPB.MutationProto;
 
 /**
  * Atomically increments a value in HBase.
@@ -147,8 +152,10 @@ public final class AtomicIncrementRequest extends HBaseRpc
   }
 
   @Override
-  byte[] method(final byte unused_server_version) {
-    return INCREMENT_COLUMN_VALUE;
+  byte[] method(final byte server_version) {
+    return (server_version >= RegionClient.SERVER_VERSION_095_OR_ABOVE
+            ? MUTATE
+            : INCREMENT_COLUMN_VALUE);
   }
 
   @Override
@@ -213,6 +220,35 @@ public final class AtomicIncrementRequest extends HBaseRpc
 
   /** Serializes this request.  */
   ChannelBuffer serialize(final byte server_version) {
+    if (server_version < RegionClient.SERVER_VERSION_095_OR_ABOVE) {
+      return serializeOld(server_version);
+    }
+    final MutationProto.ColumnValue.QualifierValue qualifier =
+      MutationProto.ColumnValue.QualifierValue.newBuilder()
+      .setQualifier(Bytes.wrap(this.qualifier))
+      .setValue(Bytes.wrap(Bytes.fromLong(amount)))
+      .build();
+    final MutationProto.ColumnValue column =
+      MutationProto.ColumnValue.newBuilder()
+      .setFamily(Bytes.wrap(family))
+      .addQualifierValue(qualifier)
+      .build();
+    final MutationProto.Builder incr = MutationProto.newBuilder()
+      .setRow(Bytes.wrap(key))
+      .setMutateType(MutationProto.MutationType.INCREMENT)
+      .addColumnValue(column);
+    if (!durable) {
+      incr.setDurability(MutationProto.Durability.SKIP_WAL);
+    }
+    final MutateRequest req = MutateRequest.newBuilder()
+      .setRegion(region.toProtobuf())
+      .setMutation(incr.build())
+      .build();
+    return toChannelBuffer(MUTATE, req);
+  }
+
+  /** Serializes this request for HBase 0.94 and before.  */
+  private ChannelBuffer serializeOld(final byte server_version) {
     final ChannelBuffer buf = newBuffer(server_version,
                                         predictSerializedSize());
     buf.writeInt(6);  // Number of parameters.
@@ -225,6 +261,20 @@ public final class AtomicIncrementRequest extends HBaseRpc
     writeHBaseBool(buf, durable);
 
     return buf;
+  }
+
+  @Override
+  Object deserialize(final ChannelBuffer buf) {
+    final MutateResponse resp = readProtobuf(buf, MutateResponse.PARSER);
+    // An increment must always produce a result, so we shouldn't need to
+    // check whether the `result' field is set here.
+    final ArrayList<KeyValue> kvs = GetRequest.convertResult(resp.getResult());
+    if (kvs.size() != 1) {
+      throw new InvalidResponseException("Atomic increment returned "
+        + kvs.size() + " KeyValue(s), but we expected exactly one. kvs="
+        + kvs, resp);
+    }
+    return Bytes.getLong(kvs.get(0).value());
   }
 
 }
