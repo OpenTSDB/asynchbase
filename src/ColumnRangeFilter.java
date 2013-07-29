@@ -28,6 +28,8 @@ package org.hbase.async;
 
 import org.jboss.netty.buffer.ChannelBuffer;
 
+import org.hbase.async.generated.FilterPB;
+
 /**
  * Filters based on a range of column qualifiers.
  * @since 1.5
@@ -93,6 +95,30 @@ public final class ColumnRangeFilter extends ScanFilter {
   }
 
   @Override
+  byte[] serialize() {
+    final FilterPB.ColumnRangeFilter.Builder filter =
+      FilterPB.ColumnRangeFilter.newBuilder();
+    if (start_column != null) {
+      filter.setMinColumn(Bytes.wrap(start_column));
+      if (start_inclusive) {
+        filter.setMinColumnInclusive(true);
+      }
+    }
+    if (stop_column != null) {
+      filter.setMaxColumn(Bytes.wrap(stop_column));
+      if (stop_inclusive) {
+        filter.setMaxColumnInclusive(true);
+      }
+    }
+    return filter.build().toByteArray();
+  }
+
+  @Override
+  byte[] name() {
+    return NAME;
+  }
+
+  @Override
   int predictSerializedSize() {
     return 1 + NAME.length
       + 1 + 3 + (start_column == null ? 0 : start_column.length) + 1
@@ -100,7 +126,7 @@ public final class ColumnRangeFilter extends ScanFilter {
   }
 
   @Override
-  void serialize(ChannelBuffer buf) {
+  void serializeOld(final ChannelBuffer buf) {
     buf.writeByte((byte) NAME.length);             // 1
     buf.writeBytes(NAME);                          // 48
 

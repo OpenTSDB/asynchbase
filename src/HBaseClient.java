@@ -1031,9 +1031,10 @@ public final class HBaseClient {
   /**
    * Package-private access point for {@link Scanner}s to open themselves.
    * @param scanner The scanner to open.
-   * @return A deferred scanner ID.
+   * @return A deferred scanner ID (long) if HBase 0.94 and before, or a
+   * deferred {@link Scanner.Response} if HBase 0.95 and up.
    */
-  Deferred<Long> openScanner(final Scanner scanner) {
+  Deferred<Object> openScanner(final Scanner scanner) {
     num_scanners_opened.increment();
     return sendRpcToRegion(scanner.getOpenRequest()).addCallbacks(
       scanner_opened,
@@ -1050,10 +1051,13 @@ public final class HBaseClient {
   }
 
   /** Singleton callback to handle responses of "openScanner" RPCs.  */
-  private static final Callback<Long, Object> scanner_opened =
-    new Callback<Long, Object>() {
-      public Long call(final Object response) {
-        if (response instanceof Long) {
+  private static final Callback<Object, Object> scanner_opened =
+    new Callback<Object, Object>() {
+      public Object call(final Object response) {
+        if (response instanceof Scanner.Response) {  // HBase 0.95 and up
+          return (Scanner.Response) response;
+        } else if (response instanceof Long) {
+          // HBase 0.94 and before: we expect just a long (the scanner ID).
           return (Long) response;
         } else {
           throw new InvalidResponseException(Long.class, response);
@@ -2152,7 +2156,11 @@ public final class HBaseClient {
     HBaseRpc exists_rpc = null;  // Our "probe" RPC.
     if (nsred_rpcs == null) {  // Looks like this could be a new NSRE...
       final ArrayList<HBaseRpc> newlist = new ArrayList<HBaseRpc>(64);
-      exists_rpc = GetRequest.exists(rpc.table, rpc.key);
+      // In HBase 0.95 and up, the exists RPC can't use the empty row key,
+      // which could happen if we were trying to scan from the beginning of
+      // the table.  So instead use "\0" as the key.
+      final byte[] testkey = rpc.key.length != 0 ? rpc.key : ZERO_ARRAY;
+      exists_rpc = GetRequest.exists(rpc.table, testkey);
       newlist.add(exists_rpc);
       if (can_retry_rpc) {
         newlist.add(rpc);

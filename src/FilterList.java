@@ -32,6 +32,8 @@ import org.slf4j.LoggerFactory;
 
 import java.util.List;
 
+import org.hbase.async.generated.FilterPB;
+
 /**
  * Combines a list of filters into one.
  * Since 1.5
@@ -80,6 +82,30 @@ public final class FilterList extends ScanFilter {
   }
 
   @Override
+  byte[] serialize() {
+    final FilterPB.FilterList.Builder filter =
+      FilterPB.FilterList.newBuilder();
+    if (op == Operator.MUST_PASS_ALL) {
+      filter.setOperator(FilterPB.FilterList.Operator.MUST_PASS_ALL);
+    } else {
+      filter.setOperator(FilterPB.FilterList.Operator.MUST_PASS_ONE);
+    }
+    for (final ScanFilter f : filters) {
+      final FilterPB.Filter nested = FilterPB.Filter.newBuilder()
+        .setNameBytes(Bytes.wrap(f.name()))
+        .setSerializedFilter(Bytes.wrap(f.serialize()))
+        .build();
+      filter.addFilters(nested);
+    }
+    return filter.build().toByteArray();
+  }
+
+  @Override
+  byte[] name() {
+    return NAME;
+  }
+
+  @Override
   int predictSerializedSize() {
     int size = 1 + NAME.length + 1 + 4;
     for (final ScanFilter filter : filters) {
@@ -90,7 +116,7 @@ public final class FilterList extends ScanFilter {
   }
 
   @Override
-  void serialize(final ChannelBuffer buf) {
+  void serializeOld(final ChannelBuffer buf) {
     buf.writeByte((byte) NAME.length);   // 1
     buf.writeBytes(NAME);                //41
     buf.writeByte((byte) op.ordinal());  // 1
@@ -98,7 +124,7 @@ public final class FilterList extends ScanFilter {
     for (final ScanFilter filter : filters) {
       buf.writeByte(54);  // 1 : code for WritableByteArrayComparable
       buf.writeByte(0);   // 1 : code for NOT_ENCODED
-      filter.serialize(buf);
+      filter.serializeOld(buf);
     }
   }
 
