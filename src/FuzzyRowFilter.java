@@ -57,4 +57,17 @@ public class FuzzyRowFilter extends ScanFilter {
     }
     return size;
   }
+
+  @Override
+  public String toString() {
+    final StringBuilder sb = new StringBuilder();
+    sb.append("FuzzyRowFilter");
+    sb.append("{fuzzyKeysData=");
+    for (List<byte[]> fuzzyData: fuzzyKeys) {
+      sb.append('{').append(Bytes.pretty(fuzzyData.get(0))).append(":");
+      sb.append(Bytes.pretty(fuzzyData.get(1))).append('}');
+    }
+    sb.append("}");
+    return sb.toString();
+  }
 }
