@@ -23,13 +23,13 @@ option java_generic_services = false;
 option optimize_for = LITE_RUNTIME;
 
 message MultiMutateRequest {
-  repeated MutationProto mutationRequest = 1;
+  repeated MutationProto mutation_request = 1;
 }
 
 message MultiMutateResponse {
 }
 
 service MultiRowMutationService {
-  rpc mutateRows(MultiMutateRequest)
+  rpc MutateRows(MultiMutateRequest)
       returns(MultiMutateResponse);
 }

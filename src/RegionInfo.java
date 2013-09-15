@@ -192,7 +192,7 @@ final class RegionInfo implements Comparable<RegionInfo> {
                                     e);
     }
     final byte[] region_id = Long.toString(pb.getRegionId()).getBytes();
-    final byte[] table = Bytes.get(pb.getTableName());
+    final byte[] table = Bytes.get(pb.getTableName().getQualifier());
     final byte[] start_key = Bytes.get(pb.getStartKey());
     final byte[] stop_key = Bytes.get(pb.getEndKey());
     final byte[] region_name = kv.key();
