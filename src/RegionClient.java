@@ -628,10 +628,11 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
       }
 
       @Override
-      Object deserialize(final ChannelBuffer buf) {
+      Object deserialize(final ChannelBuffer buf, final int cell_size) {
+        assert cell_size == 0 : "cell_size=" + cell_size;
         final ClientPB.GetResponse resp =
           readProtobuf(buf, ClientPB.GetResponse.PARSER);
-        return GetRequest.extractResponse(resp);
+        return GetRequest.extractResponse(resp, buf, cell_size);
       }
 
       @Override
@@ -1283,7 +1284,17 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
       if (header.hasException()) {
         decoded = decodeException(rpc, header.getException());
       } else {
-        decoded = rpc.deserialize(buf);
+        final int cell_size;
+        {
+          final RPCPB.CellBlockMeta cellblock = header.getCellBlockMeta();
+          if (cellblock == null) {
+            cell_size = 0;
+          } else {
+            cell_size = cellblock.getLength();
+            HBaseRpc.checkArrayLength(buf, cell_size);
+          }
+        }
+        decoded = rpc.deserialize(buf, cell_size);
       }
     } else {  // HBase 0.94 and before.
       decoded = deserialize(buf, rpc);
@@ -1466,6 +1477,34 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
   }
 
   /**
+   * Pre-computes how many KVs we have so we can rightsized arrays.
+   * This assumes that what's coming next in the buffer is a sequence of
+   * KeyValues, each of which is prefixed by its length on 32 bits.
+   * @param buf The buffer to peek into.
+   * @param length The total size of all the KeyValues that follow.
+   */
+  static int numberOfKeyValuesAhead(final ChannelBuffer buf, int length) {
+    // Immediately try to "fault" if `length' bytes aren't available.
+    ensureReadable(buf, length);
+    int num_kv = 0;
+    int offset = buf.readerIndex();
+    length += offset;
+    while (offset < length) {
+      final int kv_length = buf.getInt(offset);
+      HBaseRpc.checkArrayLength(buf, kv_length);
+      num_kv++;
+      offset += kv_length + 4;
+    }
+    if (offset != length) {
+      final int index = buf.readerIndex();
+      badResponse("We wanted read " + (length - index)
+                  + " bytes but we read " + (offset - index)
+                  + " from " + buf + '=' + Bytes.pretty(buf));
+    }
+    return num_kv;
+  }
+
+  /**
    * De-serializes an {@code hbase.client.Result} object.
    * @param buf The buffer that contains a serialized {@code Result}.
    * @return The result parsed into a list of {@link KeyValue} objects.
@@ -1473,23 +1512,9 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
   private static ArrayList<KeyValue> parseResult(final ChannelBuffer buf) {
     final int length = buf.readInt();
     HBaseRpc.checkArrayLength(buf, length);
-    // Immediately try to "fault" if `length' bytes aren't available.
-    ensureReadable(buf, length);
     //LOG.debug("total Result response length={}", length);
 
-    // Pre-compute how many KVs we have so the array below will be rightsized.
-    int num_kv = 0;
-    {
-      int bytes_read = 0;
-      while (bytes_read < length) {
-        final int kv_length = buf.readInt();
-        HBaseRpc.checkArrayLength(buf, kv_length);
-        num_kv++;
-        bytes_read += kv_length + 4;
-        buf.skipBytes(kv_length);
-      }
-      buf.resetReaderIndex();
-    }
+    final int num_kv = numberOfKeyValuesAhead(buf, length);
 
     final ArrayList<KeyValue> results = new ArrayList<KeyValue>(num_kv);
     KeyValue kv = null;
@@ -1673,6 +1698,7 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
     final RPCPB.ConnectionHeader pb = RPCPB.ConnectionHeader.newBuilder()
       .setUserInfo(user)
       .setServiceName("ClientService")
+      .setCellBlockCodecClass("org.apache.hadoop.hbase.codec.KeyValueCodec")
       .build();
     final int pblen = pb.getSerializedSize();
     final byte[] buf = new byte[HBASE.length + 4 + pblen];

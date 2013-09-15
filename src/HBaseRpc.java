@@ -326,8 +326,11 @@ public abstract class HBaseRpc {
    * package can use this as a base class.
    *
    * @param buf The buffer from which to de-serialize the response.
+   * @param cell_size The size, in bytes, of the "cell block" that follows the
+   * protobuf of the RPC response.  If 0, then there is just the protobuf.
+   * The value is guaranteed to be both positive and of a "reasonable" size.
    */
-   /*abstract*/ Object deserialize(ChannelBuffer buf) {
+   /*abstract*/ Object deserialize(ChannelBuffer buf, int cell_size) {
      // This method ought to be abstract, and will be once we have all RPC
      // objects converted to be HBase 0.95+ compatible.
      throw new UnsupportedOperationException("Not implemented yet on "

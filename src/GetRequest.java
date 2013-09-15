@@ -404,11 +404,11 @@ public final class GetRequest extends HBaseRpc
   }
 
   @Override
-  Object deserialize(final ChannelBuffer buf) {
+  Object deserialize(final ChannelBuffer buf, final int cell_size) {
     final ClientPB.GetResponse resp =
       readProtobuf(buf, ClientPB.GetResponse.PARSER);
     if (isGetRequest()) {
-      return extractResponse(resp);
+      return extractResponse(resp, buf, cell_size);
     } else {
       return resp.getExists();
     }
@@ -417,25 +417,42 @@ public final class GetRequest extends HBaseRpc
   /**
    * Transforms a protobuf get response into a list of {@link KeyValue}.
    * @param resp The protobuf response from which to extract the KVs.
+   * @param buf The buffer from which the protobuf was read.
+   * @param cell_size The number of bytes of the cell block that follows,
+   * in the buffer.
    */
-  static ArrayList<KeyValue> extractResponse(final ClientPB.GetResponse resp) {
-    if (!resp.hasResult()) {
+  static ArrayList<KeyValue> extractResponse(final ClientPB.GetResponse resp,
+                                             final ChannelBuffer buf,
+                                             final int cell_size) {
+    final ClientPB.Result res = resp.getResult();
+    if (res == null) {
       return new ArrayList<KeyValue>(0);
     }
-    return convertResult(resp.getResult());
+    return convertResult(res, buf, cell_size);
   }
 
   /**
    * Converts a protobuf result into a list of {@link KeyValue}.
+   * @param res The protobuf'ed results from which to extract the KVs.
+   * @param buf The buffer from which the protobuf was read.
+   * @param cell_size The number of bytes of the cell block that follows,
+   * in the buffer.
    */
-  static ArrayList<KeyValue> convertResult(final ClientPB.Result res) {
+  static ArrayList<KeyValue> convertResult(final ClientPB.Result res,
+                                           final ChannelBuffer buf,
+                                           final int cell_size) {
+    final int cell_kvs = RegionClient.numberOfKeyValuesAhead(buf, cell_size);
     final int size = res.getCellCount();
-    final ArrayList<KeyValue> rows = new ArrayList<KeyValue>(size);
-    KeyValue prev = null;
+    final ArrayList<KeyValue> rows = new ArrayList<KeyValue>(size + cell_kvs);
+    KeyValue kv = null;
     for (int i = 0; i < size; i++) {
-      final KeyValue kv = KeyValue.fromCell(res.getCell(i), prev);
+      kv = KeyValue.fromCell(res.getCell(i), kv);
       rows.add(kv);
-      prev = kv;
+    }
+    for (int i = 0; i < cell_kvs; i++) {
+      final int kv_length = buf.readInt();
+      kv = KeyValue.fromBuffer(buf, kv);
+      rows.add(kv);
     }
     return rows;
   }

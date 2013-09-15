@@ -264,11 +264,12 @@ public final class AtomicIncrementRequest extends HBaseRpc
   }
 
   @Override
-  Object deserialize(final ChannelBuffer buf) {
+  Object deserialize(final ChannelBuffer buf, int cell_size) {
     final MutateResponse resp = readProtobuf(buf, MutateResponse.PARSER);
     // An increment must always produce a result, so we shouldn't need to
     // check whether the `result' field is set here.
-    final ArrayList<KeyValue> kvs = GetRequest.convertResult(resp.getResult());
+    final ArrayList<KeyValue> kvs = GetRequest.convertResult(resp.getResult(),
+                                                             buf, cell_size);
     if (kvs.size() != 1) {
       throw new InvalidResponseException("Atomic increment returned "
         + kvs.size() + " KeyValue(s), but we expected exactly one. kvs="
