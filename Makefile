@@ -138,7 +138,9 @@ test_LIBADD := \
 
 package_dir := $(subst .,/,$(package))
 AM_JAVACFLAGS := -Xlint
+JAVAC := javac
 JVM_ARGS :=
+PROTOC := protoc
 classes := $(asynchbase_SOURCES:src/%.java=$(top_builddir)/$(package_dir)/%.class) \
  $(protobuf_SOURCES:src/%.java=$(top_builddir)/com/google/%.class) \
  $(asynchbase_PROTOS:protobuf/%.proto=$(top_builddir)/$(package_dir)/generated/%PB.class)
@@ -150,25 +152,29 @@ jar: $(jar)
 get_dep_classpath = `echo $(asynchbase_LIBADD) | tr ' ' ':'`
 $(top_builddir)/.javac-protobuf-stamp: $(PROTOBUF) $(protobuf_SOURCES) $(BUILT_SOURCES)
 	@mkdir -p $(top_builddir)
-	javac $(AM_JAVACFLAGS) -cp $(PROTOBUF) \
+	$(JAVAC) $(AM_JAVACFLAGS) -cp $(PROTOBUF) \
 	  -d $(top_builddir) $(protobuf_SOURCES) $(BUILT_SOURCES)
 	@touch "$@"
 
 $(top_builddir)/.javac-stamp: $(top_builddir)/.javac-protobuf-stamp $(asynchbase_SOURCES) $(asynchbase_LIBADD)
-	javac $(AM_JAVACFLAGS) -cp $(get_dep_classpath):build \
+	$(JAVAC) $(AM_JAVACFLAGS) -cp $(get_dep_classpath):build \
 	  -d $(top_builddir) $(asynchbase_SOURCES)
 	@touch "$@"
 
 $(PROTOBUF_GEN_DIR)/%PB.java: protobuf/%.proto
 	@mkdir -p $(proto_generated_builddir)
-	protoc -Iprotobuf --java_out=$(proto_generated_builddir) $<
+	@case `$(PROTOC) --version` in \
+	  (*2.5*) :;; \
+	  (*) echo You need the protobuf compiler v2.5 2>&1; exit 1;; \
+	esac
+	$(PROTOC) -Iprotobuf --java_out=$(proto_generated_builddir) $<
 
 get_runtime_dep_classpath = `echo $(test_LIBADD) | tr ' ' ':'`
 $(test_classes): $(jar) $(test_SOURCES) $(test_LIBADD)
-	javac $(AM_JAVACFLAGS) -cp $(get_runtime_dep_classpath) \
+	$(JAVAC) $(AM_JAVACFLAGS) -cp $(get_runtime_dep_classpath) \
 	  -d $(top_builddir) $(test_SOURCES)
 $(top_builddir)/.javac-test-stamp: $(jar) $(unittest_SRC) $(test_LIBADD)
-	javac $(AM_JAVACFLAGS) -cp $(get_runtime_dep_classpath) \
+	$(JAVAC) $(AM_JAVACFLAGS) -cp $(get_runtime_dep_classpath) \
 	  -d $(top_builddir) $(unittest_SRC)
 
 classes_with_nested_classes := $(classes:$(top_builddir)/%.class=%*.class)
