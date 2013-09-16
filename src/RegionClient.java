@@ -1139,9 +1139,9 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
       final byte[] method = rpc.method(server_version);
       if (server_version >= SERVER_VERSION_095_OR_ABOVE) {
         final RPCPB.RequestHeader header = RPCPB.RequestHeader.newBuilder()
-          .setCallId(rpcid)                   // 1 + 1-to-5 bytes (vint)
-          .setMethodName(new String(method))  // 1 + 1 + N bytes
-          .setRequestParam(true)              // 1 + 1 bytes
+          .setCallId(rpcid)                        // 1 + 1-to-5 bytes (vint)
+          .setMethodNameBytes(Bytes.wrap(method))  // 1 + 1 + N bytes
+          .setRequestParam(true)                   // 1 + 1 bytes
           .build();
         final int pblen = header.getSerializedSize();
         // In HBaseRpc.newBuffer() we reserved 19 bytes for the RPC header
