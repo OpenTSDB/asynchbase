@@ -1207,7 +1207,7 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
     // fewer, bigger TCP packets, and make better use of the network.
 
     if (LOG.isDebugEnabled()) {
-      LOG.debug("Sending RPC #" + rpcid + ", payload=" + payload + ' '
+      LOG.debug(chan + " Sending RPC #" + rpcid + ", payload=" + payload + ' '
                 + Bytes.pretty(payload));
     }
     {
