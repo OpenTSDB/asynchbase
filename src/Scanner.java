@@ -484,6 +484,15 @@ public final class Scanner {
   }
 
   /**
+   * Maximum number of {@link KeyValue}s the server is allowed to return.
+   * @see #setMaxNumKeyValues
+   * @since 1.5
+   */
+  public int getMaxNumKeyValues() {
+    return max_num_kvs;
+  }
+
+  /**
    * Sets the maximum number of versions to return for each cell scanned.
    * <p>
    * By default a scanner will only return the most recent version of
