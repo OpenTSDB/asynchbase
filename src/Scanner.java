@@ -160,6 +160,15 @@ public final class Scanner {
   private int max_num_kvs = DEFAULT_MAX_NUM_KVS;
 
   /**
+   * Maximum number of bytes to fetch at a time.
+   * Except that HBase won't truncate a row in the middle or what,
+   * so we could potentially go a bit above that.
+   * Only used when talking to HBase 0.95 and up.
+   * @see #setMaxNumBytes
+   */
+  private long max_num_bytes = ~HBaseRpc.MAX_BYTE_ARRAY_MASK;
+
+  /**
    * How many versions of each cell to retrieve.
    */
   private int versions = 1;
@@ -519,6 +528,37 @@ public final class Scanner {
    */
   public int getMaxVersions() {
     return versions;
+  }
+
+  /**
+   * Sets the maximum number of bytes returned at once by the scanner.
+   * <p>
+   * HBase may actually return more than this many bytes because it will not
+   * truncate a row in the middle.
+   * <p>
+   * This value is only used when communicating with HBase 0.95 and newer.
+   * For older versions of HBase this value is silently ignored.
+   * @param max_num_bytes A strictly positive number of bytes.
+   * @since 1.5
+   * @throws IllegalStateException if scanning already started.
+   * @throws IllegalArgumentException if {@code max_num_bytes <= 0}
+   */
+  public void setMaxNumBytes(final long max_num_bytes) {
+    if (max_num_bytes <= 0) {
+      throw new IllegalArgumentException("Need a strictly positive number of"
+                                         + " bytes, got " + max_num_bytes);
+    }
+    checkScanningNotStarted();
+    this.max_num_bytes = max_num_bytes;
+  }
+
+  /**
+   * Returns the maximum number of bytes returned at once by the scanner.
+   * @see #setMaxNumBytes
+   * @since 1.5
+   */
+  public long getMaxNumBytes() {
+    return max_num_bytes;
   }
 
   /**
@@ -1214,6 +1254,7 @@ public final class Scanner {
         scan.setCacheBlocks(false);
       }
       scan.setBatchSize(max_num_kvs);
+      scan.setMaxResultSize(max_num_bytes);
       final ScanRequest req = ScanRequest.newBuilder()
         .setRegion(region.toProtobuf())
         .setScan(scan.build())

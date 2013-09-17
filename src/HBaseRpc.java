@@ -783,7 +783,7 @@ public abstract class HBaseRpc {
    * The Hadoop RPC protocol doesn't do any checksumming as they probably
    * assumed that TCP checksums would be sufficient (they're not).
    */
-  private static final long MAX_BYTE_ARRAY_MASK =
+  static final long MAX_BYTE_ARRAY_MASK =
     0xFFFFFFFFF0000000L;  // => max = 256MB
 
   /**
