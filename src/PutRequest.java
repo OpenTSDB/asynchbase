@@ -578,6 +578,7 @@ public final class PutRequest extends BatchableRpc
 
   @Override
   Object deserialize(final ChannelBuffer buf, int cell_size) {
+    HBaseRpc.ensureNoCell(cell_size);
     final MutateResponse resp = readProtobuf(buf, MutateResponse.PARSER);
     return null;
   }

@@ -1441,6 +1441,7 @@ public final class Scanner {
 
     @Override
     Object deserialize(final ChannelBuffer buf, final int cell_size) {
+      HBaseRpc.ensureNoCell(cell_size);
       final ScanResponse resp = readProtobuf(buf, ScanResponse.PARSER);
       final long id = resp.getScannerId();
       if (scanner_id != id) {

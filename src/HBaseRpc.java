@@ -338,6 +338,19 @@ public abstract class HBaseRpc {
   }
 
   /**
+   * Throws an exception if the argument is non-zero.
+   */
+  static void ensureNoCell(final int cell_size) {
+    if (cell_size != 0) {
+      throw new InvalidResponseException(
+        "Should not have gotten any cell blocks, yet there are "
+        + cell_size + " bytes that follow the protobuf response."
+        + "  This should never happen."
+        + "  Are you using an incompatible version of HBase?", null);
+    }
+  }
+
+  /**
    * The Deferred that will be invoked when this RPC completes or fails.
    * In case of a successful completion, this Deferred's first callback
    * will be invoked with an {@link Object} containing the de-serialized
