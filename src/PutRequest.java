@@ -28,6 +28,10 @@ package org.hbase.async;
 
 import org.jboss.netty.buffer.ChannelBuffer;
 
+import org.hbase.async.generated.ClientPB.MutateRequest;
+import org.hbase.async.generated.ClientPB.MutateResponse;
+import org.hbase.async.generated.ClientPB.MutationProto;
+
 /**
  * Puts some data into HBase.
  *
@@ -62,7 +66,8 @@ public final class PutRequest extends BatchableRpc
              HBaseRpc.HasQualifiers, HBaseRpc.HasValues, HBaseRpc.IsEdit,
              /* legacy: */ HBaseRpc.HasQualifier, HBaseRpc.HasValue {
 
-  private static final byte[] PUT = new byte[] { 'p', 'u', 't' };
+  /** RPC Method name for HBase 0.94 and earlier.  */
+  private static final byte[] PUT = { 'p', 'u', 't' };
 
   /** Code type used for serialized `Put' objects.  */
   static final byte CODE = 35;
@@ -372,7 +377,10 @@ public final class PutRequest extends BatchableRpc
   }
 
   @Override
-  byte[] method(final byte unused_server_version) {
+  byte[] method(final byte server_version) {
+    if (server_version >= RegionClient.SERVER_VERSION_095_OR_ABOVE) {
+      return MUTATE;
+    }
     return PUT;
   }
 
@@ -519,6 +527,42 @@ public final class PutRequest extends BatchableRpc
   /** Serializes this request.  */
   @Override
   ChannelBuffer serialize(final byte server_version) {
+    if (server_version < RegionClient.SERVER_VERSION_095_OR_ABOVE) {
+      return serializeOld(server_version);
+    }
+
+    final MutationProto.ColumnValue.Builder columns =  // All columns ...
+      MutationProto.ColumnValue.newBuilder()
+      .setFamily(Bytes.wrap(family));                  // ... for this family.
+
+    // Now add all the qualifier-value pairs.
+    for (int i = 0; i < qualifiers.length; i++) {
+      final MutationProto.ColumnValue.QualifierValue column =
+        MutationProto.ColumnValue.QualifierValue.newBuilder()
+        .setQualifier(Bytes.wrap(qualifiers[i]))
+        .setValue(Bytes.wrap(values[i]))
+        .setTimestamp(timestamp)
+        .build();
+      columns.addQualifierValue(column);
+    }
+
+    final MutationProto.Builder put = MutationProto.newBuilder()
+      .setRow(Bytes.wrap(key))
+      .setMutateType(MutationProto.MutationType.PUT)
+      .addColumnValue(columns);
+    if (!durable) {
+      put.setDurability(MutationProto.Durability.SKIP_WAL);
+    }
+
+    final MutateRequest req = MutateRequest.newBuilder()
+      .setRegion(region.toProtobuf())
+      .setMutation(put.build())
+      .build();
+    return toChannelBuffer(MUTATE, req);
+  }
+
+  /** Serializes this request for HBase 0.94 and before.  */
+  private ChannelBuffer serializeOld(final byte server_version) {
     final ChannelBuffer buf = newBuffer(server_version,
                                         predictSerializedSize());
     buf.writeInt(2);  // Number of parameters.
@@ -530,6 +574,12 @@ public final class PutRequest extends BatchableRpc
     serializeInto(buf);
 
     return buf;
+  }
+
+  @Override
+  Object deserialize(final ChannelBuffer buf, int cell_size) {
+    final MutateResponse resp = readProtobuf(buf, MutateResponse.PARSER);
+    return null;
   }
 
   /** Serialize the raw underlying `Put' into the given buffer.  */

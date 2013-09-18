@@ -162,7 +162,7 @@ public abstract class HBaseRpc {
    */
   interface IsEdit {
     /** RPC method name to use with HBase 0.95+.  */
-    static final byte[] MUTATE = new byte[] { 'M', 'u', 't', 'a', 't', 'e' };
+    static final byte[] MUTATE = { 'M', 'u', 't', 'a', 't', 'e' };
   }
 
   /*
