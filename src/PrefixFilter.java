@@ -32,8 +32,9 @@ public class PrefixFilter extends ScanFilter {
     buf.writeByte((byte) FILTERBYTES.length);       // 1
     buf.writeBytes(FILTERBYTES);                   // 43
     // write the bytes of the prefix
-    buf.writeByte((byte)prefix.length);             // 1
-    buf.writeBytes(prefix);                         // prefix.length
+    //buf.writeByte((byte)prefix.length);             // 1
+    //buf.writeBytes(prefix);                         // prefix.length
+    HBaseRpc.writeByteArray(buf, prefix);
   }
 
   @Override
