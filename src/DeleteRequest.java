@@ -26,8 +26,11 @@
  */
 package org.hbase.async;
 
-
 import org.jboss.netty.buffer.ChannelBuffer;
+
+import org.hbase.async.generated.ClientPB.MutateRequest;
+import org.hbase.async.generated.ClientPB.MutateResponse;
+import org.hbase.async.generated.ClientPB.MutationProto;
 
 /**
  * Deletes some data into HBase.
@@ -407,8 +410,10 @@ public final class DeleteRequest extends BatchableRpc
   }
 
   @Override
-  byte[] method(final byte unused_server_version) {
-    return DELETE;
+  byte[] method(final byte server_version) {
+    return (server_version >= RegionClient.SERVER_VERSION_095_OR_ABOVE
+            ? MUTATE
+            : DELETE);
   }
 
   @Override
@@ -524,6 +529,50 @@ public final class DeleteRequest extends BatchableRpc
 
   /** Serializes this request.  */
   ChannelBuffer serialize(final byte server_version) {
+    if (server_version < RegionClient.SERVER_VERSION_095_OR_ABOVE) {
+      return serializeOld(server_version);
+    }
+
+    final MutationProto.Builder del = MutationProto.newBuilder()
+      .setRow(Bytes.wrap(key))
+      .setMutateType(MutationProto.MutationType.DELETE);
+
+    if (family != WHOLE_ROW) {
+      final MutationProto.ColumnValue.Builder columns = // All columns ...
+        MutationProto.ColumnValue.newBuilder()
+        .setFamily(Bytes.wrap(family));                 // ... for this family.
+
+      final MutationProto.DeleteType type =
+        (qualifiers == DELETE_FAMILY_MARKER
+         ? MutationProto.DeleteType.DELETE_FAMILY
+         : MutationProto.DeleteType.DELETE_MULTIPLE_VERSIONS);
+
+      // Now add all the qualifiers to delete.
+      for (int i = 0; i < qualifiers.length; i++) {
+        final MutationProto.ColumnValue.QualifierValue column =
+          MutationProto.ColumnValue.QualifierValue.newBuilder()
+          .setQualifier(Bytes.wrap(qualifiers[i]))
+          .setTimestamp(timestamp)
+          .setDeleteType(type)
+          .build();
+        columns.addQualifierValue(column);
+      }
+      del.addColumnValue(columns);
+    }
+
+    if (!durable) {
+      del.setDurability(MutationProto.Durability.SKIP_WAL);
+    }
+
+    final MutateRequest req = MutateRequest.newBuilder()
+      .setRegion(region.toProtobuf())
+      .setMutation(del.build())
+      .build();
+    return toChannelBuffer(MUTATE, req);
+  }
+
+  /** Serializes this request for HBase 0.94 and before.  */
+  private ChannelBuffer serializeOld(final byte server_version) {
     final ChannelBuffer buf = newBuffer(server_version,
                                         predictSerializedSize());
     buf.writeInt(2);  // Number of parameters.
@@ -551,6 +600,13 @@ public final class DeleteRequest extends BatchableRpc
     buf.writeInt(qualifiers.length);  // How many KeyValues for this family?
     serializePayload(buf);
     return buf;
+  }
+
+  @Override
+  Object deserialize(final ChannelBuffer buf, int cell_size) {
+    HBaseRpc.ensureNoCell(cell_size);
+    final MutateResponse resp = readProtobuf(buf, MutateResponse.PARSER);
+    return null;
   }
 
 }
