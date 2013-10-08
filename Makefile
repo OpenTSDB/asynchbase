@@ -78,15 +78,16 @@ asynchbase_SOURCES := \
 	src/VersionMismatchException.java	\
 	src/jsr166e/LongAdder.java	\
 	src/jsr166e/Striped64.java	\
-	src/ScanFilter.java		\
+	src/ScanFilter.java	\
 	src/ColumnPrefixFilter.java	\
 	src/ColumnRangeFilter.java	\
-	src/FilterList.java		\
-	src/PrefixFilter.java		\
-	src/RowFilter.java		\
+	src/FilterList.java	\
+	src/PrefixFilter.java	\
+	src/RowFilter.java	\
 	src/QualifierFilter.java	\
 	src/FirstKeyOnlyFilter.java	\
 	src/FuzzyRowFilter.java	\
+	
 
 
 asynchbase_LIBADD := \

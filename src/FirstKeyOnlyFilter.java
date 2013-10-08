@@ -4,7 +4,7 @@ import org.jboss.netty.buffer.ChannelBuffer;
 
 public class FirstKeyOnlyFilter extends ScanFilter {
 
-    private static final String FILTERNAME =  "org.apache.hadoop.hbase.filter.FirstKeyOnlyFilter";
+    private static final String FILTERNAME = "org.apache.hadoop.hbase.filter.FirstKeyOnlyFilter";
 
     private static final byte[] FILTERBYTES = Bytes.ISO88591(FILTERNAME);
 
