@@ -472,6 +472,11 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
     'V', 'e', 'r', 's', 'i', 'o', 'n'
   };
 
+  /**
+   * RPC used to discover the exact protocol version spoken by the server.
+   * Not exposed as part of the public API, and only used when talking to
+   * HBase 0.94.x and earlier.
+   */
   private final static class GetProtocolVersionRequest extends HBaseRpc {
 
     @Override
@@ -494,6 +499,12 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
                      ?  SERVER_VERSION_090_AND_BEFORE : server_version);
       return buf;
     }
+
+    @Override
+    Object deserialize(final ChannelBuffer buf, final int cell_size) {
+      throw new AssertionError("Should never be here.");
+    }
+
   };
 
   /** Callback to handle responses of getProtocolVersion RPCs.  */
