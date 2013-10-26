@@ -334,10 +334,10 @@ final public class TestIntegration {
   @Test
   public void bufferedIncrementStressTest() throws Exception {
     client.setFlushInterval(FAST_FLUSH);
-    final byte[] table = this.table.getBytes();
+    final byte[] table = TestIntegration.table.getBytes();
     final byte[] key1 = "cnt1".getBytes();  // Spread the increments..
     final byte[] key2 = "cnt2".getBytes();  // .. over these two counters.
-    final byte[] family = this.family.getBytes();
+    final byte[] family = TestIntegration.family.getBytes();
     final byte[] qual = { 'q' };
     final DeleteRequest del1 = new DeleteRequest(table, key1, family, qual);
     final DeleteRequest del2 = new DeleteRequest(table, key2, family, qual);
@@ -407,9 +407,9 @@ final public class TestIntegration {
   @Test
   public void incrementCoalescingWithAmountsTooBig() throws Exception {
     client.setFlushInterval(SLOW_FLUSH);
-    final byte[] table = this.table.getBytes();
+    final byte[] table = TestIntegration.table.getBytes();
     final byte[] key = "cnt".getBytes();
-    final byte[] family = this.family.getBytes();
+    final byte[] family = TestIntegration.family.getBytes();
     final byte[] qual = { 'q' };
     final DeleteRequest del = new DeleteRequest(table, key, family, qual);
     del.setBufferable(false);
@@ -436,9 +436,9 @@ final public class TestIntegration {
   @Test
   public void incrementCoalescingWithOverflowingAmounts() throws Exception {
     client.setFlushInterval(SLOW_FLUSH);
-    final byte[] table = this.table.getBytes();
+    final byte[] table = TestIntegration.table.getBytes();
     final byte[] key = "cnt".getBytes();
-    final byte[] family = this.family.getBytes();
+    final byte[] family = TestIntegration.family.getBytes();
     final byte[] qual = { 'q' };
     final DeleteRequest del = new DeleteRequest(table, key, family, qual);
     del.setBufferable(false);
@@ -464,9 +464,9 @@ final public class TestIntegration {
   @Test
   public void incrementCoalescingWithUnderflowingAmounts() throws Exception {
     client.setFlushInterval(SLOW_FLUSH);
-    final byte[] table = this.table.getBytes();
+    final byte[] table = TestIntegration.table.getBytes();
     final byte[] key = "cnt".getBytes();
-    final byte[] family = this.family.getBytes();
+    final byte[] family = TestIntegration.family.getBytes();
     final byte[] qual = { 'q' };
     final DeleteRequest del = new DeleteRequest(table, key, family, qual);
     del.setBufferable(false);
@@ -492,9 +492,9 @@ final public class TestIntegration {
   @Test
   public void incrementCoalescingWithZeroSumAmount() throws Exception {
     client.setFlushInterval(SLOW_FLUSH);
-    final byte[] table = this.table.getBytes();
+    final byte[] table = TestIntegration.table.getBytes();
     final byte[] key = "cnt".getBytes();
-    final byte[] family = this.family.getBytes();
+    final byte[] family = TestIntegration.family.getBytes();
     final byte[] qual = { 'q' };
     final DeleteRequest del = new DeleteRequest(table, key, family, qual);
     del.setBufferable(false);
@@ -702,7 +702,7 @@ final public class TestIntegration {
     // long key below.
     client.ensureTableFamilyExists(table, family).join();
     client.setFlushInterval(FAST_FLUSH);
-    final byte[] table = this.table.getBytes();
+    final byte[] table = TestIntegration.table.getBytes();
     // 980 was empirically found to be the minimum size with which
     // Netty bug #474 gets triggered.  Bug got fixed in Netty 3.5.8.
     final byte[] key = new byte[980];
@@ -710,7 +710,7 @@ final public class TestIntegration {
     key[1] = '4';
     key[2] = '0';
     key[key.length - 1] = '*';
-    final byte[] family = this.family.getBytes();
+    final byte[] family = TestIntegration.family.getBytes();
     final byte[] qual = { 'q' };
     final PutRequest put = new PutRequest(table, key, family, qual,
                                           new byte[0] /* empty */);
@@ -727,9 +727,9 @@ final public class TestIntegration {
   @Test
   public void regression41() throws Exception {
     client.setFlushInterval(SLOW_FLUSH);
-    final byte[] table = this.table.getBytes();
+    final byte[] table = TestIntegration.table.getBytes();
     final byte[] key = "cnt".getBytes();
-    final byte[] family = this.family.getBytes();
+    final byte[] family = TestIntegration.family.getBytes();
     final byte[] qual = { 'q' };
     final DeleteRequest del = new DeleteRequest(table, key, family, qual);
     del.setBufferable(false);

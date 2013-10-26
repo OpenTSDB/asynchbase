@@ -79,7 +79,7 @@ implements HasFailedRpcException {
   private final HBaseRpc rpc;
 
   /** A deferred one can wait on before retrying the failed RPC.  */
-  private final Deferred deferred;
+  private final Deferred<?> deferred;
 
   /**
    * Constructor.
@@ -92,7 +92,7 @@ implements HasFailedRpcException {
   PleaseThrottleException(final String msg,
                           final HBaseException cause,
                           final HBaseRpc rpc,
-                          final Deferred deferred) {
+                          final Deferred<?> deferred) {
     super(msg, cause);
     this.rpc = rpc;
     this.deferred = deferred;
@@ -109,7 +109,7 @@ implements HasFailedRpcException {
    * Returns a deferred one can wait on before retrying the failed RPC.
    * @since 1.3
    */
-  public Deferred getDeferred() {
+  public Deferred<?> getDeferred() {
     return deferred;
   }
 
