@@ -210,7 +210,7 @@ final class MultiAction extends HBaseRpc implements HBaseRpc.IsEdit {
       return serializeOld(server_version);
     }
 
-    Collections.sort(batch, MULTI_CMP);
+    Collections.sort(batch, SORT_BY_REGION);
     final MultiRequest.Builder req = MultiRequest.newBuilder();
     RegionAction.Builder actions = null;
     byte[] prev_region = HBaseClient.EMPTY_ARRAY;
@@ -470,7 +470,10 @@ final class MultiAction extends HBaseRpc implements HBaseRpc.IsEdit {
    */
   static final MultiActionComparator MULTI_CMP = new MultiActionComparator();
 
-  /** Sorts {@link BatchableRpc}s appropriately for the `multi' RPC.  */
+  /**
+   * Sorts {@link BatchableRpc}s appropriately for the `multi' RPC.
+   * Used with HBase 0.94 and earlier only.
+   */
   private static final class MultiActionComparator
     implements Comparator<BatchableRpc> {
 
@@ -494,6 +497,29 @@ final class MultiAction extends HBaseRpc implements HBaseRpc.IsEdit {
         return d;
       }
       return Bytes.memcmp(a.family(), b.family());
+    }
+
+  }
+
+  /**
+   * Sorts {@link BatchableRpc}s appropriately for HBase 0.95+ multi-action.
+   */
+  static final RegionComparator SORT_BY_REGION = new RegionComparator();
+
+  /**
+   * Sorts {@link BatchableRpc}s by region.
+   * Used with HBase 0.95+ only.
+   */
+  private static final class RegionComparator
+    implements Comparator<BatchableRpc> {
+
+    private RegionComparator() {  // Can't instantiate outside of this class.
+    }
+
+    @Override
+    /** Compares two RPCs.  */
+    public int compare(final BatchableRpc a, final BatchableRpc b) {
+      return Bytes.memcmp(a.getRegion().name(), b.getRegion().name());
     }
 
   }
