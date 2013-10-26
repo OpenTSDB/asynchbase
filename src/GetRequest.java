@@ -338,14 +338,14 @@ public final class GetRequest extends HBaseRpc
     if (versions != 1) {
       getpb.setMaxVersions(versions);
     }
+    if (!isGetRequest()) {
+      getpb.setExistenceOnly(true);
+    }
 
     final ClientPB.GetRequest.Builder get = ClientPB.GetRequest.newBuilder()
       .setRegion(region.toProtobuf())
       .setGet(getpb.build());
 
-    if (!isGetRequest()) {
-      get.setExistenceOnly(true);
-    }
     return toChannelBuffer(GetRequest.GGET, get.build());
   }
 
@@ -410,7 +410,8 @@ public final class GetRequest extends HBaseRpc
     if (isGetRequest()) {
       return extractResponse(resp, buf, cell_size);
     } else {
-      return resp.getExists();
+      final ClientPB.Result result = resp.getResult();
+      return result != null ? result.getExists() : false;  // is `null' possible here?
     }
   }
 

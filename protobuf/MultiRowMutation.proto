@@ -22,14 +22,20 @@ option java_generate_equals_and_hash = false;
 option java_generic_services = false;
 option optimize_for = LITE_RUNTIME;
 
-message MultiMutateRequest {
+message MultiRowMutationProcessorRequest {
+}
+
+message MultiRowMutationProcessorResponse {
+}
+
+message MutateRowsRequest {
   repeated MutationProto mutation_request = 1;
 }
 
-message MultiMutateResponse {
+message MutateRowsResponse {
 }
 
 service MultiRowMutationService {
-  rpc MutateRows(MultiMutateRequest)
-      returns(MultiMutateResponse);
+  rpc MutateRows(MutateRowsRequest)
+      returns(MutateRowsResponse);
 }

@@ -643,11 +643,11 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
         final ClientPB.Get getpb = ClientPB.Get.newBuilder()
           .setRow(Bytes.wrap(row))
           .addColumn(FAM_INFO)  // Fetch from one family only.
+          .setClosestRowBefore(true)
           .build();
         final ClientPB.GetRequest get = ClientPB.GetRequest.newBuilder()
           .setRegion(region.toProtobuf())
           .setGet(getpb)
-          .setClosestRowBefore(true)
           .build();
         return toChannelBuffer(GetRequest.GGET, get);
       }
