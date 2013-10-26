@@ -31,6 +31,11 @@ import org.jboss.netty.buffer.ChannelBuffer;
 /**
  * Acquires an explicit row lock.
  * <p>
+ * <strong>Row locks are no longer supported as of HBase 0.96.</strong>
+ * While they can still be used with earlier HBase versions,
+ * attempting to use them with HBase 0.95 and up will cause a
+ * {@link UnsupportedOperationException} to be thrown.
+ * <p>
  * For a description of what row locks are, see {@link RowLock}.
  *
  * <h1>A note on passing {@code byte} arrays in argument</h1>
@@ -98,6 +103,11 @@ public final class RowLockRequest extends HBaseRpc
 
   /** Serializes this request.  */
   ChannelBuffer serialize(final byte server_version) {
+    if (server_version >= RegionClient.SERVER_VERSION_095_OR_ABOVE) {
+      throw new UnsupportedOperationException("Row locks are not supported with"
+                                              + " this version of HBase ("
+                                              + server_version + ").");
+    }
     final ChannelBuffer buf = newBuffer(server_version,
                                         predictSerializedSize());
     buf.writeInt(2);  // Number of parameters.
@@ -106,6 +116,11 @@ public final class RowLockRequest extends HBaseRpc
     writeHBaseByteArray(buf, key);
 
     return buf;
+  }
+
+  @Override
+  Object deserialize(final ChannelBuffer buf, int cell_size) {
+    throw new AssertionError("Should never be here.");
   }
 
   /**
@@ -147,6 +162,11 @@ public final class RowLockRequest extends HBaseRpc
       writeHBaseByteArray(buf, region.name());
       writeHBaseLong(buf, lock.id());
       return buf;
+    }
+
+    @Override
+    Object deserialize(final ChannelBuffer buf, final int cell_size) {
+      throw new AssertionError("Should never be here.");
     }
 
   }
