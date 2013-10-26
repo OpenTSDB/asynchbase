@@ -524,13 +524,8 @@ public final class PutRequest extends BatchableRpc
     return size;
   }
 
-  /** Serializes this request.  */
   @Override
-  ChannelBuffer serialize(final byte server_version) {
-    if (server_version < RegionClient.SERVER_VERSION_095_OR_ABOVE) {
-      return serializeOld(server_version);
-    }
-
+  MutationProto toMutationProto() {
     final MutationProto.ColumnValue.Builder columns =  // All columns ...
       MutationProto.ColumnValue.newBuilder()
       .setFamily(Bytes.wrap(family));                  // ... for this family.
@@ -553,10 +548,19 @@ public final class PutRequest extends BatchableRpc
     if (!durable) {
       put.setDurability(MutationProto.Durability.SKIP_WAL);
     }
+    return put.build();
+  }
+
+  /** Serializes this request.  */
+  @Override
+  ChannelBuffer serialize(final byte server_version) {
+    if (server_version < RegionClient.SERVER_VERSION_095_OR_ABOVE) {
+      return serializeOld(server_version);
+    }
 
     final MutateRequest req = MutateRequest.newBuilder()
       .setRegion(region.toProtobuf())
-      .setMutation(put.build())
+      .setMutation(toMutationProto())
       .build();
     return toChannelBuffer(MUTATE, req);
   }

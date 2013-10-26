@@ -28,6 +28,8 @@ package org.hbase.async;
 
 import org.jboss.netty.buffer.ChannelBuffer;
 
+import org.hbase.async.generated.ClientPB.MutationProto;
+
 /**
  * An intermediate abstract class for all RPC requests that can be batched.
  * <p>
@@ -132,6 +134,15 @@ abstract class BatchableRpc extends HBaseRpc
     // complete ASAP so as to not hold the lock for too long.
     return lockid == RowLock.NO_LOCK && bufferable;
   }
+
+  /**
+   * Transforms this edit into a MutationProto for HBase 0.95+.
+   */
+  abstract MutationProto toMutationProto();
+
+  // ----------------------------------------------- //
+  // Serialization helpers for HBase 0.94 and before //
+  // ----------------------------------------------- //
 
   /**
    * Serialization version for this RPC.

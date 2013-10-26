@@ -527,12 +527,8 @@ public final class DeleteRequest extends BatchableRpc
     return size;
   }
 
-  /** Serializes this request.  */
-  ChannelBuffer serialize(final byte server_version) {
-    if (server_version < RegionClient.SERVER_VERSION_095_OR_ABOVE) {
-      return serializeOld(server_version);
-    }
-
+  @Override
+  MutationProto toMutationProto() {
     final MutationProto.Builder del = MutationProto.newBuilder()
       .setRow(Bytes.wrap(key))
       .setMutateType(MutationProto.MutationType.DELETE);
@@ -563,10 +559,18 @@ public final class DeleteRequest extends BatchableRpc
     if (!durable) {
       del.setDurability(MutationProto.Durability.SKIP_WAL);
     }
+    return del.build();
+  }
+
+  /** Serializes this request.  */
+  ChannelBuffer serialize(final byte server_version) {
+    if (server_version < RegionClient.SERVER_VERSION_095_OR_ABOVE) {
+      return serializeOld(server_version);
+    }
 
     final MutateRequest req = MutateRequest.newBuilder()
       .setRegion(region.toProtobuf())
-      .setMutation(del.build())
+      .setMutation(toMutationProto())
       .build();
     return toChannelBuffer(MUTATE, req);
   }

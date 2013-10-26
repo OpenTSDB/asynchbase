@@ -277,6 +277,59 @@ final public class TestIntegration {
     assertEq("val3", kvs.get(1).value());
   }
 
+  /** Write a few KVs and delete them in one batch */
+  @Test
+  public void multiDelete() throws Exception {
+    client.setFlushInterval(FAST_FLUSH);
+    final PutRequest put2 = new PutRequest(table, "mdk1", family, "q2", "val2");
+    client.put(put2).join();
+    final PutRequest put3 = new PutRequest(table, "mdk2", family, "q3", "val3");
+    client.put(put3).join();
+    final PutRequest put1 = new PutRequest(table, "mdk1", family, "q1", "val1");
+    client.put(put1).join();
+    final DeleteRequest del2 = new DeleteRequest(table, "mdk1", family, "q2");
+    final DeleteRequest del3 = new DeleteRequest(table, "mdk2", family, "q3");
+    final DeleteRequest del1 = new DeleteRequest(table, "mdk1", family, "q1");
+    Deferred.group(client.delete(del2), client.delete(del3),
+                   client.delete(del1)).join();
+    GetRequest get = new GetRequest(table, "mdk1");
+    ArrayList<KeyValue> kvs = client.get(get).join();
+    assertSizeIs(0, kvs);
+    get = new GetRequest(table, "mdk2");
+    kvs = client.get(get).join();
+    assertSizeIs(0, kvs);
+  }
+
+  /** Write a few KVs in different regions and delete them in one batch */
+  @Test
+  public void multiRegionMultiDelete() throws Exception {
+    client.setFlushInterval(FAST_FLUSH);
+    final String table1 = args[0] + "1";
+    final String table2 = args[0] + "2";
+    createOrTruncateTable(client, table1, family);
+    createOrTruncateTable(client, table2, family);
+    final PutRequest put2 = new PutRequest(table1, "mdk1", family, "q2", "val2");
+    client.put(put2).join();
+    final PutRequest put3 = new PutRequest(table1, "mdk2", family, "q3", "val3");
+    client.put(put3).join();
+    final PutRequest put1 = new PutRequest(table2, "mdk1", family, "q1", "val1");
+    client.put(put1).join();
+    final DeleteRequest del2 = new DeleteRequest(table1, "mdk1", family, "q2");
+    final DeleteRequest del3 = new DeleteRequest(table1, "mdk2", family, "q3");
+    final DeleteRequest del1 = new DeleteRequest(table2, "mdk1", family, "q1");
+    Deferred.group(client.delete(del2), client.delete(del3),
+                   client.delete(del1)).join();
+    GetRequest get = new GetRequest(table1, "mdk1");
+    ArrayList<KeyValue> kvs = client.get(get).join();
+    assertSizeIs(0, kvs);
+    get = new GetRequest(table1, "mdk2");
+    kvs = client.get(get).join();
+    assertSizeIs(0, kvs);
+    get = new GetRequest(table2, "mdk1");
+    kvs = client.get(get).join();
+    assertSizeIs(0, kvs);
+  }
+
   /** Lots of buffered counter increments from multiple threads. */
   @Test
   public void bufferedIncrementStressTest() throws Exception {

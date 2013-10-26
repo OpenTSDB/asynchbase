@@ -61,6 +61,7 @@ import com.stumbleupon.async.Callback;
 import com.stumbleupon.async.Deferred;
 
 import org.hbase.async.generated.ClientPB;
+import org.hbase.async.generated.HBasePB;
 import org.hbase.async.generated.RPCPB;
 
 /**
@@ -1452,6 +1453,22 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
       type = "(missing exception type)";  // Shouldn't happen.
     }
     return makeException(request, type, e.getStackTrace());
+  }
+
+  /**
+   * Decodes an exception from HBase 0.95 and up {@link HBasePB.NameBytesPair}.
+   * @param pair A pair whose name is the exception type, and whose value is
+   * the stringified stack trace.
+   */
+  static HBaseException decodeExceptionPair(final HBaseRpc request,
+                                            final HBasePB.NameBytesPair pair) {
+    final String stacktrace;
+    if (pair.hasValue()) {
+      stacktrace = pair.getValue().toStringUtf8();
+    } else {
+      stacktrace = "(missing server-side stack trace)";  // Shouldn't happen.
+    }
+    return makeException(request, pair.getName(), stacktrace);
   }
 
   /**

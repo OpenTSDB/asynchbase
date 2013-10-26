@@ -330,12 +330,7 @@ public abstract class HBaseRpc {
    * protobuf of the RPC response.  If 0, then there is just the protobuf.
    * The value is guaranteed to be both positive and of a "reasonable" size.
    */
-   /*abstract*/ Object deserialize(ChannelBuffer buf, int cell_size) {
-     // This method ought to be abstract, and will be once we have all RPC
-     // objects converted to be HBase 0.95+ compatible.
-     throw new UnsupportedOperationException("Not implemented yet on "
-                                             + getClass().getName());
-  }
+   abstract Object deserialize(ChannelBuffer buf, int cell_size);
 
   /**
    * Throws an exception if the argument is non-zero.
