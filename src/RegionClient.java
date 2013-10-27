@@ -276,7 +276,11 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
         adj >>>= 2;  // Reduce the adjustment to not be too far off `interval'.
       }
       if ((adj & 0x10) == 0x10) {  // if some arbitrary bit is set...
-        adj = (short) -adj;        // ... use a negative adjustment instead.
+        if (adj < interval) {
+          adj = (short) -adj;      // ... use a negative adjustment instead.
+        } else {
+          adj = (short) (interval / -2);
+        }
       }
       hbase_client.newTimeout(flush_timer, interval + adj);
     }
