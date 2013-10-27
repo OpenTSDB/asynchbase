@@ -179,8 +179,7 @@ final public class TestIntegration {
     client.setFlushInterval(FAST_FLUSH);
     final double write_time = System.currentTimeMillis();
     final PutRequest put = new PutRequest(table, "k", family, "q", "val");
-    final GetRequest get = new GetRequest(table, "k")
-      .family(family).qualifier("q");
+    final GetRequest get = new GetRequest(table, "k", family, "q");
     client.put(put).join();
     final ArrayList<KeyValue> kvs = client.get(get).join();
     assertSizeIs(1, kvs);
@@ -198,8 +197,7 @@ final public class TestIntegration {
   public void putReadDeleteRead() throws Exception {
     client.setFlushInterval(FAST_FLUSH);
     final PutRequest put = new PutRequest(table, "k", family, "q", "val");
-    final GetRequest get = new GetRequest(table, "k")
-      .family(family).qualifier("q");
+    final GetRequest get = new GetRequest(table, "k", family, "q");
     client.put(put).join();
     final ArrayList<KeyValue> kvs = client.get(get).join();
     assertSizeIs(1, kvs);

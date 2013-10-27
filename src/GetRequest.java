@@ -96,6 +96,70 @@ public final class GetRequest extends HBaseRpc
   }
 
   /**
+   * Constructor.
+   * <strong>These byte arrays will NOT be copied.</strong>
+   * @param table The non-empty name of the table to use.
+   * @param key The row key to get in that table.
+   * @param family The column family.
+   * @since 1.5
+   */
+  public GetRequest(final byte[] table,
+                    final byte[] key,
+                    final byte[] family) {
+    super(table, key);
+    this.family(family);
+  }
+
+  /**
+   * Constructor.
+   * @param table The non-empty name of the table to use.
+   * @param key The row key to get in that table.
+   * @param family The column family.
+   * @since 1.5
+   */
+  public GetRequest(final String table,
+                    final String key,
+                    final String family) {
+    this(table, key);
+    this.family(family);
+  }
+
+  /**
+   * Constructor.
+   * <strong>These byte arrays will NOT be copied.</strong>
+   * @param table The non-empty name of the table to use.
+   * @param key The row key to get in that table.
+   * @param family The column family.
+   * @param qualifier The column qualifier.
+   * @since 1.5
+   */
+  public GetRequest(final byte[] table,
+                    final byte[] key,
+                    final byte[] family,
+                    final byte[] qualifier) {
+    super(table, key);
+    this.family(family);
+    this.qualifier(qualifier);
+  }
+
+  /**
+   * Constructor.
+   * @param table The non-empty name of the table to use.
+   * @param key The row key to get in that table.
+   * @param family The column family.
+   * @param qualifier The column qualifier.
+   * @since 1.5
+   */
+  public GetRequest(final String table,
+                    final String key,
+                    final String family,
+                    final String qualifier) {
+    this(table, key);
+    this.family(family);
+    this.qualifier(qualifier);
+  }
+
+  /**
    * Private constructor to build an "exists" RPC.
    * @param unused Unused, simply used to help the compiler find this ctor.
    * @param table The non-empty name of the table to use.
