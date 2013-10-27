@@ -57,8 +57,8 @@ import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
 
 import com.stumbleupon.async.Callback;
-import com.stumbleupon.async.CallbackOverflowError;
 import com.stumbleupon.async.Deferred;
+import com.stumbleupon.async.DeferredGroupException;
 
 import org.hbase.async.AtomicIncrementRequest;
 import org.hbase.async.Bytes;
@@ -70,6 +70,7 @@ import org.hbase.async.GetRequest;
 import org.hbase.async.HBaseClient;
 import org.hbase.async.KeyRegexpFilter;
 import org.hbase.async.KeyValue;
+import org.hbase.async.NoSuchColumnFamilyException;
 import org.hbase.async.PutRequest;
 import org.hbase.async.ScanFilter;
 import org.hbase.async.Scanner;
@@ -328,6 +329,59 @@ final public class TestIntegration {
     assertSizeIs(0, kvs);
   }
 
+  /** Attempt to write a column family that doesn't exist. */
+  @Test
+  public void putNonexistentFamily() throws Exception {
+    client.setFlushInterval(FAST_FLUSH);
+    final PutRequest put = new PutRequest(table, "k", family + family,
+                                          "q", "val");
+    try {
+      client.put(put).join();
+    } catch (NoSuchColumnFamilyException e) {
+      assertEquals(put, e.getFailedRpc());
+      return;
+    }
+    throw new AssertionError("Should never be here");
+  }
+
+  /** Send a bunch of edits with one that references a non-existent family. */
+  @Test
+  public void multiPutWithOneBadRpcInBatch() throws Exception {
+    client.setFlushInterval(FAST_FLUSH);
+    final PutRequest put1 = new PutRequest(table, "mk1", family, "m1", "mpb1");
+    // The following edit is destined to a non-existent family.
+    final PutRequest put2 = new PutRequest(table, "mk2", family + family,
+                                           "m2", "mpb2");
+    final PutRequest put3 = new PutRequest(table, "mk3", family, "m3", "mpb3");
+    try {
+      final ArrayList<Deferred<Object>> ds = new ArrayList<Deferred<Object>>(3);
+      ds.add(client.put(put1));
+      ds.add(client.put(put2));
+      ds.add(client.put(put3));
+      Deferred.groupInOrder(ds).join();
+    } catch (DeferredGroupException e) {
+      final ArrayList<Object> results = e.results();
+      final Object res2 = results.get(1);
+      if (!(res2 instanceof NoSuchColumnFamilyException)) {
+        throw new AssertionError("res2 wasn't a NoSuchColumnFamilyException: "
+                                 + res2);
+      }
+      assertEquals(put2, ((NoSuchColumnFamilyException) res2).getFailedRpc());
+      final GetRequest get1 = new GetRequest(table, "mk1", family, "m1");
+      ArrayList<KeyValue> kvs = client.get(get1).join();
+      assertSizeIs(1, kvs);
+      assertEq("mpb1", kvs.get(0).value());
+      final GetRequest get2 = new GetRequest(table, "mk2", family, "m2");
+      assertSizeIs(0, client.get(get2).join());
+      final GetRequest get3 = new GetRequest(table, "mk3", family, "m3");
+      kvs = client.get(get3).join();
+      assertSizeIs(1, kvs);
+      assertEq("mpb3", kvs.get(0).value());
+      return;
+    }
+    throw new AssertionError("Should never be here");
+  }
+
   /** Lots of buffered counter increments from multiple threads. */
   @Test
   public void bufferedIncrementStressTest() throws Exception {
@@ -417,8 +471,8 @@ final public class TestIntegration {
       bufferIncrement(table, key, family, qual, big),
       bufferIncrement(table, key, family, qual, big)
     ).addCallbackDeferring(new Callback<Deferred<ArrayList<KeyValue>>,
-                                        ArrayList<Object>>() {
-      public Deferred<ArrayList<KeyValue>> call(final ArrayList<Object> incs) {
+                                        ArrayList<Long>>() {
+      public Deferred<ArrayList<KeyValue>> call(final ArrayList<Long> incs) {
         final GetRequest get = new GetRequest(table, key)
           .family(family).qualifier(qual);
         return client.get(get);
