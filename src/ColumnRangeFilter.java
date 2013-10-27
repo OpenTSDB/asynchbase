@@ -32,6 +32,8 @@ import org.hbase.async.generated.FilterPB;
 
 /**
  * Filters based on a range of column qualifiers.
+ * <p>
+ * This filter is only compatible with HBase 0.92 and newer.
  * @since 1.5
  */
 public final class ColumnRangeFilter extends ScanFilter {
