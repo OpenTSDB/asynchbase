@@ -250,6 +250,11 @@ clean:
 	           $(unittest_classes_with_nested_classes) \
 	           $(test_classes_with_nested_classes) \
 		   *.class
+	for dir in $(top_builddir)/com/google/protobuf \
+	           $(top_builddir)/com/google \
+		   $(top_builddir)/com; do \
+	  test -d $$dir && rmdir $$dir; \
+	done
 	cd $(top_builddir) || exit 0 \
 	  && test -d $(package_dir) || exit 0 \
 	  && dir=$(package_dir) \
