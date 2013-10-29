@@ -236,8 +236,8 @@ NETTY_JAVADOC := http://docs.jboss.org/netty/3.2/api
 SUASYNC_JAVADOC := http://tsunanet.net/~tsuna/async/api
 GUAVA_JAVADOC := http://docs.guava-libraries.googlecode.com/git/javadoc
 JAVADOCS = $(JDK_JAVADOC) $(NETTY_JAVADOC) $(SUASYNC_JAVADOC) $(GUAVA_JAVADOC)
-$(top_builddir)/api/index.html: $(asynchbase_SOURCES)
-	javadoc -d $(top_builddir)/api -classpath $(get_dep_classpath) \
+$(top_builddir)/api/index.html: $(asynchbase_SOURCES) $(jar)
+	javadoc -d $(top_builddir)/api -classpath $(get_dep_classpath):$(jar) \
           `echo $(JAVADOCS) | sed 's/\([^ ]*\)/-link \1/g'` $(asynchbase_SOURCES) \
 	  `find src -name package-info.java`
 
