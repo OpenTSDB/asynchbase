@@ -994,13 +994,8 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
     }
     if (rpcs != null) {
       for (final HBaseRpc rpc : rpcs) {
-        if (chan != null) {
-          LOG.debug("Executing RPC queued: {}", rpc);
-          final ChannelBuffer serialized = encode(rpc);
-          if (serialized != null) {
-            Channels.write(chan, serialized);
-          }
-        }
+        LOG.debug("Executing RPC queued: {}", rpc);
+        sendRpc(rpc);
       }
     }
   }

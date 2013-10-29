@@ -39,6 +39,11 @@ Noteworthy bug fixes:
     failed.
   - There was an unlikely race condition that could cause an NPE while
     trying to retrieve the ROOT region from ZooKeeper.
+  - There was an unlikely race if the client got disconnected right
+    after successfully establishing a connection to a RegionServer, while
+    it was flushing RPC buffered while waiting to be connected.  Also
+    when those RPCs were flushed, the batchable RPCs weren't given a
+    chance to get batched.
 
 
 * Version 1.4.1 (2013-02-14) [1cbc303]
