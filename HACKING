@@ -1,6 +1,17 @@
 Want to contribute?  Great!  This file will guide you through some of
 design decision / ideology you should try to adhere to.
 
+Getting started:
+
+  # You need this & javac on $PATH. The first run will download dependencies.
+  $ make
+
+  # Run the unit tests
+  $ make check
+
+  # Run the integration tests.  See also "Testing" below.
+  $ HBASE_HOME=~/src/hbase make integration ARGS='test f'
+
 The basics:
   - Know the complexity of your algorithms.  When you're calling a
     method in another library, make sure you're aware of the its
