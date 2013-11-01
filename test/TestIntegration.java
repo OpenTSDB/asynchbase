@@ -53,8 +53,10 @@ import org.junit.runner.Request;
 import org.junit.runner.Result;
 import org.junit.runner.notification.Failure;
 import org.junit.runner.notification.RunListener;
+import org.powermock.reflect.Whitebox;
 import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertNotNull;
 
 import com.stumbleupon.async.Callback;
 import com.stumbleupon.async.Deferred;
@@ -732,6 +734,18 @@ final public class TestIntegration {
     kvs = rows.get(1);
     assertSizeIs(1, kvs);   // KV from "fl2":
     assertEq("v4", kvs.get(0).value());
+  }
+
+  @Test
+  public void prefetchMeta() throws Exception {
+    // Prefetch the metadata for a given table, then invasively probe the
+    // region cache to demonstrate it is filled.
+    client.prefetchMeta(table).join();
+
+    Object region_info = Whitebox.invokeMethod(client, "getRegion",
+                                               table.getBytes(),
+                                               HBaseClient.EMPTY_ARRAY);
+    assertNotNull(region_info);
   }
 
   /** Regression test for issue #2. */
