@@ -62,6 +62,23 @@
     <plugins>
 
       <plugin>
+        <groupId>com.google.protobuf.tools</groupId>
+        <artifactId>maven-protoc-plugin</artifactId>
+        <version>0.3.2</version>
+        <configuration>
+          <protocExecutable>protoc</protocExecutable>
+          <protoSourceRoot>${basedir}/protobuf</protoSourceRoot>
+        </configuration>
+        <executions>
+          <execution>
+            <goals>
+              <goal>compile</goal>
+            </goals>
+          </execution>
+        </executions>
+      </plugin>
+
+      <plugin>
         <groupId>org.apache.maven.plugins</groupId>
         <artifactId>maven-compiler-plugin</artifactId>
         <version>2.5.1</version>
@@ -75,7 +92,7 @@
       <plugin>
         <groupId>org.apache.maven.plugins</groupId>
         <artifactId>maven-source-plugin</artifactId>
-        <version>2.1.2</version>
+        <version>2.2.1</version>
         <executions>
           <execution>
             <id>attach-sources</id>
@@ -144,6 +161,12 @@
       <groupId>com.google.guava</groupId>
       <artifactId>guava</artifactId>
       <version>@GUAVA_VERSION@</version>
+    </dependency>
+
+    <dependency>
+      <groupId>com.google.protobuf</groupId>
+      <artifactId>protobuf-java</artifactId>
+      <version>@PROTOBUF_VERSION@</version>
     </dependency>
 
     <dependency>
@@ -255,10 +278,19 @@
     <skipTests>true</skipTests>
   </properties>
 
+  <pluginRepositories>
+    <pluginRepository>
+      <id>protoc-plugin</id>
+      <url>http://sergei-ivanov.github.com/maven-protoc-plugin/repo/releases/</url>
+    </pluginRepository>
+  </pluginRepositories>
+
   <parent>
     <groupId>org.sonatype.oss</groupId>
     <artifactId>oss-parent</artifactId>
     <version>7</version>
+    <!--Empty relativePath is workaround.  See MNG-4687-->
+    <relativePath></relativePath>
   </parent>
 
 </project>
