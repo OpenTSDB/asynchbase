@@ -210,6 +210,37 @@ final public class TestIntegration {
     assertSizeIs(0, kvs2);
   }
 
+  /**
+   * Write two values to a HBase column and read them back,
+   * delete one, and read back the other.
+   */
+  @Test
+  public void putReadDeleteAtTimestamp() throws Exception {
+    client.setFlushInterval(FAST_FLUSH);
+    byte[] t = table.getBytes();
+    byte[] k = "k".getBytes();
+    byte[] f = family.getBytes();
+    byte[] q = "qd".getBytes();
+    byte[] v1 = "val1".getBytes();
+    byte[] v2 = "val2".getBytes();
+    final PutRequest put1 = new PutRequest(t, k, f, q, v1, (long)100);
+    final PutRequest put2 = new PutRequest(t, k, f, q, v2, (long)200);
+    client.put(put1).join();
+    client.put(put2).join();
+    final GetRequest get = new GetRequest(t, k)
+      .family(f).qualifier(q).maxVersions(2);
+    final ArrayList<KeyValue> kvs = client.get(get).join();
+    assertSizeIs(2, kvs);
+    assertEq("val2", kvs.get(0).value());
+    assertEq("val1", kvs.get(1).value());
+    final DeleteRequest del = new DeleteRequest(t, k, f, q, (long)200);
+    del.setDeleteAtTimestampOnly(true);
+    client.delete(del).join();
+    final ArrayList<KeyValue> kvs2 = client.get(get).join();
+    assertSizeIs(1, kvs2);
+    assertEq("val1", kvs2.get(0).value());
+  }
+
   /** Basic scan test. */
   @Test
   public void basicScan() throws Exception {

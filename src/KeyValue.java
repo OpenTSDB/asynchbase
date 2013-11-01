@@ -68,7 +68,8 @@ public final class KeyValue implements Comparable<KeyValue> {
   // Note: type can be one of:
   //   -  4  0b00000100  Put
   static final byte PUT = 4;
-  //   -  8  0b00001000  Delete        (delete only the last version of a cell)
+  //   -  8  0b00001000  Delete        (delete the specified version of a cell)
+  static final byte DELETE = 8;
   //   - 12  0b00001100  DeleteColumn  (delete all previous versions of a cell)
   static final byte DELETE_COLUMN = 12;
   //   - 14  0b01110010  DeleteFamily  (delete all cells within a family)
