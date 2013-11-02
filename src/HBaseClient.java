@@ -2430,7 +2430,10 @@ public final class HBaseClient {
     final SocketChannelConfig config = chan.getConfig();
     config.setConnectTimeoutMillis(5000);
     config.setTcpNoDelay(true);
-    config.setKeepAlive(true);  // TODO(tsuna): Is this really needed?
+    // Unfortunately there is no way to override the keep-alive timeout in
+    // Java since the JRE doesn't expose any way to call setsockopt() with
+    // TCP_KEEPIDLE.  And of course the default timeout is >2h.  Sigh.
+    config.setKeepAlive(true);
     chan.connect(new InetSocketAddress(host, port));  // Won't block.
     return client;
   }
