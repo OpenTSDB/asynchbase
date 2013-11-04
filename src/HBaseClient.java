@@ -1532,10 +1532,9 @@ public final class HBaseClient {
     // an explicit stop key, we must leave the table name alone.
     byte[] meta_stop;
     if (stop.length == 0) {
-      byte[] nulled_table = new byte[table.length + 1];
-      System.arraycopy(table, 0, nulled_table, 0, table.length);
-      // The last byte was already initialized to zero.
-      meta_stop = createRegionSearchKey(nulled_table, stop);
+      meta_stop = createRegionSearchKey(table, stop); // will return "table,,:"
+      meta_stop[table.length] = 0;  // now have "table\0,:"
+      meta_stop[meta_stop.length - 1] = ',';  // now have "table\0,,"
     } else {
       meta_stop = createRegionSearchKey(table, stop);
     }
