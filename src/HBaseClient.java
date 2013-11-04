@@ -1452,6 +1452,120 @@ public final class HBaseClient {
   }
 
   /**
+   * Eagerly prefetch and cache one table's region metadata from HBase.
+   * @param table The name of the table whose metadata you intend to prefetch.
+   * @return A deferred object that indicates the completion of the request.
+   * The {@link Object} has no special meaning and can be {@code null}
+   * (think of it as {@code Deferred<Void>}).  But you probably want to attach
+   * at least an errback to this {@code Deferred} to handle failures.
+   */
+  public Deferred<Object> prefetchMeta(final String table) {
+    return prefetchMeta(table.getBytes(), EMPTY_ARRAY, EMPTY_ARRAY);
+  }
+
+  /**
+   * Eagerly prefetch and cache part of a table's region metadata from HBase.
+   * <p>
+   * The part to prefetch is identified by a row key range, given by
+   * {@code start} and {@code stop}.
+   * @param table The name of the table whose metadata you intend to prefetch.
+   * @param start The start of the row key range to prefetch metadata for.
+   * @param stop The end of the row key range to prefetch metadata for.
+   * @return A deferred object that indicates the completion of the request.
+   * The {@link Object} has no special meaning and can be {@code null}
+   * (think of it as {@code Deferred<Void>}).  But you probably want to attach
+   * at least an errback to this {@code Deferred} to handle failures.
+   */
+  public Deferred<Object> prefetchMeta(final String table,
+                                       final String start,
+                                       final String stop) {
+    return prefetchMeta(table.getBytes(), start.getBytes(), stop.getBytes());
+  }
+
+  /**
+   * Eagerly prefetch and cache one table's region metadata from HBase.
+   * @param table The name of the table whose metadata you intend to prefetch.
+   * @return A deferred object that indicates the completion of the request.
+   * The {@link Object} has no special meaning and can be {@code null}
+   * (think of it as {@code Deferred<Void>}).  But you probably want to attach
+   * at least an errback to this {@code Deferred} to handle failures.
+   */
+  public Deferred<Object> prefetchMeta(final byte[] table) {
+    return prefetchMeta(table, EMPTY_ARRAY, EMPTY_ARRAY);
+  }
+
+  /**
+   * Eagerly prefetch and cache part of a table's region metadata from HBase.
+   * <p>
+   * The part to prefetch is identified by a row key range, given by
+   * {@code start} and {@code stop}.
+   * @param table The name of the table whose metadata you intend to prefetch.
+   * @param start The start of the row key range to prefetch metadata for.
+   * @param stop The end of the row key range to prefetch metadata for.
+   * @return A deferred object that indicates the completion of the request.
+   * The {@link Object} has no special meaning and can be {@code null}
+   * (think of it as {@code Deferred<Void>}).  But you probably want to attach
+   * at least an errback to this {@code Deferred} to handle failures.
+   */
+  public Deferred<Object> prefetchMeta(final byte[] table,
+                                       final byte[] start,
+                                       final byte[] stop) {
+    // We're going to scan .META. for the table between the row keys and filter
+    // out all but the latest entries on the client side.  Whatever remains
+    // will be inserted into the region cache.
+
+    // But we don't want to do this for .META. or -ROOT-.
+    if (Bytes.equals(table, META) || Bytes.equals(table, ROOT)) {
+      return Deferred.fromResult(null);
+    }
+
+    // Create the scan bounds.
+    byte[] meta_start = createRegionSearchKey(table, start);
+    // In this case, we want the scan to start immediately at the
+    // first entry, but createRegionSearchKey finds the last entry.
+    meta_start[meta_start.length - 1] = 0;
+
+    // The stop bound is trickier.  If the user wants the whole table,
+    // expressed by passing EMPTY_ARRAY, then we need to append a null
+    // byte to the table name (thus catching all rows in the desired
+    // table, but excluding those from others.)  If the user specifies
+    // an explicit stop key, we must leave the table name alone.
+    byte[] meta_stop;
+    if (stop.length == 0) {
+      meta_stop = createRegionSearchKey(table, stop); // will return "table,,:"
+      meta_stop[table.length] = 0;  // now have "table\0,:"
+      meta_stop[meta_stop.length - 1] = ',';  // now have "table\0,,"
+    } else {
+      meta_stop = createRegionSearchKey(table, stop);
+    }
+
+    final Scanner meta_scanner = newScanner(META);
+    meta_scanner.setStartKey(meta_start);
+    meta_scanner.setStopKey(meta_stop);
+
+    Callback<Object, ArrayList<ArrayList<KeyValue>>> callback =
+      new Callback<Object, ArrayList<ArrayList<KeyValue>>>() {
+        public Object call(final ArrayList<ArrayList<KeyValue>> results) {
+          if (results != null && !results.isEmpty()) {
+            for (ArrayList<KeyValue> row : results) {
+              discoverRegion(row);
+            }
+            meta_scanner.nextRows().addCallback(this);
+          }
+          return results;
+        }
+
+        public String toString() {
+          return "prefetchMeta nextRows";
+        }
+      };
+
+    Deferred<Object> deferred = meta_scanner.nextRows().addCallback(callback);
+
+    return deferred;
+  }
+
+  /**
    * Sends an RPC targeted at a particular region to the right RegionServer.
    * <p>
    * This method is package-private so that the low-level {@link RegionClient}
