@@ -254,7 +254,7 @@ clean:
 	           $(top_builddir)/com/google \
 		   $(top_builddir)/com; do \
 	  test -d $$dir && rmdir $$dir; \
-	done
+	done; :
 	cd $(top_builddir) || exit 0 \
 	  && test -d $(package_dir) || exit 0 \
 	  && dir=$(package_dir) \
