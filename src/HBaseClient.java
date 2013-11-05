@@ -213,12 +213,15 @@ public final class HBaseClient {
   static final byte[] INFO = new byte[] { 'i', 'n', 'f', 'o' };
   private static final byte[] REGIONINFO = new byte[] { 'r', 'e', 'g', 'i', 'o', 'n', 'i', 'n', 'f', 'o' };
   private static final byte[] SERVER = new byte[] { 's', 'e', 'r', 'v', 'e', 'r' };
+  /** HBase 0.95 and up: .META. is now hbase:meta */
+  private static final byte[] HBASE96_META =
+    new byte[] { 'h', 'b', 'a', 's', 'e', ':', 'm', 'e', 't', 'a' };
   /** New for HBase 0.95 and up: the name of META is fixed.  */
   private static final byte[] META_REGION_NAME =
     new byte[] { 'h', 'b', 'a', 's', 'e', ':', 'm', 'e', 't', 'a', ',', ',', '1' };
   /** New for HBase 0.95 and up: the region info for META is fixed.  */
   private static final RegionInfo META_REGION =
-    new RegionInfo(META, META_REGION_NAME, EMPTY_ARRAY);
+    new RegionInfo(HBASE96_META, META_REGION_NAME, EMPTY_ARRAY);
 
   /**
    * In HBase 0.95 and up, this magic number is found in a couple places.
@@ -1669,11 +1672,14 @@ public final class HBaseClient {
     // First, see if we already know where to look in .META.
     // Except, obviously, we don't wanna search in META for META or ROOT.
     final byte[] meta_key = is_root ? null : createRegionSearchKey(table, key);
+    final byte[] meta_name;
     final RegionInfo meta_region;
     if (has_root) {
       meta_region = is_meta || is_root ? null : getRegion(META, meta_key);
+      meta_name = META;
     } else {
       meta_region = META_REGION;
+      meta_name = HBASE96_META;
     }
 
     if (meta_region != null) {  // Always true with HBase 0.95 and up.
@@ -1692,7 +1698,7 @@ public final class HBaseClient {
           }
         }
         final Deferred<Object> d =
-          client.getClosestRowBefore(meta_region, META, meta_key, INFO)
+          client.getClosestRowBefore(meta_region, meta_name, meta_key, INFO)
           .addCallback(meta_lookup_done);
         if (has_permit) {
           final class ReleaseMetaLookupPermit implements Callback<Object, Object> {
@@ -1722,6 +1728,8 @@ public final class HBaseClient {
     } else if (is_root) {  // Don't search ROOT in ROOT.
       return Deferred.fromResult(null);  // We already got ROOT (w00t).
     }
+    // The rest of this function is only executed with HBase 0.94 and before.
+
     // Alright so we don't even know where to look in .META.
     // Let's lookup the right .META. entry in -ROOT-.
     final byte[] root_key = createRegionSearchKey(META, meta_key);
@@ -1822,8 +1830,12 @@ public final class HBaseClient {
    * information in which we currently believe that the given row ought to be.
    */
   private RegionInfo getRegion(final byte[] table, final byte[] key) {
-    if (Bytes.equals(table, ROOT)) {
-      return new RegionInfo(ROOT, ROOT_REGION, EMPTY_ARRAY);
+    if (has_root) {
+      if (Bytes.equals(table, ROOT)) {               // HBase 0.94 and before.
+        return new RegionInfo(ROOT, ROOT_REGION, EMPTY_ARRAY);
+      }
+    } else if (Bytes.equals(table, HBASE96_META)) {  // HBase 0.95 and up.
+      return META_REGION;
     }
 
     byte[] region_name = createRegionSearchKey(table, key);
