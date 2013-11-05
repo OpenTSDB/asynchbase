@@ -1096,6 +1096,11 @@ public final class Scanner {
       this.rows = rows;
       this.more = more;
     }
+
+    public String toString() {
+      return "Scanner$Response(scanner_id=" + Bytes.hex(scanner_id)
+        + ", rows=" + rows + ", more=" + more + ")";
+    }
   }
 
   /**
@@ -1401,7 +1406,7 @@ public final class Scanner {
     }
 
     public String toString() {
-      return "GetNextRowsRequest(scanner_id=" + scanner_id
+      return "GetNextRowsRequest(scanner_id=" + Bytes.hex(scanner_id)
         + ", max_num_rows=" + max_num_rows
         + ", region=" + region
         + ", attempt=" + attempt + ')';
@@ -1460,7 +1465,7 @@ public final class Scanner {
     }
 
     public String toString() {
-      return "CloseScannerRequest(scanner_id=" + scanner_id
+      return "CloseScannerRequest(scanner_id=" + Bytes.hex(scanner_id)
         + ", attempt=" + attempt + ')';
     }
 
