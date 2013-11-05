@@ -243,7 +243,7 @@ $(top_builddir)/api/index.html: $(asynchbase_SOURCES) $(jar)
 
 clean:
 	@rm -f $(top_builddir)/.javac*-stamp
-	rm -f $(top_builddir)/manifest
+	rm -f $(top_builddir)/manifest pom.xml
 	rm -rf $(proto_generated_builddir)
 	cd $(top_builddir) || exit 0 \
 	  && rm -f $(classes_with_nested_classes) \
