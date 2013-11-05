@@ -714,6 +714,9 @@ public final class Scanner {
               LOG.debug("Scanner " + Bytes.hex(scanner_id) + " opened on " + region);
             }
             if (resp != null) {
+              if (resp.rows == null) {
+                return scanFinished(resp);
+              }
               return Deferred.fromResult(resp.rows);
             }
             return nextRows();  // Restart the call.
@@ -756,32 +759,7 @@ public final class Scanner {
         }
 
         if (rows == null) {  // We're done scanning this region.
-          final byte[] region_stop_key = region.stopKey();
-          // Check to see if this region is the last we should scan (either
-          // because (1) it's the last region or (3) because its stop_key is
-          // greater than or equal to the stop_key of this scanner provided
-          // that (2) we're not trying to scan until the end of the table).
-          if (region_stop_key == EMPTY_ARRAY                           // (1)
-              || (stop_key != EMPTY_ARRAY                              // (2)
-                  && Bytes.memcmp(stop_key, region_stop_key) <= 0)) {  // (3)
-            get_next_rows_request = null;        // free();
-            families = null;                     // free();
-            qualifiers = null;                   // free();
-            start_key = stop_key = EMPTY_ARRAY;  // free() but mustn't be null.
-            if (resp != null && !resp.more) {
-              return null;  // The server already closed the scanner for us.
-            }
-            return close()  // Auto-close the scanner.
-              .addCallback(new Callback<ArrayList<ArrayList<KeyValue>>, Object>() {
-                public ArrayList<ArrayList<KeyValue>> call(final Object arg) {
-                  return null;  // Tell the user there's nothing more to scan.
-                }
-                public String toString() {
-                  return "auto-close scanner " + Bytes.hex(scanner_id);
-                }
-              });
-          }
-          return continueScanOnNextRegion();
+          return scanFinished(resp);
         }
 
         final ArrayList<KeyValue> lastrow = rows.get(rows.size() - 1);
@@ -886,6 +864,35 @@ public final class Scanner {
         return "scanner closed";
       }
     };
+  }
+
+  private Deferred<ArrayList<ArrayList<KeyValue>>> scanFinished(final Response resp) {
+    final byte[] region_stop_key = region.stopKey();
+    // Check to see if this region is the last we should scan (either
+    // because (1) it's the last region or (3) because its stop_key is
+    // greater than or equal to the stop_key of this scanner provided
+    // that (2) we're not trying to scan until the end of the table).
+    if (region_stop_key == EMPTY_ARRAY                           // (1)
+        || (stop_key != EMPTY_ARRAY                              // (2)
+            && Bytes.memcmp(stop_key, region_stop_key) <= 0)) {  // (3)
+      get_next_rows_request = null;        // free();
+      families = null;                     // free();
+      qualifiers = null;                   // free();
+      start_key = stop_key = EMPTY_ARRAY;  // free() but mustn't be null.
+      if (resp != null && !resp.more) {
+        return null;  // The server already closed the scanner for us.
+      }
+      return close()  // Auto-close the scanner.
+        .addCallback(new Callback<ArrayList<ArrayList<KeyValue>>, Object>() {
+          public ArrayList<ArrayList<KeyValue>> call(final Object arg) {
+            return null;  // Tell the user there's nothing more to scan.
+          }
+          public String toString() {
+            return "auto-close scanner " + Bytes.hex(scanner_id);
+          }
+        });
+    }
+    return continueScanOnNextRegion();
   }
 
   /**
