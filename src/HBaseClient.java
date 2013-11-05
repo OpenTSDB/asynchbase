@@ -1596,7 +1596,26 @@ public final class HBaseClient {
       meta_stop = createRegionSearchKey(table, stop);
     }
 
-    final Scanner meta_scanner = newScanner(META);
+    if (rootregion == null) {
+      // If we don't know where the root region is, we don't yet know whether
+      // there is even a -ROOT- region at all (pre HBase 0.95).  So we can't
+      // start scanning meta right away, because we don't yet know whether
+      // meta is named ".META." or "hbase:meta".  So instead we first check
+      // whether the table exists, which will force us to do a first meta
+      // lookup (and therefore figure out what the name of meta is).
+      class RetryPrefetch implements Callback<Object, Object> {
+        public Object call(final Object unused) {
+          return prefetchMeta(table, start, stop);
+        }
+        public String toString() {
+          return "retry prefetchMeta(" + Bytes.pretty(table) + ", "
+            + Bytes.pretty(start) + ", " + Bytes.pretty(stop) + ")";
+        }
+      }
+      return ensureTableExists(table).addCallback(new RetryPrefetch());
+    }
+
+    final Scanner meta_scanner = newScanner(has_root ? META : HBASE96_META);
     meta_scanner.setStartKey(meta_start);
     meta_scanner.setStopKey(meta_stop);
 
