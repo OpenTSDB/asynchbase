@@ -13,9 +13,9 @@ when using earlier versions of HBase, an `UnsupportedOperationException'
 will be raised if one attempt to send a `RowLockRequest' to a newer
 version of HBase.
 
-Please note that while AsyncHBase never made any guarantees about the
-exact order in which multiple edits are applied within a batch, the order
-is now different when talking to HBase 0.96 and up.
+Please note that while AsyncHBase never made any guarantees about
+the exact order in which multiple edits are applied within a batch,
+the order is now different when talking to HBase 0.96 and up.
 
 New public APIs:
   - Scanners can now use a variety of different filters via the new
@@ -28,6 +28,8 @@ New public APIs:
     issue out of the ordinary (e.g. not just a `NotSuchRegionException').
   - `GetRequest' has additional constructor overloads that make its API
     more uniform with that of other RPCs.
+  - HBaseClient has new `prefetchMeta' methods to prefetch metadata about
+    the regions of a table (for the entire table or a given key range).
 
 Noteworthy bug fixes:
   - DeleteRequest wasn't honoring its timestamp if one was given (#58).
@@ -44,6 +46,8 @@ Noteworthy bug fixes:
     it was flushing RPC buffered while waiting to be connected.  Also
     when those RPCs were flushed, the batchable RPCs weren't given a
     chance to get batched.
+  - It was not possible to scan the ROOT region (or the hbase:meta region
+    when using HBase 0.96+).
 
 
 * Version 1.4.1 (2013-02-14) [1cbc303]
