@@ -1072,6 +1072,20 @@ public final class HBaseClient {
     };
 
   /**
+   * Returns the client currently known to hose the given region, or NULL.
+   */
+  private RegionClient clientFor(final RegionInfo region) {
+    if (region == null) {
+      return null;
+    } else if (region == META_REGION || Bytes.equals(region.table(), ROOT)) {
+      // HBase 0.95+: META_REGION (which is 0.95 specific) is our root.
+      // HBase 0.94 and earlier: if we're looking for -ROOT-, stop here.
+      return rootregion;
+    }
+    return region2client.get(region);
+  }
+
+  /**
    * Package-private access point for {@link Scanner}s to scan more rows.
    * @param scanner The scanner to use.
    * @param nrows The maximum number of rows to retrieve.
@@ -1079,8 +1093,7 @@ public final class HBaseClient {
    */
   Deferred<Object> scanNextRows(final Scanner scanner) {
     final RegionInfo region = scanner.currentRegion();
-    final RegionClient client = (region == null ? null
-                                 : region2client.get(region));
+    final RegionClient client = clientFor(region);
     if (client == null) {
       // Oops, we no longer know anything about this client or region.  Our
       // cache was probably invalidated while the client was scanning.  This
@@ -1106,8 +1119,7 @@ public final class HBaseClient {
    */
   Deferred<Object> closeScanner(final Scanner scanner) {
     final RegionInfo region = scanner.currentRegion();
-    final RegionClient client = (region == null ? null
-                                 : region2client.get(region));
+    final RegionClient client = clientFor(region);
     if (client == null) {
       // Oops, we no longer know anything about this client or region.  Our
       // cache was probably invalidated while the client was scanning.  So
@@ -1464,8 +1476,7 @@ public final class HBaseClient {
       // So let's just pretend the row has been unlocked.
       return Deferred.fromResult(null);
     }
-    final RegionClient client = (region == null ? null
-                                 : region2client.get(region));
+    final RegionClient client = clientFor(region);
     if (client == null) {
       // Oops, we no longer know anything about this client or region.  Our
       // cache was probably invalidated while the client was holding the lock.
@@ -1546,9 +1557,7 @@ public final class HBaseClient {
         handleNSRE(request, region.name(), nsre);
         return d;
       }
-      final RegionClient client = (Bytes.equals(region.table(),
-                                                has_root ? ROOT : META)
-                                   ? rootregion : region2client.get(region));
+      final RegionClient client = clientFor(region);
       if (client != null && client.isAlive()) {
         request.setRegion(region);
         final Deferred<Object> d = request.getDeferred();
