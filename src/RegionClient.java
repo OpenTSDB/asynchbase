@@ -176,7 +176,7 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
 
   private boolean useSecure = true;
 
-  private SecurityHelper securityHelper;
+  private SecureRpcHelper secureRpcHelper;
   private final String host;
 
 
@@ -905,8 +905,8 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
     final ChannelBuffer header;
     if(System.getProperty("org.hbase.async.security.94") != null) {
       useSecure = true;
-      securityHelper = new SecurityHelper(this, host);
-      securityHelper.sendHello(chan);
+      secureRpcHelper = new SecureRpcHelper(this, host);
+      secureRpcHelper.sendHello(chan);
     } else {
       if (System.getProperty("org.hbase.async.cdh3b3") != null) {
         header = headerCDH3b3();
@@ -1142,7 +1142,7 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
       }
     }
     if(useSecure) {
-      payload = securityHelper.wrap(payload);
+      payload = secureRpcHelper.wrap(payload);
     }
     return payload;
   }
@@ -1169,7 +1169,7 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
     final long start = System.nanoTime();
     LOG.debug("------------------>> ENTERING DECODE >>------------------");
     if(useSecure) {
-      buf = securityHelper.handleResponse(buf, chan);
+      buf = secureRpcHelper.handleResponse(buf, chan);
       if(buf == null) {
         return null;
       }
