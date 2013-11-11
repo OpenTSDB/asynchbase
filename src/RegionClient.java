@@ -26,7 +26,6 @@
  */
 package org.hbase.async;
 
-import java.net.SocketAddress;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
@@ -175,6 +174,12 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
    */
   private final AtomicInteger rpcid = new AtomicInteger(-1);
 
+  private boolean useSecure = false;
+
+  private SecureRpcHelper secureRpcHelper;
+  private final String host;
+
+
   private final TimerTask flush_timer = new TimerTask() {
     public void run(final Timeout timeout) {
       periodicFlush();
@@ -197,8 +202,9 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
    * Constructor.
    * @param hbase_client The HBase client this instance belongs to.
    */
-  public RegionClient(final HBaseClient hbase_client) {
+  public RegionClient(final HBaseClient hbase_client, String host) {
     this.hbase_client = hbase_client;
+    this.host = host;
   }
 
   /**
@@ -897,12 +903,18 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
                                final ChannelStateEvent e) {
     final Channel chan = e.getChannel();
     final ChannelBuffer header;
-    if (System.getProperty("org.hbase.async.cdh3b3") != null) {
-      header = headerCDH3b3();
+    if(System.getProperty("org.hbase.async.security.94") != null) {
+      useSecure = true;
+      secureRpcHelper = new SecureRpcHelper(this, host);
+      secureRpcHelper.sendHello(chan);
     } else {
-      header = header090();
+      if (System.getProperty("org.hbase.async.cdh3b3") != null) {
+        header = headerCDH3b3();
+      } else {
+        header = header090();
+      }
+      helloRpc(chan, header);
     }
-    helloRpc(chan, header);
   }
 
   /**
@@ -1129,6 +1141,9 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
         oldrpc.callback(new NonRecoverableException(wtf));
       }
     }
+    if(useSecure) {
+      payload = secureRpcHelper.wrap(payload);
+    }
     return payload;
   }
 
@@ -1148,11 +1163,18 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
   @Override
   protected Object decode(final ChannelHandlerContext ctx,
                           final Channel chan,
-                          final ChannelBuffer buf,
+                          final ChannelBuffer channelBuffer,
                           final VoidEnum unused) {
-    final int rdx = buf.readerIndex();
+    ChannelBuffer buf = channelBuffer;
     final long start = System.nanoTime();
     LOG.debug("------------------>> ENTERING DECODE >>------------------");
+    if(useSecure) {
+      buf = secureRpcHelper.handleResponse(buf, chan);
+      if(buf == null) {
+        return null;
+      }
+    }
+    final int rdx = buf.readerIndex();
     final int rpcid = buf.readInt();
     final Object decoded = deserialize(buf, rpcid);
     final HBaseRpc rpc = rpcs_inflight.remove(rpcid);
@@ -1211,7 +1233,13 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
     //   0x00  Old style success (prior 0.92).
     //   0x01  RPC failed with an exception.
     //   0x02  New style success (0.92 and above).
-    final byte flags = buf.readByte();
+    final int flags;
+    if (useSecure) {
+      //0.94-security uses an int for the flag section
+      flags = buf.readInt();
+    } else {
+      flags = buf.readByte();
+    }
     if ((flags & HBaseRpc.RPC_FRAMED) != 0) {
       // Total size of the response, including the RPC ID (4 bytes) and flags
       // (1 byte) that we've already read, including the 4 bytes used by
@@ -1571,7 +1599,17 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
   private void helloRpc(final Channel chan, final ChannelBuffer header) {
     final GetProtocolVersionRequest rpc = new GetProtocolVersionRequest();
     rpc.getDeferred().addBoth(new ProtocolVersionCB(chan));
+
     Channels.write(chan, ChannelBuffers.wrappedBuffer(header, encode(rpc)));
   }
+
+  void sendVersion(final Channel chan) {
+    final GetProtocolVersionRequest rpc = new GetProtocolVersionRequest();
+    rpc.getDeferred().addBoth(new ProtocolVersionCB(chan));
+
+    Channels.write(chan, encode(rpc));
+  }
+
+
 
 }
