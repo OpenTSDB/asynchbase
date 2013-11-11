@@ -174,7 +174,7 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
    */
   private final AtomicInteger rpcid = new AtomicInteger(-1);
 
-  private boolean useSecure = true;
+  private boolean useSecure = false;
 
   private SecureRpcHelper secureRpcHelper;
   private final String host;
