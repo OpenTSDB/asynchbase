@@ -39,10 +39,9 @@ public final class ColumnPaginationFilter extends ScanFilter {
 
   private int limit = 0;
   private int offset = -1;
-  private int count = 0;
 
   /**
-   * Constructor for numerical offset.
+   * Constructor to define filter of numerical limit and offset.
    * @param limit The maximum number of columns to return.
    * @param offset The integer offset where to start pagination.
    */
