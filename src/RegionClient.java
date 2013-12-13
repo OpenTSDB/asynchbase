@@ -1291,24 +1291,30 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
     }
 
     final Object decoded;
-    if (server_version >= SERVER_VERSION_095_OR_ABOVE) {
-      if (header.hasException()) {
-        decoded = decodeException(rpc, header.getException());
-      } else {
-        final int cell_size;
-        {
-          final RPCPB.CellBlockMeta cellblock = header.getCellBlockMeta();
-          if (cellblock == null) {
-            cell_size = 0;
-          } else {
-            cell_size = cellblock.getLength();
-            HBaseRpc.checkArrayLength(buf, cell_size);
+    try {
+      if (server_version >= SERVER_VERSION_095_OR_ABOVE) {
+        if (header.hasException()) {
+          decoded = decodeException(rpc, header.getException());
+        } else {
+          final int cell_size;
+          {
+            final RPCPB.CellBlockMeta cellblock = header.getCellBlockMeta();
+            if (cellblock == null) {
+              cell_size = 0;
+            } else {
+              cell_size = cellblock.getLength();
+              HBaseRpc.checkArrayLength(buf, cell_size);
+            }
           }
+          decoded = rpc.deserialize(buf, cell_size);
         }
-        decoded = rpc.deserialize(buf, cell_size);
+      } else {  // HBase 0.94 and before.
+        decoded = deserialize(buf, rpc);
       }
-    } else {  // HBase 0.94 and before.
-      decoded = deserialize(buf, rpc);
+    } catch (RuntimeException e) {
+      LOG.error("Uncaught error during de-serialization of " + rpc
+                + ", rpcid=" + rpcid);
+      throw e;
     }
 
     if (LOG.isDebugEnabled()) {
