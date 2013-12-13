@@ -531,8 +531,9 @@ final class MultiAction extends HBaseRpc implements HBaseRpc.IsEdit {
     final int nrpcs = batch.size();
     final Object[] resps = new Object[nrpcs];
     int n = 0;  // Index in `batch'.
+    int r = 0;  // Index in `regionActionResult' in the PB.
     while (n < nrpcs) {
-      final RegionActionResult results = resp.getRegionActionResult(n);
+      final RegionActionResult results = resp.getRegionActionResult(r++);
       final int nresults = results.getResultOrExceptionCount();
       if (results.hasException()) {
         if (nresults != 0) {
