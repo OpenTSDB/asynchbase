@@ -1265,7 +1265,9 @@ public final class Scanner {
       if (!populate_blockcache) {
         scan.setCacheBlocks(false);
       }
-      scan.setBatchSize(max_num_kvs);
+      if (max_num_kvs > 0) {
+        scan.setBatchSize(max_num_kvs);
+      }
       scan.setMaxResultSize(max_num_bytes);
       final ScanRequest req = ScanRequest.newBuilder()
         .setRegion(region.toProtobuf())
