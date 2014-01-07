@@ -44,8 +44,8 @@ abstract class BatchableRpc extends HBaseRpc
   // So instead we make them package-private so that subclasses can still
   // access them directly.
 
-  /** Family affected by this RPC.  */
-  /*protected*/ final byte[] family;
+  /** Families affected by this RPC.  */
+  /*protected*/ final byte[][] families;
 
   /** The timestamp to use for {@link KeyValue}s of this RPC.  */
   /*protected*/ final long timestamp;
@@ -72,16 +72,16 @@ abstract class BatchableRpc extends HBaseRpc
    * Package private constructor.
    * @param table The name of the table this RPC is for.
    * @param row The name of the row this RPC is for.
-   * @param family The column family to edit in that table.  Subclass must
-   * validate, this class doesn't perform any validation on the family.
+   * @param families The column families to edit in that table.  Subclass must
+   * validate, this class doesn't perform any validation on the families.
    * @param timestamp The timestamp to use for {@link KeyValue}s of this RPC.
    * @param lockid Explicit row lock to use, or {@link RowLock#NO_LOCK}.
    */
   BatchableRpc(final byte[] table,
-               final byte[] key, final byte[] family,
+               final byte[] key, final byte[][] families,
                final long timestamp, final long lockid) {
     super(table, key);
-    this.family = family;
+    this.families = families;
     this.timestamp = timestamp;
     this.lockid = lockid;
   }
@@ -116,7 +116,12 @@ abstract class BatchableRpc extends HBaseRpc
 
   @Override
   public final byte[] family() {
-    return family;
+    return families == null ? null : families[0];
+  }
+
+  @Override
+  public final byte[][] getFamilies() {
+    return families;
   }
 
   @Override
@@ -156,18 +161,34 @@ abstract class BatchableRpc extends HBaseRpc
 
   /**
    * How many {@link KeyValue}s will be serialized by {@link #serializePayload}.
+   * Used with RPCs with single column families.
    */
   abstract int numKeyValues();
 
   /**
    * An estimate of the number of bytes needed for {@link #serializePayload}.
    * The estimate is conservative.
+   * Used with RPCs with single column families.
    */
   abstract int payloadSize();
 
   /**
    * Serialize the part of this RPC for a {@link MultiAction}.
+   * Used with RPCs with single column families.
    */
   abstract void serializePayload(final ChannelBuffer buf);
+
+  /**
+   * An estimate of the number of bytes needed for {@link #serializePayloads}.
+   * The estimate is conservative.
+   * Used with RPCs with multiple column families.
+   */
+  abstract int payloadsSize();
+
+  /**
+   * Serialize the part of this RPC for a {@link MultiAction}.
+   * Used with RPCs with multiple column families.
+   */
+  abstract void serializePayloads(final ChannelBuffer buf);
 
 }

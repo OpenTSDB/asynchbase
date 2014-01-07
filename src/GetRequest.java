@@ -50,8 +50,8 @@ public final class GetRequest extends HBaseRpc
   private static final byte[] EXISTS =
     new byte[] { 'e', 'x', 'i', 's', 't', 's' };
 
-  private byte[] family;     // TODO(tsuna): Handle multiple families?
-  private byte[][] qualifiers;
+  private byte[][] families;
+  private byte[][][] qualifiers;
   private long lockid = RowLock.NO_LOCK;
 
   /**
@@ -144,6 +144,24 @@ public final class GetRequest extends HBaseRpc
 
   /**
    * Constructor.
+   * <strong>These byte arrays will NOT be copied.</strong>
+   * @param table The non-empty name of the table to use.
+   * @param key The row key to get in that table.
+   * @param families The column families.
+   * @param qualifiers The column qualifiers.
+   * @since 1.5
+   */
+  public GetRequest(final byte[] table,
+                    final byte[] key,
+                    final byte[][] families,
+                    final byte[][][] qualifiers) {
+    super(table, key);
+    this.families(families);
+    this.qualifiers(qualifiers);
+  }
+
+  /**
+   * Constructor.
    * @param table The non-empty name of the table to use.
    * @param key The row key to get in that table.
    * @param family The column family.
@@ -211,13 +229,40 @@ public final class GetRequest extends HBaseRpc
    */
   public GetRequest family(final byte[] family) {
     KeyValue.checkFamily(family);
-    this.family = family;
+    this.families = new byte[][] { family };
     return this;
   }
 
   /** Specifies a particular column family to get.  */
   public GetRequest family(final String family) {
     return family(family.getBytes());
+  }
+
+  /**
+   * Specifies the set of column families to get.
+   * @param families The column families.
+   * <strong>This byte array will NOT be copied.</strong>
+   * @return {@code this}, always.
+   */
+  public GetRequest families(final byte[][] families) {
+    for (byte[] family : families) {
+      KeyValue.checkFamily(family);
+    }
+    this.families = families;
+    return this;
+  }
+
+  /** Specifies the set of column families to get.  */
+  public GetRequest families(final String[] families) {
+    for (String family : families) {
+      KeyValue.checkFamily(family.getBytes());
+    }
+    this.families = new byte[families.length][];
+    int i = 0;
+    for (String family : families) {
+      this.families[i++] = family.getBytes();
+    }
+    return this;
   }
 
   /**
@@ -231,7 +276,7 @@ public final class GetRequest extends HBaseRpc
       throw new NullPointerException("qualifier");
     }
     KeyValue.checkQualifier(qualifier);
-    this.qualifiers = new byte[][] { qualifier };
+    this.qualifiers = new byte[][][] { { qualifier } };
     return this;
   }
 
@@ -248,6 +293,27 @@ public final class GetRequest extends HBaseRpc
     }
     for (final byte[] qualifier : qualifiers) {
       KeyValue.checkQualifier(qualifier);
+    }
+    this.qualifiers = new byte[][][] { qualifiers };
+    return this;
+  }
+
+  /**
+   * Specifies a particular set of column qualifiers to get.
+   * @param qualifiers The column qualifiers.
+   * <strong>This byte array will NOT be copied.</strong>
+   * @return {@code this}, always.
+   * @since 1.1
+   */
+  public GetRequest qualifiers(final byte[][][] qualifiers) {
+    if (qualifiers == null) {
+      throw new NullPointerException("qualifiers");
+    }
+    for (final byte[][] family_qualifiers : qualifiers) {
+      if (family_qualifiers == null) continue;
+      for (final byte[] qualifier : family_qualifiers) {
+        KeyValue.checkQualifier(qualifier);
+      }
     }
     this.qualifiers = qualifiers;
     return this;
@@ -313,17 +379,27 @@ public final class GetRequest extends HBaseRpc
 
   @Override
   public byte[] family() {
-    return family;
+    return families[0];
+  }
+
+  @Override
+  public byte[][] getFamilies() {
+    return families;
   }
 
   @Override
   public byte[][] qualifiers() {
+    return qualifiers[0];
+  }
+
+  @Override
+  public byte[][][] getQualifiers() {
     return qualifiers;
   }
 
   public String toString() {
     final String klass = isGetRequest() ? "GetRequest" : "Exists";
-    return super.toStringWithQualifiers(klass, family, qualifiers);
+    return super.toStringWithQualifiers(klass, families, qualifiers);
   }
 
   // ---------------------- //
@@ -359,16 +435,20 @@ public final class GetRequest extends HBaseRpc
     size += 8;  // long: Maximum timestamp.
     size += 1;  // byte: Boolean: "all time".
     size += 4;  // int:  Number of families.
-    if (family != null) {
-      size += 1;  // vint: Family length (guaranteed on 1 byte).
-      size += family.length;  // The family.
-      size += 1;  // byte: Boolean: do we want specific qualifiers?
-      if (qualifiers != null) {
-        size += 4;  // int:  How many qualifiers follow?
-        for (final byte[] qualifier : qualifiers) {
-          size += 3;  // vint: Qualifier length.
-          size += qualifier.length;  // The qualifier.
+    if (families != null) {
+      int family_idx = 0;
+      for (byte family[] : families) {
+        size += 1;  // vint: Family length (guaranteed on 1 byte).
+        size += family.length;  // The family.
+        size += 1;  // byte: Boolean: do we want specific qualifiers?
+        if (qualifiers != null && qualifiers[family_idx] != null) {
+          size += 4;  // int:  How many qualifiers follow?
+          for (final byte[] qualifier : qualifiers[family_idx]) {
+            size += 3;  // vint: Qualifier length.
+            size += qualifier.length;  // The qualifier.
+          }
         }
+        ++family_idx;
       }
     }
     if (server_version >= RegionClient.SERVER_VERSION_092_OR_ABOVE) {
@@ -385,15 +465,18 @@ public final class GetRequest extends HBaseRpc
     final ClientPB.Get.Builder getpb = ClientPB.Get.newBuilder()
       .setRow(Bytes.wrap(key));
 
-    if (family != null) {
-      final ClientPB.Column.Builder column = ClientPB.Column.newBuilder();
-      column.setFamily(Bytes.wrap(family));
-      if (qualifiers != null) {
-        for (final byte[] qualifier : qualifiers) {
-          column.addQualifier(Bytes.wrap(qualifier));
-        }
+    if (families != null) {
+      for (int family_idx = 0; family_idx < families.length; ++family_idx) {
+         byte[] family = families[family_idx];
+         final ClientPB.Column.Builder column = ClientPB.Column.newBuilder();
+         column.setFamily(Bytes.wrap(family));
+         if (qualifiers != null && qualifiers[family_idx] != null) {
+           for (final byte[] qualifier : qualifiers[family_idx]) {
+             column.addQualifier(Bytes.wrap(qualifier));
+           }
+         }
+         getpb.addColumn(column.build());
       }
-      getpb.addColumn(column.build());
     }
 
     // TODO: Filters.
@@ -446,19 +529,23 @@ public final class GetRequest extends HBaseRpc
     // all possible times.  Not sure why it's part of the serialized RPC...
 
     // Families.
-    buf.writeInt(family != null ? 1 : 0);  // Number of families that follow.
+    buf.writeInt(families != null ? families.length : 0);  // Number of families that follow.
 
-    if (family != null) {
-      // Each family is then written like so:
-      writeByteArray(buf, family);  // Column family name.
-      if (qualifiers != null) {
-        buf.writeByte(0x01);  // Boolean: We want specific qualifiers.
-        buf.writeInt(qualifiers.length);   // How many qualifiers do we want?
-        for (final byte[] qualifier : qualifiers) {
-          writeByteArray(buf, qualifier);  // Column qualifier name.
+    if (families != null) {
+      for (int family_idx = 0; family_idx < families.length; ++family_idx) {
+        byte[] family = families[family_idx];
+
+        // Each family is then written like so:
+        writeByteArray(buf, family);  // Column family name.
+        if (qualifiers != null && qualifiers[family_idx] != null) {
+          buf.writeByte(0x01);  // Boolean: We want specific qualifiers.
+          buf.writeInt(qualifiers[family_idx].length);   // How many qualifiers do we want?
+          for (final byte[] qualifier : qualifiers[family_idx]) {
+            writeByteArray(buf, qualifier);  // Column qualifier name.
+          }
+        } else {
+          buf.writeByte(0x00);  // Boolean: we don't want specific qualifiers.
         }
-      } else {
-        buf.writeByte(0x00);  // Boolean: we don't want specific qualifiers.
       }
     }
     if (server_version >= RegionClient.SERVER_VERSION_092_OR_ABOVE) {

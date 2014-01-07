@@ -89,8 +89,8 @@ public final class PutRequest extends BatchableRpc
    *   - qualifiers.length == values.length
    *   - qualifiers.length > 0
    */
-  private final byte[][] qualifiers;
-  private final byte[][] values;
+  private final byte[][][] qualifiers;
+  private final byte[][][] values;
 
   /**
    * Constructor using current time.
@@ -139,8 +139,35 @@ public final class PutRequest extends BatchableRpc
                     final byte[] family,
                     final byte[][] qualifiers,
                     final byte[][] values) {
-    this(table, key, family, qualifiers, values,
-         KeyValue.TIMESTAMP_NOW, RowLock.NO_LOCK);
+    this(table, key, new byte[][] { family }, new byte[][][] { qualifiers },
+        new byte[][][] { values }, KeyValue.TIMESTAMP_NOW, RowLock.NO_LOCK);
+  }
+
+  /**
+   * Constructor for multiple columns in multiple families using current time.
+   * <strong>These byte arrays will NOT be copied.</strong>
+   * <p>
+   * Note: If you want to set your own timestamp, use
+   * {@link #PutRequest(byte[], byte[], byte[], byte[][], byte[][], long)}
+   * instead.  This constructor will let the RegionServer assign the timestamp
+   * to this write at the time using {@link System#currentTimeMillis} right
+   * before the write is persisted to the WAL.
+   * @param table The table to edit.
+   * @param key The key of the row to edit in that table.
+   * @param families The column families to edit in that table.
+   * @param qualifiers The column qualifiers to edit in that family.
+   * @param values The corresponding values to store.
+   * @throws IllegalArgumentException if {@code qualifiers.length == 0}
+   * or if {@code qualifiers.length != values.length}
+   * @since 1.3
+   */
+  public PutRequest(final byte[] table,
+                    final byte[] key,
+                    final byte[][] families,
+                    final byte[][][] qualifiers,
+                    final byte[][][] values) {
+    this(table, key, families , qualifiers, values,
+        KeyValue.TIMESTAMP_NOW, RowLock.NO_LOCK);
   }
 
   /**
@@ -182,7 +209,8 @@ public final class PutRequest extends BatchableRpc
                     final byte[][] qualifiers,
                     final byte[][] values,
                     final long timestamp) {
-    this(table, key, family, qualifiers, values, timestamp, RowLock.NO_LOCK);
+    this(table, key, new byte[][] { family }, new byte[][][] { qualifiers },
+        new byte[][][] { values }, timestamp, RowLock.NO_LOCK);
   }
 
   /**
@@ -254,7 +282,32 @@ public final class PutRequest extends BatchableRpc
                     final byte[][] values,
                     final long timestamp,
                     final RowLock lock) {
-    this(table, key, family, qualifiers, values, timestamp, lock.id());
+    this(table, key, new byte[][] { family }, new byte[][][] { qualifiers },
+        new byte[][][] { values }, timestamp, lock.id());
+  }
+
+  /**
+   * Constructor for multiple columns with current time and explicit row lock.
+   * <strong>These byte arrays will NOT be copied.</strong>
+   * @param table The table to edit.
+   * @param key The key of the row to edit in that table.
+   * @param families The column families to edit in that table.
+   * @param qualifiers The column qualifiers to edit in that family.
+   * @param values The corresponding values to store.
+   * @param timestamp The timestamp to set on this edit.
+   * @param lock An explicit row lock to use with this request.
+   * @throws IllegalArgumentException if {@code qualifiers.length == 0}
+   * or if {@code qualifiers.length != values.length}
+   * @since 1.3
+   */
+  public PutRequest(final byte[] table,
+                    final byte[] key,
+                    final byte[][] families,
+                    final byte[][][] qualifiers,
+                    final byte[][][] values,
+                    final RowLock lock) {
+    this(table, key, families, qualifiers, values,
+        KeyValue.TIMESTAMP_NOW, lock.id());
   }
 
   /**
@@ -335,9 +388,8 @@ public final class PutRequest extends BatchableRpc
   private PutRequest(final byte[] table,
                      final KeyValue kv,
                      final long lockid) {
-    super(table, kv.key(), kv.family(), kv.timestamp(), lockid);
-    this.qualifiers = new byte[][] { kv.qualifier() };
-    this.values = new byte[][] { kv.value() };
+    this(table, kv.key(), kv.family(),
+        kv.qualifier(), kv.value(), kv.timestamp(), lockid);
   }
 
   /** Private constructor.  */
@@ -348,32 +400,58 @@ public final class PutRequest extends BatchableRpc
                      final byte[] value,
                      final long timestamp,
                      final long lockid) {
-    this(table, key, family, new byte[][] { qualifier }, new byte[][] { value },
-         timestamp, lockid);
+    this(table, key, new byte[][] { family }, new byte[][][] { { qualifier } },
+        new byte[][][] { { value } }, timestamp, lockid);
   }
 
   /** Private constructor.  */
   private PutRequest(final byte[] table,
                      final byte[] key,
-                     final byte[] family,
-                     final byte[][] qualifiers,
-                     final byte[][] values,
+                     final byte[][] families,
+                     final byte[][][] qualifiers,
+                     final byte[][][] values,
                      final long timestamp,
                      final long lockid) {
-    super(table, key, family, timestamp, lockid);
-    KeyValue.checkFamily(family);
-    if (qualifiers.length != values.length) {
-      throw new IllegalArgumentException("Have " + qualifiers.length
-        + " qualifiers and " + values.length + " values.  Should be equal.");
-    } else if (qualifiers.length == 0) {
-      throw new IllegalArgumentException("Need at least one qualifier/value.");
-    }
-    for (int i = 0; i < qualifiers.length; i++) {
-      KeyValue.checkQualifier(qualifiers[i]);
-      KeyValue.checkValue(values[i]);
-    }
+    super(table, key, families, timestamp, lockid);
+    checkParams(families, qualifiers, values);
     this.qualifiers = qualifiers;
     this.values = values;
+  }
+
+  private void checkParams(final byte[][] families,
+                           final byte[][][] qualifiers,
+                           final byte[][][] values) {
+    if (families.length != qualifiers.length) {
+      throw new IllegalArgumentException(String.format(
+          "Mismatch in number of families(%d) and qualifiers(%d) array size.",
+          families.length, qualifiers.length));
+    } else if (families.length != values.length) {
+      throw new IllegalArgumentException(String.format(
+          "Mismatch in number of families(%d) and values(%d) array size.",
+          families.length, values.length));
+    }
+
+    for (int idx = 0; idx < families.length; idx++) {
+      KeyValue.checkFamily(families[idx]);
+      if (qualifiers[idx] == null || qualifiers[idx].length == 0) {
+        throw new IllegalArgumentException(
+            "No qualifiers are specifed for family "
+            + families[idx] + " at index " + idx);
+      } else if (values[idx] == null || values[idx].length == 0) {
+        throw new IllegalArgumentException(
+            "No values are specifed for family "
+            + families[idx] + " at index " + idx);
+      } else if (qualifiers[idx].length != values[idx].length) {
+        throw new IllegalArgumentException("Found "
+            + qualifiers[idx].length + " qualifiers and "
+            + values[idx].length + " values for family "
+            + families[idx] + " at index " + idx + ". Should be equal.");
+      }
+      for (int i = 0; i < qualifiers[idx].length; i++) {
+        KeyValue.checkQualifier(qualifiers[idx][i]);
+        KeyValue.checkValue(values[idx][i]);
+      }
+    }
   }
 
   @Override
@@ -400,15 +478,25 @@ public final class PutRequest extends BatchableRpc
    */
   @Override
   public byte[] qualifier() {
+    return qualifiers[0][0];
+  }
+
+  /**
+   * Returns the qualifiers of first column family in the set of
+   * edits in this RPC.
+   * @since 1.3
+   */
+  @Override
+  public byte[][] qualifiers() {
     return qualifiers[0];
   }
 
   /**
    * {@inheritDoc}
-   * @since 1.3
+   * @since 1.5
    */
   @Override
-  public byte[][] qualifiers() {
+  public byte[][][] getQualifiers() {
     return qualifiers;
   }
 
@@ -418,7 +506,7 @@ public final class PutRequest extends BatchableRpc
    */
   @Override
   public byte[] value() {
-    return values[0];
+    return values[0][0];
   }
 
   /**
@@ -427,12 +515,21 @@ public final class PutRequest extends BatchableRpc
    */
   @Override
   public byte[][] values() {
+    return values[0];
+  }
+
+  /**
+   * {@inheritDoc}
+   * @since 1.5
+   */
+  @Override
+  public byte[][][] getValues() {
     return values;
   }
 
   public String toString() {
     return super.toStringWithQualifiers("PutRequest",
-                                       family, qualifiers, values,
+                                       families, qualifiers, values,
                                        ", timestamp=" + timestamp
                                        + ", lockid=" + lockid
                                        + ", durable=" + durable
@@ -462,23 +559,32 @@ public final class PutRequest extends BatchableRpc
 
   @Override
   int numKeyValues() {
-    return qualifiers.length;
+    return qualifiers[0].length;
   }
 
   @Override
   int payloadSize() {
+    return payloadSize(0);
+  }
+
+  int payloadSize(int idx) {
     int size = 0;
-    for (int i = 0; i < qualifiers.length; i++) {
-      size += KeyValue.predictSerializedSize(key, family, qualifiers[i], values[i]);
+    for (int i = 0; i < qualifiers[idx].length; i++) {
+      size += KeyValue.predictSerializedSize(
+          key, families[idx], qualifiers[idx][i], values[idx][i]);
     }
     return size;
   }
 
   @Override
   void serializePayload(final ChannelBuffer buf) {
-    for (int i = 0; i < qualifiers.length; i++) {
-      KeyValue.serialize(buf, KeyValue.PUT, timestamp, key, family,
-                         qualifiers[i], values[i]);
+    serializePayload(buf, 0);
+  }
+
+  private void serializePayload(final ChannelBuffer buf, int idx) {
+    for (int i = 0; i < qualifiers[idx].length; i++) {
+      KeyValue.serialize(buf, KeyValue.PUT, timestamp,
+          key, families[idx], qualifiers[idx][i], values[idx][i]);
     }
   }
 
@@ -514,40 +620,52 @@ public final class PutRequest extends BatchableRpc
     size += 1;  // bool: Whether or not to write to the WAL.
     size += 4;  // int:  Number of families for which we have edits.
 
-    size += 1;  // vint: Family length (guaranteed on 1 byte).
-    size += family.length;  // The family.
-    size += 4;  // int:  Number of KeyValues that follow.
-    size += 4;  // int:  Total number of bytes for all those KeyValues.
-
-    size += payloadSize();
+    size += payloadsSize();
 
     return size;
   }
 
   @Override
-  MutationProto toMutationProto() {
-    final MutationProto.ColumnValue.Builder columns =  // All columns ...
-      MutationProto.ColumnValue.newBuilder()
-      .setFamily(Bytes.wrap(family));                  // ... for this family.
-
-    // Now add all the qualifier-value pairs.
-    for (int i = 0; i < qualifiers.length; i++) {
-      final MutationProto.ColumnValue.QualifierValue column =
-        MutationProto.ColumnValue.QualifierValue.newBuilder()
-        .setQualifier(Bytes.wrap(qualifiers[i]))
-        .setValue(Bytes.wrap(values[i]))
-        .setTimestamp(timestamp)
-        .build();
-      columns.addQualifierValue(column);
+  int payloadsSize() {
+    int size = 0;
+    for (int i = 0; i < families.length; i++) {
+      size += 1;  // vint: Family length (guaranteed on 1 byte).
+      size += families[i].length;  // The family.
+      size += 4;  // int:  Number of KeyValues that follow.
+      size += 4;  // int:  Total number of bytes for all those KeyValues.
+      size += payloadSize(i);
     }
+    return size;
+  }
 
+  @Override
+  MutationProto toMutationProto() {
     final MutationProto.Builder put = MutationProto.newBuilder()
-      .setRow(Bytes.wrap(key))
-      .setMutateType(MutationProto.MutationType.PUT)
-      .addColumnValue(columns);
+        .setRow(Bytes.wrap(key))
+        .setMutateType(MutationProto.MutationType.PUT);
     if (!durable) {
       put.setDurability(MutationProto.Durability.SKIP_WAL);
     }
+
+    final MutationProto.ColumnValue.Builder columns =
+        MutationProto.ColumnValue.newBuilder();
+    for (int family_idx = 0; family_idx < families.length; family_idx++) {
+      columns.clear();
+      columns.setFamily(Bytes.wrap(families[family_idx])); // ... for this family.
+
+      // Now add all the qualifier-value pairs.
+      for (int i = 0; i < qualifiers[family_idx].length; i++) {
+        final MutationProto.ColumnValue.QualifierValue column =
+            MutationProto.ColumnValue.QualifierValue.newBuilder()
+            .setQualifier(Bytes.wrap(qualifiers[family_idx][i]))
+            .setValue(Bytes.wrap(values[family_idx][i]))
+            .setTimestamp(timestamp)
+            .build();
+        columns.addQualifierValue(column);
+      }
+      put.addColumnValue(columns);
+    }
+
     return put.build();
   }
 
@@ -599,12 +717,19 @@ public final class PutRequest extends BatchableRpc
     buf.writeLong(lockid);    // Lock ID.
     buf.writeByte(durable ? 0x01 : 0x00);  // Whether or not to use the WAL.
 
-    buf.writeInt(1);  // Number of families that follow.
-    writeByteArray(buf, family);  // The column family.
+    buf.writeInt(families.length);  // Number of families that follow.
+    serializePayloads(buf);
+  }
 
-    buf.writeInt(qualifiers.length);  // Number of "KeyValues" that follow.
-    buf.writeInt(payloadSize());  // Size of the KV that follows.
-    serializePayload(buf);
+  @Override
+  void serializePayloads(ChannelBuffer buf) {
+    for (int i = 0; i < families.length; i++) {
+      writeByteArray(buf, families[i]);  // The column family.
+
+      buf.writeInt(qualifiers[i].length);  // Number of "KeyValues" that follow.
+      buf.writeInt(payloadSize(i));  // Size of the KV that follows.
+      serializePayload(buf, i);
+    }
   }
 
 }
