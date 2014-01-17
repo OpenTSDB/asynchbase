@@ -620,9 +620,30 @@ public abstract class HBaseRpc {
    * @param fields Additional fields to include in the output.
    */
   final String toStringWithQualifiers(final String classname,
+      final byte[][] families,
+      final byte[][][] qualifiers,
+      final byte[][][] values,
+      final String fields) {
+    return toStringWithQualifiers(classname, families, qualifiers, null, null, "");
+  }
+
+  /**
+   * Helper for subclass's {@link #toString} implementations.
+   * <p>
+   * This is used by subclasses such as {@link DeleteRequest}
+   * or {@link GetRequest}, to avoid code duplication.
+   * @param classname The name of the class of the caller.
+   * @param families A non-empty list of families or null.
+   * @param qualifiers A non-empty list of qualifiers or null.
+   * @param values A non-empty list of values or null.
+   * @param timestamps A non-empty list of timestamps or null.
+   * @param fields Additional fields to include in the output.
+   */
+  final String toStringWithQualifiers(final String classname,
                                       final byte[][] families,
                                       final byte[][][] qualifiers,
                                       final byte[][][] values,
+                                      final long[][] timestamps,
                                       final String fields) {
     final StringBuilder buf = new StringBuilder(256  // min=182
                                                 + fields.length());
@@ -648,6 +669,10 @@ public abstract class HBaseRpc {
         if (values != null && values[family_idx] != null) {
           buf.append(", values=");
           Bytes.pretty(buf, values[family_idx]);
+        }
+        if (timestamps != null && timestamps[family_idx] != null) {
+          buf.append(", timestamps=");
+          buf.append(Arrays.toString(timestamps[family_idx]));
         }
         buf.append("}, ");
       }
