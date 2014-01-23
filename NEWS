@@ -1,7 +1,7 @@
 AsyncHBase - User visible and noteworthy changes.
 This project uses Semantic Versioning (see http://semver.org/).
 
-* Version 1.5.0 (2013-??-??) [???????]
+* Version 1.5.0 (2013-12-13) [67fc3b7]
 
 This release introduces compatibility with HBase 0.96 and up, and adds
 a dependency on Google's protobuf-java library.  Note that HBase 0.95.x,
