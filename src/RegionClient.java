@@ -27,7 +27,6 @@
 package org.hbase.async;
 
 import java.io.IOException;
-import java.net.SocketAddress;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
@@ -569,6 +568,7 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
   void becomeReady(final Channel chan, final byte server_version) {
     // The following line will make this client no longer queue incoming
     // RPCs, as we're now ready to communicate with the server.
+    this.server_version = server_version;
     this.chan = chan;  // Volatile write.
     sendQueuedRpcs();
   }
@@ -976,16 +976,13 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
 
     if(System.getProperty("org.hbase.async.security.94") != null) {
       useSecure = true;
-      secureRpcHelper = new SecureRpcHelper(this, host);
+      secureRpcHelper = new SecureRpcHelper94(this, host);
       secureRpcHelper.sendHello(chan);
     } else {
       if (!hbase_client.has_root) {
         useSecure = true;
-        this.server_version = SERVER_VERSION_095_OR_ABOVE;
         secureRpcHelper = new SecureRpcHelper96(this, host);
         secureRpcHelper.sendHello(chan);
-//        header = header095();
-//        Channels.write(chan, header);
         return;
       } else if (System.getProperty("org.hbase.async.cdh3b3") != null) {
         header = headerCDH3b3();
@@ -1278,12 +1275,15 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
     LOG.debug("------------------>> ENTERING DECODE >>------------------");
     final int rpcid;
     final RPCPB.ResponseHeader header;
-    if (server_version >= SERVER_VERSION_095_OR_ABOVE) {
+
+    if(useSecure) {
       buf = secureRpcHelper.handleResponse(buf, chan);
       if(buf == null) {
-        return  null;
+        return null;
       }
+    }
 
+    if (server_version >= SERVER_VERSION_095_OR_ABOVE) {
       final int size = buf.readInt();
       ensureReadable(buf, size);
       HBaseRpc.checkArrayLength(buf, size);
@@ -1297,12 +1297,6 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
     } else {  // HBase 0.94 and before.
       header = null;  // No protobuf back then.
       rpcid = buf.readInt();
-      if(useSecure) {
-        buf = secureRpcHelper.handleResponse(buf, chan);
-        if(buf == null) {
-          return null;
-        }
-      }
     }
 
     final HBaseRpc rpc = rpcs_inflight.get(rpcid);

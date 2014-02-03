@@ -49,7 +49,7 @@ import java.util.Map;
 
 /**
  * Kerberos implementation for secure RPC authentication.
- * See {@link SecureRpcHelper} for available configuration.
+ * See {@link SecureRpcHelper94} for available configuration.
  */
 final class KerberosClientAuthProvider extends ClientAuthProvider {
 

@@ -29,7 +29,6 @@ package org.hbase.async;
 import org.jboss.netty.buffer.ChannelBuffer;
 import org.jboss.netty.buffer.ChannelBuffers;
 import org.jboss.netty.channel.Channel;
-import org.jboss.netty.channel.Channels;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -43,15 +42,11 @@ import java.util.HashMap;
 import java.util.Map;
 
 /**
- * This class provides the logic needed to interface
+ * This base class provides the logic needed to interface
  * with SASL supported RPC versions. It is used by RegionClient
  * to perform RPC handshaking as well as wrapping/unwrapping
  * the rpc payload depending on the selected QOP level.
  * <BR/>
- * Presently only 0.94-security is currently supported.
- * Enable it by setting the following system property:
- * <BR/>
- * <B>org.hbase.async.security.94</B>
  *
  * For kerberos the following configurations need to be set as system properties.
  * <ul>
@@ -71,25 +66,21 @@ import java.util.Map;
  *   <li>java.security.auth.login.config=/path/to/jaas.conf</li>
  * </ul>
  */
-class SecureRpcHelper {
-  private static final Logger LOG = LoggerFactory.getLogger(SecureRpcHelper.class);
-
+public abstract class SecureRpcHelper {
   public static final String SECURITY_AUTHENTICATION_KEY = "hbase.security.authentication";
   public static final String RPC_QOP_KEY = "hbase.rpc.protection";
-  public static final int SWITCH_TO_SIMPLE_AUTH = -88;
 
-  private boolean useWrap;
+  private static final Logger LOG = LoggerFactory.getLogger(SecureRpcHelper.class);
 
   protected final RegionClient regionClient;
   protected ClientAuthProvider clientAuthProvider;
   protected SaslClient saslClient;
   protected String ipHost;
-
+  private boolean useWrap;
 
   public SecureRpcHelper(RegionClient regionClient, String ipHost) {
-    this.regionClient = regionClient;
     this.ipHost = ipHost;
-
+    this.regionClient = regionClient;
     initSecureClientProvider();
   }
 
@@ -138,144 +129,6 @@ class SecureRpcHelper {
       return "auth";
     }
     throw new IllegalArgumentException("Unrecognized rpc protection level: "+protection);
-  }
-
-  public void sendHello(Channel channel) {
-    byte[] connectionHeader = {'s', 'r', 'p', 'c', 4};
-    byte[] buf = new byte[4 + 1 + 1];
-    ChannelBuffer buffer = ChannelBuffers.wrappedBuffer(buf);
-    buffer.clear();
-    buffer.writeBytes(connectionHeader);
-    //code for Kerberos AuthMethod enum in HBaseRPC
-    buffer.writeByte(clientAuthProvider.getAuthMethodCode());
-    Channels.write(channel, buffer);
-
-    //SaslClient is null for Simple Auth case
-    if(saslClient != null)  {
-      byte[] challengeBytes = null;
-      if (saslClient.hasInitialResponse()) {
-        challengeBytes = processChallenge(new byte[0]);
-      }
-      if (challengeBytes != null) {
-        buf = new byte[4 + challengeBytes.length];
-        buffer = ChannelBuffers.wrappedBuffer(buf);
-        buffer.clear();
-        buffer.writeInt(challengeBytes.length);
-        buffer.writeBytes(challengeBytes);
-
-        LOG.debug("Sending initial SASL Challenge: "+Bytes.pretty(buf));
-        Channels.write(channel, buffer);
-      }
-    } else {
-      sendRPCHeader(channel);
-      regionClient.sendVersion(channel);
-    }
-  }
-
-  public ChannelBuffer handleResponse(ChannelBuffer buf, Channel chan) {
-    if(saslClient == null) {
-      return buf;
-    }
-
-    if (!saslClient.isComplete()) {
-      final int readIdx = buf.readerIndex();
-      //RPCID is always -33 during SASL handshake
-      final int rpcid = buf.readInt();
-
-      //read rpc state
-      int state = buf.readInt();
-
-      //0 is success
-      //If unsuccessful let common exception handling do the work
-      if (state != 0) {
-        buf.readerIndex(readIdx);
-        return buf;
-      }
-
-      //Get length
-      //check for special case in length, for request to fallback simple auth
-      //let's not support this if we don't have to seems like a security loophole
-      int len = buf.readInt();
-      if(len == SWITCH_TO_SIMPLE_AUTH) {
-        throw new IllegalStateException("Server is requesting to fallback to simple " +
-            "authentication");
-      }
-
-      LOG.debug("Got length: "+len);
-      final byte[] b = new byte[len];
-      buf.readBytes(b);
-      LOG.debug("Got SASL challenge: "+Bytes.pretty(b));
-
-      byte[] challengeBytes = processChallenge(b);
-
-      if (challengeBytes != null) {
-        byte[] outBytes = new byte[4 + challengeBytes.length];
-        LOG.debug("Sending SASL response: "+Bytes.pretty(outBytes));
-        ChannelBuffer outBuffer = ChannelBuffers.wrappedBuffer(outBytes);
-        outBuffer.clear();
-        outBuffer.writeInt(challengeBytes.length);
-        outBuffer.writeBytes(challengeBytes);
-        Channels.write(chan, outBuffer);
-      }
-
-      if (saslClient.isComplete()) {
-        String qop = (String) saslClient.getNegotiatedProperty(Sasl.QOP);
-        if (LOG.isDebugEnabled()) {
-          LOG.debug("SASL client context established. Negotiated QoP: " + qop);
-        }
-        sendRPCHeader(chan);
-        regionClient.sendVersion(chan);
-      }
-      return null;
-    }
-
-    return unwrap(buf);
-  }
-
-  protected byte[] processChallenge(final byte[] b) {
-    try {
-      return Subject.doAs(clientAuthProvider.getClientSubject(),
-          new PrivilegedExceptionAction<byte[]>() {
-            @Override
-            public byte[] run() {
-              try {
-                return saslClient.evaluateChallenge(b);
-              } catch (SaslException e) {
-                return null;
-              }
-            }
-          });
-    } catch (PrivilegedActionException e) {
-      throw new IllegalStateException("Failed to send rpc hello", e);
-    }
-  }
-
-  private void sendRPCHeader(Channel channel) {
-    byte[] userBytes = Bytes.UTF8(clientAuthProvider.getClientUsername());
-    final String klass = "org.apache.hadoop.hbase.ipc.HRegionInterface";
-    byte[] classBytes = Bytes.UTF8(klass);
-    byte[] buf = new byte[4 + 1 + classBytes.length + 1 + 2 + userBytes.length + 1];
-
-    ChannelBuffer outBuffer = ChannelBuffers.wrappedBuffer(buf);
-    outBuffer.clear();
-    outBuffer.writerIndex(outBuffer.writerIndex()+4);
-    outBuffer.writeByte(classBytes.length);              // 1
-    outBuffer.writeBytes(classBytes);      // 44
-    //This is part of protocol header
-    //true if a user field exists
-    //1 is true in boolean
-    outBuffer.writeByte(1);
-    outBuffer.writeShort(userBytes.length);
-    outBuffer.writeBytes(userBytes);
-    //true if a realUser field exists
-    outBuffer.writeByte(0);
-    //write length
-    outBuffer.setInt(0, outBuffer.writerIndex() - 4);
-    outBuffer = wrap(outBuffer);
-    if(LOG.isDebugEnabled()) {
-      LOG.debug("Sending RPC Header: "+Bytes.pretty(outBuffer));
-    }
-    Channels.write(channel, outBuffer);
   }
 
   /**
@@ -327,4 +180,27 @@ class SecureRpcHelper {
       throw new IllegalStateException("Failed to wrap payload", e);
     }
   }
+
+  public abstract void sendHello(Channel channel);
+
+  public abstract ChannelBuffer handleResponse(ChannelBuffer buf, Channel chan);
+
+  protected byte[] processChallenge(final byte[] b) {
+    try {
+      return Subject.doAs(clientAuthProvider.getClientSubject(),
+          new PrivilegedExceptionAction<byte[]>() {
+            @Override
+            public byte[] run() {
+              try {
+                return saslClient.evaluateChallenge(b);
+              } catch (SaslException e) {
+                return null;
+              }
+            }
+          });
+    } catch (PrivilegedActionException e) {
+      throw new IllegalStateException("Failed to send rpc hello", e);
+    }
+  }
+
 }

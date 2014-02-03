@@ -26,8 +26,6 @@
  */
 package org.hbase.async;
 
-import com.google.protobuf.CodedOutputStream;
-import org.hbase.async.generated.RPCPB;
 import org.jboss.netty.buffer.ChannelBuffer;
 import org.jboss.netty.buffer.ChannelBuffers;
 import org.jboss.netty.channel.Channel;
@@ -36,26 +34,34 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import javax.security.sasl.Sasl;
-import java.io.IOException;
 
 /**
- * Implementation for 0.96-security.
+ * Implementation for 0.94-security.
+ * Enable it by setting the following system property:
+ * <BR/>
+ * <B>org.hbase.async.security.94</B>
  *
  * See {@link SecureRpcHelper} for configuration
  */
-class SecureRpcHelper96 extends SecureRpcHelper {
-  private static final Logger LOG = LoggerFactory.getLogger(SecureRpcHelper96.class);
+class SecureRpcHelper94 extends SecureRpcHelper {
+  private static final Logger LOG = LoggerFactory.getLogger(SecureRpcHelper94.class);
 
-  public SecureRpcHelper96(RegionClient regionClient, String ipHost) {
+  public static final int SWITCH_TO_SIMPLE_AUTH = -88;
+
+
+  public SecureRpcHelper94(RegionClient regionClient, String ipHost) {
     super(regionClient, ipHost);
   }
 
   @Override
   public void sendHello(Channel channel) {
-    byte[] connectionHeader = new byte[] { 'H', 'B', 'a', 's',
-                                           0,     // RPC version.
-                                           clientAuthProvider.getAuthMethodCode()}; //authmethod
-    ChannelBuffer buffer = ChannelBuffers.wrappedBuffer(connectionHeader);
+    byte[] connectionHeader = {'s', 'r', 'p', 'c', 4};
+    byte[] buf = new byte[4 + 1 + 1];
+    ChannelBuffer buffer = ChannelBuffers.wrappedBuffer(buf);
+    buffer.clear();
+    buffer.writeBytes(connectionHeader);
+    //code for Kerberos AuthMethod enum in HBaseRPC
+    buffer.writeByte(clientAuthProvider.getAuthMethodCode());
     Channels.write(channel, buffer);
 
     //SaslClient is null for Simple Auth case
@@ -65,7 +71,7 @@ class SecureRpcHelper96 extends SecureRpcHelper {
         challengeBytes = processChallenge(new byte[0]);
       }
       if (challengeBytes != null) {
-        byte[] buf = new byte[4 + challengeBytes.length];
+        buf = new byte[4 + challengeBytes.length];
         buffer = ChannelBuffers.wrappedBuffer(buf);
         buffer.clear();
         buffer.writeInt(challengeBytes.length);
@@ -76,10 +82,11 @@ class SecureRpcHelper96 extends SecureRpcHelper {
       }
     } else {
       sendRPCHeader(channel);
+      regionClient.sendVersion(channel);
     }
   }
 
-  //This is similar to 94 handshake except rpcid is no longer sent
+  @Override
   public ChannelBuffer handleResponse(ChannelBuffer buf, Channel chan) {
     if(saslClient == null) {
       return buf;
@@ -87,6 +94,9 @@ class SecureRpcHelper96 extends SecureRpcHelper {
 
     if (!saslClient.isComplete()) {
       final int readIdx = buf.readerIndex();
+      //RPCID is always -33 during SASL handshake
+      final int rpcid = buf.readInt();
+
       //read rpc state
       int state = buf.readInt();
 
@@ -98,7 +108,14 @@ class SecureRpcHelper96 extends SecureRpcHelper {
       }
 
       //Get length
+      //check for special case in length, for request to fallback simple auth
+      //let's not support this if we don't have to seems like a security loophole
       int len = buf.readInt();
+      if(len == SWITCH_TO_SIMPLE_AUTH) {
+        throw new IllegalStateException("Server is requesting to fallback to simple " +
+            "authentication");
+      }
+
       LOG.debug("Got length: "+len);
       final byte[] b = new byte[len];
       buf.readBytes(b);
@@ -122,6 +139,7 @@ class SecureRpcHelper96 extends SecureRpcHelper {
           LOG.debug("SASL client context established. Negotiated QoP: " + qop);
         }
         sendRPCHeader(chan);
+        regionClient.sendVersion(chan);
       }
       return null;
     }
@@ -129,36 +147,32 @@ class SecureRpcHelper96 extends SecureRpcHelper {
     return unwrap(buf);
   }
 
-  private void sendRPCHeader(Channel chan) {
-    Channels.write(chan, header095());
-    regionClient.becomeReady(chan, RegionClient.SERVER_VERSION_095_OR_ABOVE);
+  private void sendRPCHeader(Channel channel) {
+    byte[] userBytes = Bytes.UTF8(clientAuthProvider.getClientUsername());
+    final String klass = "org.apache.hadoop.hbase.ipc.HRegionInterface";
+    byte[] classBytes = Bytes.UTF8(klass);
+    byte[] buf = new byte[4 + 1 + classBytes.length + 1 + 2 + userBytes.length + 1];
+
+    ChannelBuffer outBuffer = ChannelBuffers.wrappedBuffer(buf);
+    outBuffer.clear();
+    outBuffer.writerIndex(outBuffer.writerIndex()+4);
+    outBuffer.writeByte(classBytes.length);              // 1
+    outBuffer.writeBytes(classBytes);      // 44
+    //This is part of protocol header
+    //true if a user field exists
+    //1 is true in boolean
+    outBuffer.writeByte(1);
+    outBuffer.writeShort(userBytes.length);
+    outBuffer.writeBytes(userBytes);
+    //true if a realUser field exists
+    outBuffer.writeByte(0);
+    //write length
+    outBuffer.setInt(0, outBuffer.writerIndex() - 4);
+    outBuffer = wrap(outBuffer);
+    if(LOG.isDebugEnabled()) {
+      LOG.debug("Sending RPC Header: "+Bytes.pretty(outBuffer));
+    }
+    Channels.write(channel, outBuffer);
   }
 
-  private ChannelBuffer header095() {
-    final RPCPB.UserInformation user = RPCPB.UserInformation.newBuilder()
-      .setEffectiveUser(clientAuthProvider.getClientUsername())
-      .build();
-    final RPCPB.ConnectionHeader pb = RPCPB.ConnectionHeader.newBuilder()
-      .setUserInfo(user)
-      .setServiceName("ClientService")
-      .setCellBlockCodecClass("org.apache.hadoop.hbase.codec.KeyValueCodec")
-      .build();
-    final int pblen = pb.getSerializedSize();
-    final byte[] buf = new byte[4 + pblen];
-    final ChannelBuffer header = ChannelBuffers.wrappedBuffer(buf);
-    header.clear();
-    header.writeInt(pblen);  // 4 bytes
-    try {
-      final CodedOutputStream output =
-        CodedOutputStream.newInstance(buf, 4, pblen);
-      pb.writeTo(output);
-      output.checkNoSpaceLeft();
-    } catch (IOException e) {
-      throw new RuntimeException("Should never happen", e);
-    }
-    // We wrote to the underlying buffer but Netty didn't see the writes,
-    // so move the write index forward.
-    header.writerIndex(buf.length);
-    return header;
-  }
 }
