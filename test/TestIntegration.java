@@ -66,6 +66,7 @@ import org.hbase.async.AtomicIncrementRequest;
 import org.hbase.async.Bytes;
 import org.hbase.async.ColumnPrefixFilter;
 import org.hbase.async.ColumnRangeFilter;
+import org.hbase.async.ColumnPaginationFilter;
 import org.hbase.async.DeleteRequest;
 import org.hbase.async.FilterList;
 import org.hbase.async.GetRequest;
@@ -693,6 +694,31 @@ final public class TestIntegration {
     kvs = rows.get(1);
     assertSizeIs(1, kvs);
     assertEq("v3", kvs.get(0).value());
+  }
+
+  /** SImple column pagination filter tests. */
+  @Test
+  public void columnPaginationFilter() throws Exception {
+    client.setFlushInterval(FAST_FLUSH);
+    // Keep only columns that fall with limit and offset of 2 and 1 respectively
+    // which should result in the return of only qb2 and qc3
+    final PutRequest put1 = new PutRequest(table, "crf1", family, "qa1", "v1");
+    final PutRequest put2 = new PutRequest(table, "crf1", family, "qb2", "v2");
+    final PutRequest put3 = new PutRequest(table, "crf1", family, "qc3", "v3");
+    final PutRequest put4 = new PutRequest(table, "crf1", family, "qd4", "v4");
+    Deferred.group(Deferred.group(client.put(put1), client.put(put2)),
+                   Deferred.group(client.put(put3), client.put(put4))).join();
+    final Scanner scanner = client.newScanner(table);
+    scanner.setFamily(family);
+    scanner.setStartKey("crf1");
+    scanner.setStopKey("crf1");
+    scanner.setFilter(new ColumnPaginationFilter(2, 1));
+    final ArrayList<ArrayList<KeyValue>> rows = scanner.nextRows().join();
+    assertSizeIs(1, rows);  // Only one row to start with which has a non-empty filtered column set
+    ArrayList<KeyValue> kvs = rows.get(0);
+    assertSizeIs(2, kvs);
+    assertEq("v2", kvs.get(0).value());
+    assertEq("v3", kvs.get(1).value());
   }
 
   /** Simple column filter list tests.  */
