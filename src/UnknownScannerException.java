@@ -53,6 +53,10 @@ implements HasFailedRpcException {
 
   @Override
   UnknownScannerException make(final Object msg, final HBaseRpc rpc) {
+    if (msg == this || msg instanceof UnknownScannerException) {
+      final UnknownScannerException e = (UnknownScannerException) msg;
+      return new UnknownScannerException(e.getMessage(), rpc);
+    }
     return new UnknownScannerException(msg.toString(), rpc);
   }
 
