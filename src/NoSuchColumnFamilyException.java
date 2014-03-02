@@ -53,6 +53,10 @@ implements HasFailedRpcException {
 
   @Override
   NoSuchColumnFamilyException make(final Object msg, final HBaseRpc rpc) {
+    if (msg == this || msg instanceof NoSuchColumnFamilyException) {
+      final NoSuchColumnFamilyException e = (NoSuchColumnFamilyException) msg;
+      return new NoSuchColumnFamilyException(e.getMessage(), rpc);
+    }
     return new NoSuchColumnFamilyException(msg.toString(), rpc);
   }
 

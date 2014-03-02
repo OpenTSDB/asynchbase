@@ -703,7 +703,7 @@ final class MultiAction extends HBaseRpc implements HBaseRpc.IsEdit {
             // cloning "e", so instead we just abuse its `make' factory method
             // slightly to duplicate it.  This mangles the message a bit, but
             // that's mostly harmless.
-            resps[n + k] = e.make(e.getMessage(), batch.get(n + k));
+            resps[n + k] = e.make(e, batch.get(n + k));
           }
         } else {
           for (int k = 0; k < nrpcs_per_key; k++) {
@@ -803,6 +803,10 @@ final class MultiAction extends HBaseRpc implements HBaseRpc.IsEdit {
 
     @Override
     MultiPutFailedException make(final Object msg, final HBaseRpc rpc) {
+      if (msg == this || msg instanceof MultiPutFailedException) {
+        final MultiPutFailedException e = (MultiPutFailedException) msg;
+        return new MultiPutFailedException(e.getMessage(), rpc);
+      }
       return new MultiPutFailedException(msg.toString(), rpc);
     }
 

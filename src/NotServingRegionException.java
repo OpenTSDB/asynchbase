@@ -65,6 +65,10 @@ implements HasFailedRpcException {
 
   @Override
   NotServingRegionException make(final Object msg, final HBaseRpc rpc) {
+    if (msg == this || msg instanceof NotServingRegionException) {
+      final NotServingRegionException e = (NotServingRegionException) msg;
+      return new NotServingRegionException(e.getMessage(), rpc);
+    }
     return new NotServingRegionException(msg.toString(), rpc);
   }
 
