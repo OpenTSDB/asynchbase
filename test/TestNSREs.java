@@ -33,6 +33,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentSkipListMap;
 import java.util.concurrent.TimeUnit;
 
+import com.stumbleupon.async.Callback;
 import org.jboss.netty.util.HashedWheelTimer;
 import org.jboss.netty.util.Timeout;
 import org.jboss.netty.util.TimerTask;
@@ -42,16 +43,16 @@ import com.stumbleupon.async.Deferred;
 import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
+
+import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertSame;
 
+import org.mockito.ArgumentMatcher;
 import org.mockito.invocation.InvocationOnMock;
 import org.mockito.stubbing.Answer;
-import static org.mockito.Mockito.any;
-import static org.mockito.Mockito.doAnswer;
-import static org.mockito.Mockito.eq;
-import static org.mockito.Mockito.never;
-import static org.mockito.Mockito.verify;
-import static org.mockito.Mockito.when;
+
+import static org.junit.Assert.assertTrue;
+import static org.mockito.Matchers.argThat;
 
 import org.powermock.api.support.membermodification.MemberMatcher;
 import org.powermock.api.support.membermodification.MemberModifier;
@@ -59,7 +60,11 @@ import org.powermock.core.classloader.annotations.PowerMockIgnore;
 import org.powermock.core.classloader.annotations.PrepareForTest;
 import org.powermock.modules.junit4.PowerMockRunner;
 import org.powermock.reflect.Whitebox;
+
+import static org.mockito.Matchers.eq;
+import static org.mockito.Mockito.*;
 import static org.powermock.api.mockito.PowerMockito.mock;
+import static org.powermock.api.mockito.PowerMockito.verifyNew;
 
 @RunWith(PowerMockRunner.class)
 // "Classloader hell"...  It's real.  Tell PowerMock to ignore these classes
@@ -77,6 +82,7 @@ final class TestNSREs {
   private static final byte[] SERVER = getStatic("SERVER");
   private static final byte[] TABLE = { 't', 'a', 'b', 'l', 'e' };
   private static final byte[] KEY = { 'k', 'e', 'y' };
+  private static final byte[] KEY2 = { 'b', 'r', 'o' };
   private static final byte[] FAMILY = { 'f' };
   private static final byte[] QUALIFIER = { 'q', 'u', 'a', 'l' };
   private static final byte[] VALUE = { 'v', 'a', 'l', 'u', 'e' };
@@ -247,6 +253,337 @@ final class TestNSREs {
     assertSame(row, client.get(get).joinUninterruptibly());
   }
 
+
+  @Test
+  public void alreadyNSREdRegion() throws Exception {
+    // This test is to reproduce the retrial of rpc that was to a Region which
+    // is known as NSRE at the time of initial sending. When a rpc is assigned to
+    // a region that is already known as NSRE at the time to initial sent(sendRpcToRegion),
+    // handleNSRE will be called, but at the same time in the code a RetryRpc()
+    // callback is attached which will resend the rpc even after the rpc succeeded
+    // when the NSRE is finished. This will be mainly problematic with the
+    // atomicIncrement requests
+
+    // MainGet is the rpc that will exhibit the above said behaviour of resending
+    // it twice both the times returning success
+    final GetRequest mainGet = new GetRequest(TABLE, KEY);
+    // TriggerGet rpc is the rpc that will be used to trigger the NSRE for the
+    // region, so the behaviour of regionClient for this rpc would be to return NSRE
+    // the first time and then for second time it will be called back with result
+    final GetRequest triggerGet = new GetRequest(TABLE, KEY);
+    // Since the both the rpcs are same, the below is the result for them
+    final ArrayList<KeyValue> row = new ArrayList<KeyValue>(1);
+    row.add(KV);
+
+    // Always this region client will be always returns true
+    when(regionclient.isAlive()).thenReturn(true);
+
+    // The region client's behaviour for the triggerRpc, as mentioned above
+    // this rpc is mainly used to invalidate the region cache of the client
+    // so this will make the knownToBeNSREd to return true for the region
+    doAnswer(new Answer() {
+      private int attempt = 0;
+      @Override
+      public Object answer(InvocationOnMock invocation) throws Throwable {
+        Object[] args = invocation.getArguments();
+        GetRequest triggerGet = (GetRequest) args[0];
+        switch (attempt++) {
+          case 0:
+            // We stub out the RegionClient, which normally does this.
+            client.handleNSRE(triggerGet, triggerGet.getRegion().name(),
+                new NotServingRegionException("Trigger NSRE", triggerGet));
+            break;
+          case 1:
+            // trigger the callback with the result
+            triggerGet.callback(row);
+            break;
+          case 2:
+            throw new AssertionError("Can Never Happen");
+        }
+        return null;
+      }
+    }).when(regionclient).sendRpc(eq(triggerGet));
+
+
+    // Now since the handleNSRE function, this will create a probe rpc
+    // and will invalidate the region cache before retry of the probe rpc.
+    // So we will configure the meta_client to return this region for the look up
+    when(metaclient.isAlive()).thenReturn(true);
+    when(metaclient.getClosestRowBefore(eq(meta), anyBytes(), anyBytes(), anyBytes()))
+        .thenAnswer(newDeferred(metaRow()));
+    // This will make sure that whenever region lookup happens the same
+    // region client, on which we have stubbed the calls
+    final Method newClient = MemberMatcher.method(HBaseClient.class, "newClient");
+    MemberModifier.stub(newClient).toReturn(regionclient);
+
+
+    // Now we write the NSRE logic for the probe and hence we defined the
+    // argument matcher for things other than the original get Request and
+    // trigger get Request
+    doAnswer(new Answer() {
+      private int attempt = 0;
+      @Override
+      public Object answer(InvocationOnMock invocation) throws Throwable {
+        Object[] args = invocation.getArguments();
+        final GetRequest exist = (GetRequest) args[0];
+        switch (attempt++) {
+          case 0:
+            // We stub out the RegionClient, which normally does this.
+            client.handleNSRE(exist, exist.getRegion().name(),
+                new NotServingRegionException("exist 1", exist));
+            break;
+          case 1:
+            // We stub out the RegionClient, which normally does this.
+            client.handleNSRE(exist, exist.getRegion().name(),
+                new NotServingRegionException("exist 2", exist));
+            break;
+          case 2:
+            // NSRE cleared here, start the callback chain for exist rpc
+            exist.callback(null);
+            break;
+          case 3:
+            // This should never happen
+            throw new AssertionError("Never Happens");
+        }
+        return null;
+      }
+    }).when(regionclient).sendRpc(argThat(new ArgumentMatcher<HBaseRpc>() {
+      @Override
+      public boolean matches(Object that) {
+        return (that != mainGet) && (that != triggerGet);
+      }
+    }));
+
+    // Now the class stubbing for the mainGet RPC, whenever the call
+    // is made for this rpc we just start the callback chain of the rpc
+    doAnswer(new Answer() {
+      @Override
+      public Object answer(InvocationOnMock invocation) throws Throwable {
+        Object[] args = invocation.getArguments();
+        final GetRequest getMain = (GetRequest) args[0];
+        // stubbing out the entire decode method in the region client
+        getMain.callback(row);
+        return null;
+      }
+    }).when(regionclient).sendRpc(eq(mainGet));
+
+    // now we swap the timer in client with our taskTimer which helps in making
+    // the mainGet request during  the period of wait for probe, in which case
+    // the code path for the alreadyNSREd region will kick in
+    FakeTaskTimer taskTimer = new FakeTaskTimer();
+    HashedWheelTimer originalTimer = Whitebox.getInternalState(client, "timer");
+    Whitebox.setInternalState(client, "timer", taskTimer);
+
+
+    // Code for execution of the test
+    // start the execution of triggerGet, this will create the probe rpc
+    // now the region will be in a NSREd state
+    Deferred<ArrayList<KeyValue>> triggerRpcDeferred = client.get(triggerGet);
+    // now execute the mainGet
+    Deferred<ArrayList<KeyValue>> mainRpcDeferred = client.get(mainGet);
+    // now swap the FakeTaskTimer() with the previous Timer
+    Whitebox.setInternalState(client, "timer", originalTimer);
+    // now start the task that was paused
+    boolean execute = taskTimer.continuePausedTask();
+    assertTrue(execute);
+
+    // Check the return result is same for trigger
+    assertSame(row, triggerRpcDeferred.joinUninterruptibly());
+    // For the trigger the rpc is sent only twice
+    // once for the initial trigger for the NSRE
+    // other is the final time when NSRE is cleared
+    verify(regionclient, times(2)).sendRpc(triggerGet);
+
+
+    // Check the return result is same for main
+    assertSame(row, mainRpcDeferred.joinUninterruptibly());
+    // Number of times this rpc is sent to regionServer
+    // this is 2 since attachment of RetryRpc() in the codePath
+    verify(regionclient, times(2)).sendRpc(mainGet);
+    // But the above is not the behaviour we expect to see as the rpc
+    // is sent twice even after the initial rpc succeeded
+    // This will also can lead to very erroneous behaviour when probe rpc
+    // got expired due to tooManyRetries exception
+  }
+
+
+  @Test
+  public void probeRpcTooManyRetriesCallBack() throws Exception {
+    // This test is demonstrate that when probe rpc expires with the number of
+    // tries (it will happen in around approx 10 sec) its call back chain will
+    // start executing, in which case all the rpcs in that are in the NSRE list
+    // will be called sendRpcToRegion assuming that NSRE is cleared. But in this
+    // path if the first few rpc's response returns with region being NSREd
+    // before the other rpc's client.sendRpc is triggered (this is quite
+    // possible if above 1000 rpcs are waiting on NSRE because these rpcs may be
+    // waiting on meta region lookup and before this clears up, the first few
+    // rpcs may have returned NSRE Exception from the region server)
+    // all the remaining rpcs will go through knownTo be NSREd codepath in which
+    // retryRpc callback will be added to these rpc's deferred in which case
+    // all of them will be resent again after the clearing of NSRE. This can
+    // be disastrous in the case of probe rpc getting expired a few number of times.
+    // (SideNote : This happend once in our production cluster where the probe
+    // expired five times).
+
+
+    // number of times the probe rpc should expire
+    final int probe_expire_count = 5;
+
+    // dummyGet[] : This are the getRequests for which the RetryRpc()
+    // callback will be attached
+    final GetRequest[] dummyGet = {new GetRequest(TABLE, KEY),
+                                   new GetRequest(TABLE, KEY),
+                                   new GetRequest(TABLE, KEY)};
+
+    // triggerGet : This rpc is used to Trigger the initial NSRE and also used
+    // to pause the probe execution by the FakeTaskTimer
+    final GetRequest triggerGet = new GetRequest(TABLE, KEY);
+    // Since the both the rpcs are same, the below is the result for them
+    final ArrayList<KeyValue> row = new ArrayList<KeyValue>(1);
+    row.add(KV);
+
+    // The Timers which will be swapped to simulate the pause for probe rpc
+    final FakeTaskTimer taskTimer = new FakeTaskTimer();
+    final HashedWheelTimer originalTimer = Whitebox.getInternalState(client, "timer");
+
+    // Always this region client will be always returns true
+    when(regionclient.isAlive()).thenReturn(true);
+
+
+
+    // Now since the handleNSRE function, this will create a probe rpc
+    // and will invalidate the region cache before retry of the probe rpc.
+    // So we will configure the meta_client to return this region for the look up
+    when(metaclient.isAlive()).thenReturn(true);
+    when(metaclient.getClosestRowBefore(eq(meta), anyBytes(), anyBytes(), anyBytes()))
+        .thenAnswer(newDeferred(metaRow()));
+    // This will make sure that whenever region lookup happens the same
+    // region client, on which we have stubbed the calls
+    final Method newClient = MemberMatcher.method(HBaseClient.class, "newClient");
+    MemberModifier.stub(newClient).toReturn(regionclient);
+
+
+    // behaviour for the triggerGet
+    doAnswer(new Answer() {
+      private int attempt = 0;
+      @Override
+      public Object answer(InvocationOnMock invocation) throws Throwable {
+        Object[] args = invocation.getArguments();
+        GetRequest triggerGet = (GetRequest) args[0];
+        attempt++;
+        if (attempt <= probe_expire_count + 1) {
+          // we will swap the internal timer with taskTimer
+          // which will pause the execution of the probe rpc and thus
+          // will allow calling the sendRpcToRegion for the dummyRpcs
+          Whitebox.setInternalState(client, "timer", taskTimer);
+          // We stub out the RegionClient, which normally does this.
+          client.handleNSRE(triggerGet, triggerGet.getRegion().name(),
+              new NotServingRegionException("Trigger NSRE", triggerGet));
+        } else if (attempt == probe_expire_count + 2) {
+          // this is the case where NSRE is cleared
+          // trigger the callback with the result
+          triggerGet.callback(row);
+        } else {
+            throw new AssertionError("Can Never Happen");
+        }
+        return null;
+      }
+    }).when(regionclient).sendRpc(eq(triggerGet));
+
+
+    // Now we write the NSRE logic for the probe and hence we defined the
+    // argument matcher for things other than the original get Request and
+    // trigger get Request
+    doAnswer(new Answer() {
+      private int attempt = 0;
+      @Override
+      public Object answer(InvocationOnMock invocation) throws Throwable {
+        Object[] args = invocation.getArguments();
+        final GetRequest exist = (GetRequest) args[0];
+        attempt++;
+        if (attempt < (probe_expire_count * 10 + 4)) {
+          // We stub out the RegionClient, which normally does this.
+          client.handleNSRE(exist, exist.getRegion().name(),
+              new NotServingRegionException("exist 1", exist));
+        } else if (attempt == (probe_expire_count * 10 + 4)) {
+          // NSRE on the region is cleared here
+          exist.callback(null);
+        } else {
+            // This should never happen
+            throw new AssertionError("Never Happens");
+        }
+        return null;
+      }
+    }).when(regionclient).sendRpc(argThat(new ArgumentMatcher<HBaseRpc>() {
+      @Override
+      public boolean matches(Object that) {
+        return (that != dummyGet[0]) && (that != triggerGet)
+            && (that != dummyGet[1]) && (that != dummyGet[2]);
+      }
+    }));
+
+
+
+    // Now the class stubbing for the dummyGet RPC, whenever the call
+    // is made for this rpc we just start the callback chain of the rpc
+    doAnswer(new Answer() {
+      @Override
+      public Object answer(InvocationOnMock invocation) throws Throwable {
+        Object[] args = invocation.getArguments();
+        final GetRequest dummyGet = (GetRequest) args[0];
+        // stubbing out the entire decode method in the region client
+        dummyGet.callback(row);
+        return null;
+      }
+    }).when(regionclient).sendRpc(argThat(new ArgumentMatcher<HBaseRpc>() {
+      @Override
+      public boolean matches(Object that) {
+        return (that == dummyGet[0])
+            || (that == dummyGet[1])
+            || (that == dummyGet[2]);
+      }
+    }));
+
+
+    // Main test code starts here
+    // start the execution of triggerGet, this will create the probe rpc
+    // now the region will be in a NSREd state
+    Deferred<ArrayList<KeyValue>> triggerRpcDeferred = client.get(triggerGet);
+
+    // execute the dummyRpcs now
+    final Deferred<ArrayList<KeyValue>>[] dummyRpcDeferred = new Deferred[]{
+        client.get(dummyGet[0]),
+        client.get(dummyGet[1]),
+        client.get(dummyGet[2])};
+
+    Whitebox.setInternalState(client, "timer", originalTimer);
+    int taskTimerPauses = 0;
+    while(taskTimer.continuePausedTask()) {
+      taskTimerPauses++;
+      Whitebox.setInternalState(client, "timer", originalTimer);
+    }
+
+    // see the mock of regionclient.sendRpc method for this rpc
+    // for the explanation for this
+    verify(regionclient, times(probe_expire_count + 2)).sendRpc(triggerGet);
+    // TaskTimer will be paused probe_expire_count + 1 times
+    assertEquals(probe_expire_count + 1, taskTimerPauses);
+
+    // Output of the triggerRpc
+    assertSame(row, triggerRpcDeferred.joinUninterruptibly());
+
+    for (int i = 0; i < 3; i++) {
+      // Check the output is same
+      assertSame(row, dummyRpcDeferred[i].join());
+      // Check the number of times rpc is sent to region client
+      // this will be equals to probe_expire_count for each RetryRpc during failure
+      //  + 1 after the NSRE is cleared
+      //  + 1 for the initial RetryRpc attached as the region is in NSRE
+      verify(regionclient, times(probe_expire_count + 2)).sendRpc(dummyGet[i]);
+    }
+  }
+
+
   // ----------------- //
   // Helper functions. //
   // ----------------- //
@@ -350,6 +687,64 @@ final class TestNSREs {
     @Override
     public Set<Timeout> stop() {
       return null;  // Never called during tests.
+    }
+  }
+
+  /**
+   * A fake {@link org.jboss.netty.util.Timer} implementation that instead
+   * of executing the task it will store that task in a internal state
+   * and provides a function to start the execution of the stored task.
+   * This implementation thus allows the flexibility of simulating the
+   * things that will be going on during the time out period of a TimerTask.
+   * This was mainly return to simulate the timeout period for alreadyNSREdRegion
+   * test, where the region will be in the NSREd mode only during this timeout period,
+   * which was difficult to simulate using the above {@link FakeTimer} implementation,
+   * as we don't get back the control during the timeout period
+   *
+   * Here it will hold at most two Tasks. we have two tasks here because when one
+   * is being executed, it may call for newTimeOut for another task
+   */
+  static final class FakeTaskTimer extends HashedWheelTimer {
+
+    private TimerTask newPausedTask = null;
+    private TimerTask pausedTask = null;
+
+    @Override
+    public Timeout newTimeout(final TimerTask task,
+                              final long delay,
+                              final TimeUnit unit) {
+      synchronized (this) {
+        if (pausedTask == null) {
+          pausedTask = task;
+        }  else if (newPausedTask == null) {
+          newPausedTask = task;
+        } else {
+          throw new IllegalStateException("Cannot Pause Two Timer Tasks");
+        }
+      }
+      return null;
+    }
+
+    @Override
+    public Set<Timeout> stop() {
+        return null;
+    }
+
+    public boolean continuePausedTask() {
+      if (pausedTask == null) {
+        return false;
+      }
+      try {
+        if (newPausedTask != null) {
+          throw new IllegalStateException("Cannot be in this state");
+        }
+        pausedTask.run(null); // Argument never used in this code base
+        pausedTask = newPausedTask; // Reset the task for handling the next TimerTask
+        newPausedTask = null; // Reset Old Paused Task
+        return true;
+      } catch (Exception e) {
+        throw new RuntimeException("Timer task failed: " + pausedTask, e);
+      }
     }
   }
 
