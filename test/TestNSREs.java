@@ -43,6 +43,7 @@ import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import static org.junit.Assert.assertSame;
+import static org.junit.Assert.assertEquals;
 
 import org.mockito.invocation.InvocationOnMock;
 import org.mockito.stubbing.Answer;
@@ -94,6 +95,7 @@ final class TestNSREs {
   private RegionClient metaclient = mock(RegionClient.class);
   /** Fake client supposedly connected to our fake test table.  */
   private RegionClient regionclient = mock(RegionClient.class);
+
 
   @Before
   public void before() throws Exception {
@@ -162,15 +164,15 @@ final class TestNSREs {
     final Method newClient = MemberMatcher.method(HBaseClient.class, "newClient");
     MemberModifier.stub(newClient).toReturn(newregionclient);
     when(newregionclient.isAlive()).thenReturn(true);
-    // Answer the "exists" probe we use to check if the NSRE is still there.
+    // Answer the "scanner probe" probe we use to check if the NSRE is still there.
     doAnswer(new Answer() {
       public Object answer(final InvocationOnMock invocation) {
         Object[] args = invocation.getArguments();
-        final GetRequest exist = (GetRequest) args[0];
+        final HBaseRpc exist = (HBaseRpc) args[0];
         exist.getDeferred().callback(true);
         return null;
       }
-    }).when(newregionclient).sendRpc(any(GetRequest.class));
+    }).when(newregionclient).sendRpc(any(Scanner.OpenScannerRequest.class));
     // Answer our actual get request.
     doAnswer(new Answer() {
       public Object answer(final InvocationOnMock invocation) {
@@ -180,6 +182,7 @@ final class TestNSREs {
     }).when(newregionclient).sendRpc(get);
 
     assertSame(row, client.get(get).joinUninterruptibly());
+    assertEquals(2, get.attempt);
   }
 
   @Test
@@ -217,7 +220,7 @@ final class TestNSREs {
       @SuppressWarnings("fallthrough")
       public Object answer(final InvocationOnMock invocation) {
         Object[] args = invocation.getArguments();
-        final GetRequest exist = (GetRequest) args[0];
+        final HBaseRpc exist = (HBaseRpc) args[0];
         switch (attempt++) {
           case 0:  // We stub out the RegionClient, which normally does this.
             client.handleNSRE(exist, exist.getRegion().name(),
@@ -232,7 +235,7 @@ final class TestNSREs {
         }
         return null;
       }
-    }).when(newregionclient).sendRpc(any(GetRequest.class));
+    }).when(newregionclient).sendRpc(any(Scanner.OpenScannerRequest.class));
     // Do a second meta lookup (behavior already set at [1]).
     // The second lookup returns the same daughter region (re-use [2]).
 
@@ -245,6 +248,7 @@ final class TestNSREs {
     }).when(newregionclient).sendRpc(get);
 
     assertSame(row, client.get(get).joinUninterruptibly());
+    assertEquals(2, get.attempt);
   }
 
   // ----------------- //
