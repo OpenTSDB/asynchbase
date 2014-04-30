@@ -79,7 +79,7 @@ implements HasFailedRpcException {
   private final HBaseRpc rpc;
 
   /** A deferred one can wait on before retrying the failed RPC.  */
-  private final Deferred deferred;
+  private final Deferred<?> deferred;
 
   /**
    * Constructor.
@@ -92,7 +92,7 @@ implements HasFailedRpcException {
   PleaseThrottleException(final String msg,
                           final HBaseException cause,
                           final HBaseRpc rpc,
-                          final Deferred deferred) {
+                          final Deferred<?> deferred) {
     super(msg, cause);
     this.rpc = rpc;
     this.deferred = deferred;
@@ -109,8 +109,23 @@ implements HasFailedRpcException {
    * Returns a deferred one can wait on before retrying the failed RPC.
    * @since 1.3
    */
-  public Deferred getDeferred() {
+  public Deferred<?> getDeferred() {
     return deferred;
+  }
+
+  @Override
+  PleaseThrottleException make(final Object msg, final HBaseRpc rpc) {
+    // This is only called from HBaseClient.sendRpcToRegion(), more precisely
+    // from RetryRpc.call(), where we need to report the correct RPC that has
+    // failed when it's a META or ROOT lookup that failed.
+    if (msg instanceof PleaseThrottleException) {
+      final PleaseThrottleException e = (PleaseThrottleException) msg;
+      return new PleaseThrottleException(e.getMessage(), e, rpc,
+                                         e.getDeferred());
+    }
+    // Thus we never expect to be here since the only call site is passing us
+    // a PleaseThrottleException in argument.  Not very clean, I agree.
+    throw new AssertionError("Should never be here!");
   }
 
   private static final long serialVersionUID = 1286782542;

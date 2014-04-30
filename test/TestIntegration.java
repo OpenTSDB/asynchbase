@@ -37,6 +37,7 @@ import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.util.ArrayList;
+import java.util.Collection;
 
 import org.jboss.netty.logging.InternalLoggerFactory;
 import org.jboss.netty.logging.Slf4JLoggerFactory;
@@ -52,20 +53,28 @@ import org.junit.runner.Request;
 import org.junit.runner.Result;
 import org.junit.runner.notification.Failure;
 import org.junit.runner.notification.RunListener;
+import org.powermock.reflect.Whitebox;
 import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertNotNull;
 
 import com.stumbleupon.async.Callback;
-import com.stumbleupon.async.CallbackOverflowError;
 import com.stumbleupon.async.Deferred;
+import com.stumbleupon.async.DeferredGroupException;
 
 import org.hbase.async.AtomicIncrementRequest;
 import org.hbase.async.Bytes;
+import org.hbase.async.ColumnPrefixFilter;
+import org.hbase.async.ColumnRangeFilter;
 import org.hbase.async.DeleteRequest;
+import org.hbase.async.FilterList;
 import org.hbase.async.GetRequest;
 import org.hbase.async.HBaseClient;
+import org.hbase.async.KeyRegexpFilter;
 import org.hbase.async.KeyValue;
+import org.hbase.async.NoSuchColumnFamilyException;
 import org.hbase.async.PutRequest;
+import org.hbase.async.ScanFilter;
 import org.hbase.async.Scanner;
 import org.hbase.async.TableNotFoundException;
 
@@ -173,11 +182,10 @@ final public class TestIntegration {
     client.setFlushInterval(FAST_FLUSH);
     final double write_time = System.currentTimeMillis();
     final PutRequest put = new PutRequest(table, "k", family, "q", "val");
-    final GetRequest get = new GetRequest(table, "k")
-      .family(family).qualifier("q");
+    final GetRequest get = new GetRequest(table, "k", family, "q");
     client.put(put).join();
     final ArrayList<KeyValue> kvs = client.get(get).join();
-    assertEquals(1, kvs.size());
+    assertSizeIs(1, kvs);
     final KeyValue kv = kvs.get(0);
     assertEq("k", kv.key());
     assertEq(family, kv.family());
@@ -192,16 +200,47 @@ final public class TestIntegration {
   public void putReadDeleteRead() throws Exception {
     client.setFlushInterval(FAST_FLUSH);
     final PutRequest put = new PutRequest(table, "k", family, "q", "val");
-    final GetRequest get = new GetRequest(table, "k")
-      .family(family).qualifier("q");
+    final GetRequest get = new GetRequest(table, "k", family, "q");
     client.put(put).join();
     final ArrayList<KeyValue> kvs = client.get(get).join();
-    assertEquals(1, kvs.size());
+    assertSizeIs(1, kvs);
     assertEq("val", kvs.get(0).value());
     final DeleteRequest del = new DeleteRequest(table, "k", family, "q");
     client.delete(del).join();
     final ArrayList<KeyValue> kvs2 = client.get(get).join();
-    assertEquals(0, kvs2.size());
+    assertSizeIs(0, kvs2);
+  }
+
+  /**
+   * Write two values to a HBase column and read them back,
+   * delete one, and read back the other.
+   */
+  @Test
+  public void putReadDeleteAtTimestamp() throws Exception {
+    client.setFlushInterval(FAST_FLUSH);
+    byte[] t = table.getBytes();
+    byte[] k = "kprd@ts".getBytes();
+    byte[] f = family.getBytes();
+    // Make the qualifier unique to avoid running into HBASE-9879.
+    byte[] q = ("q" + System.currentTimeMillis()
+                + "-" + System.nanoTime()).getBytes();
+    byte[] v1 = "val1".getBytes();
+    byte[] v2 = "val2".getBytes();
+    final PutRequest put1 = new PutRequest(t, k, f, q, v1, 100L);
+    final PutRequest put2 = new PutRequest(t, k, f, q, v2, 200L);
+    client.put(put1).join();
+    client.put(put2).join();
+    final GetRequest get = new GetRequest(t, k, f, q).maxVersions(2);
+    final ArrayList<KeyValue> kvs = client.get(get).join();
+    assertSizeIs(2, kvs);
+    assertEq("val2", kvs.get(0).value());
+    assertEq("val1", kvs.get(1).value());
+    final DeleteRequest del = new DeleteRequest(t, k, f, q, 200L);
+    del.setDeleteAtTimestampOnly(true);
+    client.delete(del).join();
+    final ArrayList<KeyValue> kvs2 = client.get(get).join();
+    assertSizeIs(1, kvs2);
+    assertEq("val1", kvs2.get(0).value());
   }
 
   /** Basic scan test. */
@@ -228,10 +267,10 @@ final public class TestIntegration {
           }
           n++;
           try {
-            assertEquals(1, rows.size());
+            assertSizeIs(1, rows);
             final ArrayList<KeyValue> kvs = rows.get(0);
             final KeyValue kv = kvs.get(0);
-            assertEquals(1, kvs.size());
+            assertSizeIs(1, kvs);
             assertEq("s" + n, kv.key());
             assertEq("q", kv.qualifier());
             assertEq("v" + n, kv.value());
@@ -264,21 +303,127 @@ final public class TestIntegration {
     scanner.setFamily(family);
     scanner.setQualifiers(new byte[][] { { 'a' }, { 'c' } });
     final ArrayList<ArrayList<KeyValue>> rows = scanner.nextRows(2).join();
-    assertEquals(1, rows.size());
+    assertSizeIs(1, rows);
     final ArrayList<KeyValue> kvs = rows.get(0);
-    assertEquals(2, kvs.size());
+    assertSizeIs(2, kvs);
     assertEq("val1", kvs.get(0).value());
     assertEq("val3", kvs.get(1).value());
+  }
+
+  /** Write a few KVs and delete them in one batch */
+  @Test
+  public void multiDelete() throws Exception {
+    client.setFlushInterval(FAST_FLUSH);
+    final PutRequest put2 = new PutRequest(table, "mdk1", family, "q2", "val2");
+    client.put(put2).join();
+    final PutRequest put3 = new PutRequest(table, "mdk2", family, "q3", "val3");
+    client.put(put3).join();
+    final PutRequest put1 = new PutRequest(table, "mdk1", family, "q1", "val1");
+    client.put(put1).join();
+    final DeleteRequest del2 = new DeleteRequest(table, "mdk1", family, "q2");
+    final DeleteRequest del3 = new DeleteRequest(table, "mdk2", family, "q3");
+    final DeleteRequest del1 = new DeleteRequest(table, "mdk1", family, "q1");
+    Deferred.group(client.delete(del2), client.delete(del3),
+                   client.delete(del1)).join();
+    GetRequest get = new GetRequest(table, "mdk1");
+    ArrayList<KeyValue> kvs = client.get(get).join();
+    assertSizeIs(0, kvs);
+    get = new GetRequest(table, "mdk2");
+    kvs = client.get(get).join();
+    assertSizeIs(0, kvs);
+  }
+
+  /** Write a few KVs in different regions and delete them in one batch */
+  @Test
+  public void multiRegionMultiDelete() throws Exception {
+    client.setFlushInterval(FAST_FLUSH);
+    final String table1 = args[0] + "1";
+    final String table2 = args[0] + "2";
+    createOrTruncateTable(client, table1, family);
+    createOrTruncateTable(client, table2, family);
+    final PutRequest put2 = new PutRequest(table1, "mdk1", family, "q2", "val2");
+    client.put(put2).join();
+    final PutRequest put3 = new PutRequest(table1, "mdk2", family, "q3", "val3");
+    client.put(put3).join();
+    final PutRequest put1 = new PutRequest(table2, "mdk1", family, "q1", "val1");
+    client.put(put1).join();
+    final DeleteRequest del2 = new DeleteRequest(table1, "mdk1", family, "q2");
+    final DeleteRequest del3 = new DeleteRequest(table1, "mdk2", family, "q3");
+    final DeleteRequest del1 = new DeleteRequest(table2, "mdk1", family, "q1");
+    Deferred.group(client.delete(del2), client.delete(del3),
+                   client.delete(del1)).join();
+    GetRequest get = new GetRequest(table1, "mdk1");
+    ArrayList<KeyValue> kvs = client.get(get).join();
+    assertSizeIs(0, kvs);
+    get = new GetRequest(table1, "mdk2");
+    kvs = client.get(get).join();
+    assertSizeIs(0, kvs);
+    get = new GetRequest(table2, "mdk1");
+    kvs = client.get(get).join();
+    assertSizeIs(0, kvs);
+  }
+
+  /** Attempt to write a column family that doesn't exist. */
+  @Test
+  public void putNonexistentFamily() throws Exception {
+    client.setFlushInterval(FAST_FLUSH);
+    final PutRequest put = new PutRequest(table, "k", family + family,
+                                          "q", "val");
+    try {
+      client.put(put).join();
+    } catch (NoSuchColumnFamilyException e) {
+      assertEquals(put, e.getFailedRpc());
+      return;
+    }
+    throw new AssertionError("Should never be here");
+  }
+
+  /** Send a bunch of edits with one that references a non-existent family. */
+  @Test
+  public void multiPutWithOneBadRpcInBatch() throws Exception {
+    client.setFlushInterval(FAST_FLUSH);
+    final PutRequest put1 = new PutRequest(table, "mk1", family, "m1", "mpb1");
+    // The following edit is destined to a non-existent family.
+    final PutRequest put2 = new PutRequest(table, "mk2", family + family,
+                                           "m2", "mpb2");
+    final PutRequest put3 = new PutRequest(table, "mk3", family, "m3", "mpb3");
+    try {
+      final ArrayList<Deferred<Object>> ds = new ArrayList<Deferred<Object>>(3);
+      ds.add(client.put(put1));
+      ds.add(client.put(put2));
+      ds.add(client.put(put3));
+      Deferred.groupInOrder(ds).join();
+    } catch (DeferredGroupException e) {
+      final ArrayList<Object> results = e.results();
+      final Object res2 = results.get(1);
+      if (!(res2 instanceof NoSuchColumnFamilyException)) {
+        throw new AssertionError("res2 wasn't a NoSuchColumnFamilyException: "
+                                 + res2);
+      }
+      assertEquals(put2, ((NoSuchColumnFamilyException) res2).getFailedRpc());
+      final GetRequest get1 = new GetRequest(table, "mk1", family, "m1");
+      ArrayList<KeyValue> kvs = client.get(get1).join();
+      assertSizeIs(1, kvs);
+      assertEq("mpb1", kvs.get(0).value());
+      final GetRequest get2 = new GetRequest(table, "mk2", family, "m2");
+      assertSizeIs(0, client.get(get2).join());
+      final GetRequest get3 = new GetRequest(table, "mk3", family, "m3");
+      kvs = client.get(get3).join();
+      assertSizeIs(1, kvs);
+      assertEq("mpb3", kvs.get(0).value());
+      return;
+    }
+    throw new AssertionError("Should never be here");
   }
 
   /** Lots of buffered counter increments from multiple threads. */
   @Test
   public void bufferedIncrementStressTest() throws Exception {
     client.setFlushInterval(FAST_FLUSH);
-    final byte[] table = this.table.getBytes();
+    final byte[] table = TestIntegration.table.getBytes();
     final byte[] key1 = "cnt1".getBytes();  // Spread the increments..
     final byte[] key2 = "cnt2".getBytes();  // .. over these two counters.
-    final byte[] family = this.family.getBytes();
+    final byte[] family = TestIntegration.family.getBytes();
     final byte[] qual = { 'q' };
     final DeleteRequest del1 = new DeleteRequest(table, key1, family, qual);
     final DeleteRequest del2 = new DeleteRequest(table, key2, family, qual);
@@ -334,7 +479,7 @@ final public class TestIntegration {
                                 mkGet(table, key2, family, qual) };
     for (final GetRequest get : gets) {
       final ArrayList<KeyValue> kvs = client.get(get).join();
-      assertEquals(1, kvs.size());
+      assertSizeIs(1, kvs);
       assertEquals(incr_per_thread * nthreads / 2,
                    Bytes.getLong(kvs.get(0).value()));
     }
@@ -348,9 +493,9 @@ final public class TestIntegration {
   @Test
   public void incrementCoalescingWithAmountsTooBig() throws Exception {
     client.setFlushInterval(SLOW_FLUSH);
-    final byte[] table = this.table.getBytes();
+    final byte[] table = TestIntegration.table.getBytes();
     final byte[] key = "cnt".getBytes();
-    final byte[] family = this.family.getBytes();
+    final byte[] family = TestIntegration.family.getBytes();
     final byte[] qual = { 'q' };
     final DeleteRequest del = new DeleteRequest(table, key, family, qual);
     del.setBufferable(false);
@@ -360,14 +505,14 @@ final public class TestIntegration {
       bufferIncrement(table, key, family, qual, big),
       bufferIncrement(table, key, family, qual, big)
     ).addCallbackDeferring(new Callback<Deferred<ArrayList<KeyValue>>,
-                                        ArrayList<Object>>() {
-      public Deferred<ArrayList<KeyValue>> call(final ArrayList<Object> incs) {
+                                        ArrayList<Long>>() {
+      public Deferred<ArrayList<KeyValue>> call(final ArrayList<Long> incs) {
         final GetRequest get = new GetRequest(table, key)
           .family(family).qualifier(qual);
         return client.get(get);
       }
     }).join();
-    assertEquals(1, kvs.size());
+    assertSizeIs(1, kvs);
     assertEquals(big + big, Bytes.getLong(kvs.get(0).value()));
     // Check we sent the right number of RPCs.
     assertEquals(2, client.stats().atomicIncrements());
@@ -377,9 +522,9 @@ final public class TestIntegration {
   @Test
   public void incrementCoalescingWithOverflowingAmounts() throws Exception {
     client.setFlushInterval(SLOW_FLUSH);
-    final byte[] table = this.table.getBytes();
+    final byte[] table = TestIntegration.table.getBytes();
     final byte[] key = "cnt".getBytes();
-    final byte[] family = this.family.getBytes();
+    final byte[] family = TestIntegration.family.getBytes();
     final byte[] qual = { 'q' };
     final DeleteRequest del = new DeleteRequest(table, key, family, qual);
     del.setBufferable(false);
@@ -395,7 +540,7 @@ final public class TestIntegration {
     final GetRequest get = new GetRequest(table, key)
       .family(family).qualifier(qual);
     final ArrayList<KeyValue> kvs = client.get(get).join();
-    assertEquals(1, kvs.size());
+    assertSizeIs(1, kvs);
     assertEquals(big + 1 + big, Bytes.getLong(kvs.get(0).value()));
     // Check we sent the right number of RPCs.
     assertEquals(2, client.stats().atomicIncrements());
@@ -405,9 +550,9 @@ final public class TestIntegration {
   @Test
   public void incrementCoalescingWithUnderflowingAmounts() throws Exception {
     client.setFlushInterval(SLOW_FLUSH);
-    final byte[] table = this.table.getBytes();
+    final byte[] table = TestIntegration.table.getBytes();
     final byte[] key = "cnt".getBytes();
-    final byte[] family = this.family.getBytes();
+    final byte[] family = TestIntegration.family.getBytes();
     final byte[] qual = { 'q' };
     final DeleteRequest del = new DeleteRequest(table, key, family, qual);
     del.setBufferable(false);
@@ -423,7 +568,7 @@ final public class TestIntegration {
     final GetRequest get = new GetRequest(table, key)
       .family(family).qualifier(qual);
     final ArrayList<KeyValue> kvs = client.get(get).join();
-    assertEquals(1, kvs.size());
+    assertSizeIs(1, kvs);
     assertEquals(big - 1 + big, Bytes.getLong(kvs.get(0).value()));
     // Check we sent the right number of RPCs.
     assertEquals(2, client.stats().atomicIncrements());
@@ -433,9 +578,9 @@ final public class TestIntegration {
   @Test
   public void incrementCoalescingWithZeroSumAmount() throws Exception {
     client.setFlushInterval(SLOW_FLUSH);
-    final byte[] table = this.table.getBytes();
+    final byte[] table = TestIntegration.table.getBytes();
     final byte[] key = "cnt".getBytes();
-    final byte[] family = this.family.getBytes();
+    final byte[] family = TestIntegration.family.getBytes();
     final byte[] qual = { 'q' };
     final DeleteRequest del = new DeleteRequest(table, key, family, qual);
     del.setBufferable(false);
@@ -447,7 +592,7 @@ final public class TestIntegration {
     final GetRequest get = new GetRequest(table, key)
       .family(family).qualifier(qual);
     final ArrayList<KeyValue> kvs = client.get(get).join();
-    assertEquals(1, kvs.size());
+    assertSizeIs(1, kvs);
     assertEquals(0, Bytes.getLong(kvs.get(0).value()));
     // The sum was 0, but must have sent the increment anyway.
     assertEquals(1, client.stats().atomicIncrements());
@@ -467,6 +612,140 @@ final public class TestIntegration {
   private static GetRequest mkGet(final byte[] table, final byte[] key,
                                   final byte[] family, final byte[] qual) {
     return new GetRequest(table, key).family(family).qualifier(qual);
+  }
+
+  /** Test regexp-based row key filtering.  */
+  @Test
+  public void keyRegexpFilter() throws Exception {
+    client.setFlushInterval(FAST_FLUSH);
+    final PutRequest put1 = new PutRequest(table, "krf accept:by the filter",
+                                           family, "q", "krfv1");
+    final PutRequest put2 = new PutRequest(table, "krf filtered out",
+                                           family, "q", "krfv2");
+    final PutRequest put3 = new PutRequest(table, "krf this is Accepted too",
+                                           family, "q", "krfv3");
+    Deferred.group(client.put(put1), client.put(put2),
+                   client.put(put3)).join();
+    final Scanner scanner = client.newScanner(table);
+    scanner.setFamily(family);
+    scanner.setStartKey("krf ");
+    scanner.setStopKey("krf!");
+    scanner.setKeyRegexp("[Aa]ccept(ed)?");
+    final ArrayList<ArrayList<KeyValue>> rows = scanner.nextRows().join();
+    assertSizeIs(2, rows);
+    ArrayList<KeyValue> kvs = rows.get(0);
+    assertSizeIs(1, kvs);
+    assertEq("krfv1", kvs.get(0).value());
+    kvs = rows.get(1);
+    assertSizeIs(1, kvs);
+    assertEq("krfv3", kvs.get(0).value());
+  }
+
+  /** Simple column prefix filter tests.  */
+  @Test
+  public void columnPrefixFilter() throws Exception {
+    client.setFlushInterval(FAST_FLUSH);
+    // Keep only rows with a column qualifier that starts with "qa".
+    final PutRequest put1 = new PutRequest(table, "cpf1", family, "qa1", "v1");
+    final PutRequest put2 = new PutRequest(table, "cpf1", family, "qa2", "v2");
+    final PutRequest put3 = new PutRequest(table, "cpf2", family, "qa3", "v3");
+    final PutRequest put4 = new PutRequest(table, "cpf2", family, "qb4", "v4");
+    Deferred.group(Deferred.group(client.put(put1), client.put(put2)),
+                   Deferred.group(client.put(put3), client.put(put4))).join();
+    final Scanner scanner = client.newScanner(table);
+    scanner.setFamily(family);
+    scanner.setStartKey("cpf1");
+    scanner.setStopKey("cpf3");
+    scanner.setFilter(new ColumnPrefixFilter("qa"));
+    final ArrayList<ArrayList<KeyValue>> rows = scanner.nextRows().join();
+    assertSizeIs(2, rows);
+    ArrayList<KeyValue> kvs = rows.get(0);
+    assertSizeIs(2, kvs);
+    assertEq("v1", kvs.get(0).value());
+    assertEq("v2", kvs.get(1).value());
+    kvs = rows.get(1);
+    assertSizeIs(1, kvs);
+    assertEq("v3", kvs.get(0).value());
+  }
+
+  /** Simple column range filter tests.  */
+  @Test
+  public void columnRangeFilter() throws Exception {
+    client.setFlushInterval(FAST_FLUSH);
+    // Keep rows that have a qualifier in between "qb" (inclusive) and "qd4"
+    // (exclusive).  So only v2 and v3 should be returned by the scanner.
+    final PutRequest put1 = new PutRequest(table, "crf1", family, "qa1", "v1");
+    final PutRequest put2 = new PutRequest(table, "crf1", family, "qb2", "v2");
+    final PutRequest put3 = new PutRequest(table, "crf2", family, "qc3", "v3");
+    final PutRequest put4 = new PutRequest(table, "crf2", family, "qd4", "v4");
+    Deferred.group(Deferred.group(client.put(put1), client.put(put2)),
+                   Deferred.group(client.put(put3), client.put(put4))).join();
+    final Scanner scanner = client.newScanner(table);
+    scanner.setFamily(family);
+    scanner.setStartKey("crf1");
+    scanner.setStopKey("crf3");
+    scanner.setFilter(new ColumnRangeFilter("qb", true, "qd4", false));
+    final ArrayList<ArrayList<KeyValue>> rows = scanner.nextRows().join();
+    assertSizeIs(2, rows);  // One KV from row "fl1" and one from "fl2".
+    ArrayList<KeyValue> kvs = rows.get(0);
+    assertSizeIs(1, kvs);
+    assertEq("v2", kvs.get(0).value());
+    kvs = rows.get(1);
+    assertSizeIs(1, kvs);
+    assertEq("v3", kvs.get(0).value());
+  }
+
+  /** Simple column filter list tests.  */
+  @Test
+  public void filterList() throws Exception {
+    client.setFlushInterval(FAST_FLUSH);
+    // Keep rows that have both:
+    //   - a row key that is exactly either "fl1" or "fl2".
+    //   - a qualifier in between "qb" (inclusive) and "qd4" (exclusive).
+    final ArrayList<ScanFilter> filters = new ArrayList<ScanFilter>(2);
+    filters.add(new ColumnRangeFilter("qb", true, "qd4", false));
+    filters.add(new KeyRegexpFilter("fl[12]$"));
+    // Filtered out as we're looking due to qualifier being out of range:
+    final PutRequest put1 = new PutRequest(table, "fl1", family, "qa1", "v1");
+    // Kept by the filter:
+    final PutRequest put2 = new PutRequest(table, "fl1", family, "qb2", "v2");
+    // Filtered out because the row key doesn't match the regexp:
+    final PutRequest put3 = new PutRequest(table, "fl1a", family, "qb3", "v3");
+    // Kept by the filter:
+    final PutRequest put4 = new PutRequest(table, "fl2", family, "qc4", "v4");
+    // Filtered out because the qualifier is on the exclusive upper bound:
+    final PutRequest put5 = new PutRequest(table, "fl2", family, "qd5", "v5");
+    // Filtered out because the qualifier is past the upper bound:
+    final PutRequest put6 = new PutRequest(table, "fl2", family, "qd6", "v6");
+    Deferred.group(Deferred.group(client.put(put1), client.put(put2),
+                                  client.put(put3)),
+                   Deferred.group(client.put(put4), client.put(put5),
+                                  client.put(put6))).join();
+    final Scanner scanner = client.newScanner(table);
+    scanner.setFamily(family);
+    scanner.setStartKey("fl0");
+    scanner.setStopKey("fl9");
+    scanner.setFilter(new FilterList(filters));
+    final ArrayList<ArrayList<KeyValue>> rows = scanner.nextRows().join();
+    assertSizeIs(2, rows);  // One KV from row "fl1" and one from "fl2".
+    ArrayList<KeyValue> kvs = rows.get(0);
+    assertSizeIs(1, kvs);   // KV from "fl1":
+    assertEq("v2", kvs.get(0).value());
+    kvs = rows.get(1);
+    assertSizeIs(1, kvs);   // KV from "fl2":
+    assertEq("v4", kvs.get(0).value());
+  }
+
+  @Test
+  public void prefetchMeta() throws Exception {
+    // Prefetch the metadata for a given table, then invasively probe the
+    // region cache to demonstrate it is filled.
+    client.prefetchMeta(table).join();
+
+    Object region_info = Whitebox.invokeMethod(client, "getRegion",
+                                               table.getBytes(),
+                                               HBaseClient.EMPTY_ARRAY);
+    assertNotNull(region_info);
   }
 
   /** Regression test for issue #2. */
@@ -521,7 +800,7 @@ final public class TestIntegration {
     // long key below.
     client.ensureTableFamilyExists(table, family).join();
     client.setFlushInterval(FAST_FLUSH);
-    final byte[] table = this.table.getBytes();
+    final byte[] table = TestIntegration.table.getBytes();
     // 980 was empirically found to be the minimum size with which
     // Netty bug #474 gets triggered.  Bug got fixed in Netty 3.5.8.
     final byte[] key = new byte[980];
@@ -529,14 +808,14 @@ final public class TestIntegration {
     key[1] = '4';
     key[2] = '0';
     key[key.length - 1] = '*';
-    final byte[] family = this.family.getBytes();
+    final byte[] family = TestIntegration.family.getBytes();
     final byte[] qual = { 'q' };
     final PutRequest put = new PutRequest(table, key, family, qual,
                                           new byte[0] /* empty */);
     final GetRequest get = new GetRequest(table, key);
     client.put(put).join();
     final ArrayList<KeyValue> kvs = client.get(get).join();
-    assertEquals(1, kvs.size());
+    assertSizeIs(1, kvs);
     KeyValue kv = kvs.get(0);
     assertEq("q", kv.qualifier());
     assertEq("", kv.value());
@@ -546,9 +825,9 @@ final public class TestIntegration {
   @Test
   public void regression41() throws Exception {
     client.setFlushInterval(SLOW_FLUSH);
-    final byte[] table = this.table.getBytes();
+    final byte[] table = TestIntegration.table.getBytes();
     final byte[] key = "cnt".getBytes();
-    final byte[] family = this.family.getBytes();
+    final byte[] family = TestIntegration.family.getBytes();
     final byte[] qual = { 'q' };
     final DeleteRequest del = new DeleteRequest(table, key, family, qual);
     del.setBufferable(false);
@@ -561,8 +840,17 @@ final public class TestIntegration {
     final GetRequest get = new GetRequest(table, key)
       .family(family).qualifier(qual);
     final ArrayList<KeyValue> kvs = client.get(get).join();
-    assertEquals(1, kvs.size());
+    assertSizeIs(1, kvs);
     assertEquals(iterations, Bytes.getLong(kvs.get(0).value()));
+  }
+
+  private static <T> void assertSizeIs(final int size,
+                                       final Collection<T> list) {
+    final int actual = list.size();
+    if (size != actual) {
+      throw new AssertionError("List was expected to contain " + size
+                 + " items but was found to contain " + actual + ": " + list);
+    }
   }
 
   private static void assertEq(final String expect, final byte[] actual) {

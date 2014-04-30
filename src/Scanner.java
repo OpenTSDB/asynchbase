@@ -40,6 +40,12 @@ import org.slf4j.LoggerFactory;
 import com.stumbleupon.async.Callback;
 import com.stumbleupon.async.Deferred;
 
+import org.hbase.async.generated.ClientPB.Column;
+import org.hbase.async.generated.ClientPB.Scan;
+import org.hbase.async.generated.ClientPB.ScanRequest;
+import org.hbase.async.generated.ClientPB.ScanResponse;
+import org.hbase.async.generated.FilterPB;
+import org.hbase.async.generated.HBasePB.TimeRange;
 import static org.hbase.async.HBaseClient.EMPTY_ARRAY;
 
 /**
@@ -126,11 +132,11 @@ public final class Scanner {
    */
   private byte[] stop_key = EMPTY_ARRAY;
 
-  private byte[] family;     // TODO(tsuna): Handle multiple families?
-  private byte[][] qualifiers;
+  private byte[][] families;
+  private byte[][][] qualifiers;
 
-  /** Pre-serialized filter to apply on the scanner.  */
-  private byte[] filter;
+  /** Filter to apply on the scanner.  */
+  private ScanFilter filter;
 
   /** Minimum {@link KeyValue} timestamp to scan.  */
   private long min_timestamp = 0;
@@ -152,6 +158,15 @@ public final class Scanner {
    * @see #setMaxNumKeyValues
    */
   private int max_num_kvs = DEFAULT_MAX_NUM_KVS;
+
+  /**
+   * Maximum number of bytes to fetch at a time.
+   * Except that HBase won't truncate a row in the middle or what,
+   * so we could potentially go a bit above that.
+   * Only used when talking to HBase 0.95 and up.
+   * @see #setMaxNumBytes
+   */
+  private long max_num_bytes = ~HBaseRpc.MAX_BYTE_ARRAY_MASK;
 
   /**
    * How many versions of each cell to retrieve.
@@ -258,7 +273,7 @@ public final class Scanner {
   public void setFamily(final byte[] family) {
     KeyValue.checkFamily(family);
     checkScanningNotStarted();
-    this.family = family;
+    families = new byte[][] { family };
   }
 
   /** Specifies a particular column family to scan.  */
@@ -267,9 +282,51 @@ public final class Scanner {
   }
 
   /**
+   * Specifies multiple column families to scan.
+   * <p>
+   * If {@code qualifiers} is not {@code null}, then {@code qualifiers[i]}
+   * is assumed to be the list of qualifiers to scan in the family
+   * {@code families[i]}.  If {@code qualifiers[i]} is {@code null}, then
+   * all the columns in the family {@code families[i]} will be scanned.
+   * @param families Array of column families names.
+   * @param qualifiers Array of column qualifiers.  Can be {@code null}.
+   * <strong>This array of byte arrays will NOT be copied.</strong>
+   * @throws IllegalStateException if scanning already started.
+   * @since 1.5
+   */
+  public void setFamilies(byte[][] families, byte[][][] qualifiers) {
+    checkScanningNotStarted();
+    for (int i = 0; i < families.length; i++) {
+      KeyValue.checkFamily(families[i]);
+      if (qualifiers != null && qualifiers[i] != null) {
+        for (byte[] qualifier : qualifiers[i]) {
+          KeyValue.checkQualifier(qualifier);
+        }
+      }
+    }
+    this.families = families;
+    this.qualifiers = qualifiers;
+  }
+
+  /**
+   * Specifies multiple column families to scan.
+   * @since 1.5
+   */
+  public void setFamilies(final String... families) {
+    checkScanningNotStarted();
+    this.families = new byte[families.length][];
+    for (int i = 0; i < families.length; i++) {
+      this.families[i] = families[i].getBytes();
+      KeyValue.checkFamily(this.families[i]);
+      qualifiers[i] = null;
+    }
+  }
+
+  /**
    * Specifies a particular column qualifier to scan.
    * <p>
    * Note that specifying a qualifier without a family has no effect.
+   * You need to call {@link #setFamily(byte[])} too.
    * @param qualifier The column qualifier.
    * <strong>This byte array will NOT be copied.</strong>
    * @throws IllegalStateException if scanning already started.
@@ -277,7 +334,7 @@ public final class Scanner {
   public void setQualifier(final byte[] qualifier) {
     KeyValue.checkQualifier(qualifier);
     checkScanningNotStarted();
-    this.qualifiers = new byte[][] { qualifier };
+    this.qualifiers = new byte[][][] { { qualifier } };
   }
 
   /** Specifies a particular column qualifier to scan.  */
@@ -289,6 +346,7 @@ public final class Scanner {
    * Specifies one or more column qualifiers to scan.
    * <p>
    * Note that specifying qualifiers without a family has no effect.
+   * You need to call {@link #setFamily(byte[])} too.
    * @param qualifiers The column qualifiers.
    * <strong>These byte arrays will NOT be copied.</strong>
    * @throws IllegalStateException if scanning already started.
@@ -299,41 +357,54 @@ public final class Scanner {
     for (final byte[] qualifier : qualifiers) {
       KeyValue.checkQualifier(qualifier);
     }
-    this.qualifiers = qualifiers;
+    this.qualifiers = new byte[][][] { qualifiers };
   }
 
+  /**
+   * Specifies the filter to apply to this scanner.
+   * @param filter The filter.  If {@code null}, then no filter will be used.
+   * @since 1.5
+   */
+  public void setFilter(final ScanFilter filter) {
+    this.filter = filter;
+  }
+
+  /**
+   * Returns the possibly-{@code null} filter applied to this scanner.
+   * @since 1.5
+   */
+  public ScanFilter getFilter() {
+    return filter;
+  }
+
+  /**
+   * Clears any filter that was previously set on this scanner.
+   * <p>
+   * This is a shortcut for {@link #setFilter}{@code (null)}
+   * @since 1.5
+   */
+  public void clearFilter() {
+    filter = null;
+  }
 
   /**
    * Sets a regular expression to filter results based on the row key.
    * <p>
-   * This is equivalent to calling {@link #setKeyRegexp(String, Charset)}
-   * with the ISO-8859-1 charset in argument.
+   * This is equivalent to calling
+   * {@link #setFilter setFilter}{@code (new }{@link
+   * KeyRegexpFilter}{@code (regexp))}
    * @param regexp The regular expression with which to filter the row keys.
    */
   public void setKeyRegexp(final String regexp) {
-    setKeyRegexp(regexp, CharsetUtil.ISO_8859_1);
+    filter = new KeyRegexpFilter(regexp);
   }
-
-  private static final byte[] ROWFILTER = Bytes.ISO88591("org.apache.hadoop"
-    + ".hbase.filter.RowFilter");
-  private static final byte[] REGEXSTRINGCOMPARATOR = Bytes.ISO88591("org.apache.hadoop"
-    + ".hbase.filter.RegexStringComparator");
-  private static final byte[] EQUAL = new byte[] { 'E', 'Q', 'U', 'A', 'L' };
 
   /**
    * Sets a regular expression to filter results based on the row key.
    * <p>
-   * This regular expression will be applied on the server-side, on the row
-   * key.  Rows for which the key doesn't match will not be returned to this
-   * scanner, which can be useful to carefully select which rows are matched
-   * when you can't just do a prefix match, and cut down the amount of data
-   * transfered on the network.
-   * <p>
-   * Don't use an expensive regular expression, because Java's implementation
-   * uses backtracking and matching will happen on the server side, potentially
-   * on many many row keys.  See <a href="su.pr/2xaY8D">Regular Expression
-   * Matching Can Be Simple And Fast</a> for more details on regular expression
-   * performance (or lack thereof) and what "backtracking" means.
+   * This is equivalent to calling
+   * {@link #setFilter setFilter}{@code (new }{@link
+   * KeyRegexpFilter}{@code (regexp, charset))}
    * @param regexp The regular expression with which to filter the row keys.
    * @param charset The charset used to decode the bytes of the row key into a
    * string.  The RegionServer must support this charset, otherwise it will
@@ -341,29 +412,7 @@ public final class Scanner {
    * scanner.
    */
   public void setKeyRegexp(final String regexp, final Charset charset) {
-    final byte[] regex = Bytes.UTF8(regexp);
-    final byte[] chars = Bytes.UTF8(charset.name());
-    filter = new byte[(1 + 40 + 2 + 5 + 1 + 1 + 1 + 52
-                       + 2 + regex.length + 2 + chars.length)];
-    final ChannelBuffer buf = ChannelBuffers.wrappedBuffer(filter);
-    buf.clear();  // Set the writerIndex to 0.
-
-    buf.writeByte((byte) ROWFILTER.length);                     // 1
-    buf.writeBytes(ROWFILTER);                                  // 40
-    // writeUTF of the comparison operator
-    buf.writeShort(5);                                          // 2
-    buf.writeBytes(EQUAL);                                      // 5
-    // The comparator: a RegexStringComparator
-    buf.writeByte(54);  // Code for WritableByteArrayComparable // 1
-    buf.writeByte(0);   // Code for "this has no code".         // 1
-    buf.writeByte((byte) REGEXSTRINGCOMPARATOR.length);         // 1
-    buf.writeBytes(REGEXSTRINGCOMPARATOR);                      // 52
-    // writeUTF the regexp
-    buf.writeShort(regex.length);                               // 2
-    buf.writeBytes(regex);                                      // regex.length
-    // writeUTF the charset
-    buf.writeShort(chars.length);                               // 2
-    buf.writeBytes(chars);                                      // chars.length
+    filter = new KeyRegexpFilter(regexp, charset);
   }
 
   /**
@@ -451,6 +500,15 @@ public final class Scanner {
   }
 
   /**
+   * Maximum number of {@link KeyValue}s the server is allowed to return.
+   * @see #setMaxNumKeyValues
+   * @since 1.5
+   */
+  public int getMaxNumKeyValues() {
+    return max_num_kvs;
+  }
+
+  /**
    * Sets the maximum number of versions to return for each cell scanned.
    * <p>
    * By default a scanner will only return the most recent version of
@@ -477,6 +535,37 @@ public final class Scanner {
    */
   public int getMaxVersions() {
     return versions;
+  }
+
+  /**
+   * Sets the maximum number of bytes returned at once by the scanner.
+   * <p>
+   * HBase may actually return more than this many bytes because it will not
+   * truncate a row in the middle.
+   * <p>
+   * This value is only used when communicating with HBase 0.95 and newer.
+   * For older versions of HBase this value is silently ignored.
+   * @param max_num_bytes A strictly positive number of bytes.
+   * @since 1.5
+   * @throws IllegalStateException if scanning already started.
+   * @throws IllegalArgumentException if {@code max_num_bytes <= 0}
+   */
+  public void setMaxNumBytes(final long max_num_bytes) {
+    if (max_num_bytes <= 0) {
+      throw new IllegalArgumentException("Need a strictly positive number of"
+                                         + " bytes, got " + max_num_bytes);
+    }
+    checkScanningNotStarted();
+    this.max_num_bytes = max_num_bytes;
+  }
+
+  /**
+   * Returns the maximum number of bytes returned at once by the scanner.
+   * @see #setMaxNumBytes
+   * @since 1.5
+   */
+  public long getMaxNumBytes() {
+    return max_num_bytes;
   }
 
   /**
@@ -614,11 +703,28 @@ public final class Scanner {
       return Deferred.fromResult(null);
     } else if (region == null) {  // We need to open the scanner first.
       return client.openScanner(this).addCallbackDeferring(
-        new Callback<Deferred<ArrayList<ArrayList<KeyValue>>>, Long>() {
-          public Deferred<ArrayList<ArrayList<KeyValue>>> call(final Long arg) {
-            scanner_id = arg;
+        new Callback<Deferred<ArrayList<ArrayList<KeyValue>>>, Object>() {
+          public Deferred<ArrayList<ArrayList<KeyValue>>> call(final Object arg) {
+            final Response resp;
+            if (arg instanceof Long) {
+              scanner_id = (Long) arg;
+              resp = null;
+            } else if (arg instanceof Response) {
+              resp = (Response) arg;
+              scanner_id = resp.scanner_id;
+            } else {
+              throw new IllegalStateException("WTF? Scanner open callback"
+                                              + " invoked with impossible"
+                                              + " argument: " + arg);
+            }
             if (LOG.isDebugEnabled()) {
-              LOG.debug("Scanner " + Bytes.hex(arg) + " opened on " + region);
+              LOG.debug("Scanner " + Bytes.hex(scanner_id) + " opened on " + region);
+            }
+            if (resp != null) {
+              if (resp.rows == null) {
+                return scanFinished(resp);
+              }
+              return Deferred.fromResult(resp.rows);
             }
             return nextRows();  // Restart the call.
           }
@@ -645,35 +751,24 @@ public final class Scanner {
   private final Callback<Object, Object> got_next_row =
     new Callback<Object, Object>() {
       public Object call(final Object response) {
-        if (response == null) {  // We're done scanning this region.
-          final byte[] region_stop_key = region.stopKey();
-          // Check to see if this region is the last we should scan (either
-          // because (1) it's the last region or (3) because its stop_key is
-          // greater than or equal to the stop_key of this scanner provided
-          // that (2) we're not trying to scan until the end of the table).
-          if (region_stop_key == EMPTY_ARRAY                           // (1)
-              || (stop_key != EMPTY_ARRAY                              // (2)
-                  && Bytes.memcmp(stop_key, region_stop_key) <= 0)) {  // (3)
-            get_next_rows_request = null;        // free();
-            family = null;                       // free();
-            qualifiers = null;                   // free();
-            start_key = stop_key = EMPTY_ARRAY;  // free() but mustn't be null.
-            return close()  // Auto-close the scanner.
-              .addCallback(new Callback<ArrayList<ArrayList<KeyValue>>, Object>() {
-                public ArrayList<ArrayList<KeyValue>> call(final Object arg) {
-                  return null;  // Tell the user there's nothing more to scan.
-                }
-                public String toString() {
-                  return "auto-close scanner " + Bytes.hex(scanner_id);
-                }
-              });
-          }
-          return continueScanOnNextRegion();
-        } else if (!(response instanceof ArrayList)) {
+        ArrayList<ArrayList<KeyValue>> rows = null;
+        Response resp = null;
+        if (response instanceof Response) {  // HBase 0.95 and up
+          resp = (Response) response;
+          rows = resp.rows;
+        } else if (response instanceof ArrayList) {  // HBase 0.94 and before.
+          @SuppressWarnings("unchecked")  // I 3>> generics.
+          final ArrayList<ArrayList<KeyValue>> r =
+            (ArrayList<ArrayList<KeyValue>>) response;
+          rows = r;
+        } else if (response != null) {
           throw new InvalidResponseException(ArrayList.class, response);
         }
-        @SuppressWarnings("unchecked")  // I 3>> generics.
-        final ArrayList<ArrayList<KeyValue>> rows = (ArrayList<ArrayList<KeyValue>>) response;
+
+        if (rows == null) {  // We're done scanning this region.
+          return scanFinished(resp);
+        }
+
         final ArrayList<KeyValue> lastrow = rows.get(rows.size() - 1);
         start_key = lastrow.get(0).key();
         return rows;
@@ -778,6 +873,35 @@ public final class Scanner {
     };
   }
 
+  private Deferred<ArrayList<ArrayList<KeyValue>>> scanFinished(final Response resp) {
+    final byte[] region_stop_key = region.stopKey();
+    // Check to see if this region is the last we should scan (either
+    // because (1) it's the last region or (3) because its stop_key is
+    // greater than or equal to the stop_key of this scanner provided
+    // that (2) we're not trying to scan until the end of the table).
+    if (region_stop_key == EMPTY_ARRAY                           // (1)
+        || (stop_key != EMPTY_ARRAY                              // (2)
+            && Bytes.memcmp(stop_key, region_stop_key) <= 0)) {  // (3)
+      get_next_rows_request = null;        // free();
+      families = null;                     // free();
+      qualifiers = null;                   // free();
+      start_key = stop_key = EMPTY_ARRAY;  // free() but mustn't be null.
+      if (resp != null && !resp.more) {
+        return null;  // The server already closed the scanner for us.
+      }
+      return close()  // Auto-close the scanner.
+        .addCallback(new Callback<ArrayList<ArrayList<KeyValue>>, Object>() {
+          public ArrayList<ArrayList<KeyValue>> call(final Object arg) {
+            return null;  // Tell the user there's nothing more to scan.
+          }
+          public String toString() {
+            return "auto-close scanner " + Bytes.hex(scanner_id);
+          }
+        });
+    }
+    return continueScanOnNextRegion();
+  }
+
   /**
    * Continues scanning on the next region.
    * <p>
@@ -819,20 +943,34 @@ public final class Scanner {
   public String toString() {
     final String region = this.region == null ? "null"
       : this.region == DONE ? "none" : this.region.toString();
+    final String filter = this.filter == null ? "null"
+      : this.filter.toString();
+    int fam_length = 0;
+    if (families == null) {
+      fam_length = 4;
+    } else {
+      for (byte[] family : families) {
+        fam_length += family.length + 2 + 2;
+      }
+    }
     int qual_length = 0;
     if (qualifiers == null) {
       qual_length = 4;
     } else {
-      for (byte[] qualifier : qualifiers) {
-        qual_length += qualifier.length + 2;
+      for (byte[][] qualifier : qualifiers) {
+        if (qualifier != null) {
+          for (byte[] qual : qualifier) {
+            qual_length += qual.length + 2 + 1;
+          }
+        }
       }
     }
     final StringBuilder buf = new StringBuilder(14 + 1 + table.length + 1 + 12
-      + 1 + start_key.length + 1 + 1 + stop_key.length + 1
-      + 9 + 1 + (family == null ? 4 : family.length) + 1
-      + 13 + 1 + qual_length + 1
-      + 22 + 5 + 15 + 5 + 14 + 6
-      + 14 + 1 + region.length() + 1
+      + 1 + start_key.length + 1 + 11 + 1 + stop_key.length + 1
+      + 11 + 1 + fam_length + qual_length + 1
+      + 23 + 5 + 15 + 5 + 14 + 6
+      + 9 + 1 + region.length() + 1
+      + 9 + 1 + filter.length() + 1
       + 13 + 18 + 1);
     buf.append("Scanner(table=");
     Bytes.pretty(buf, table);
@@ -840,17 +978,32 @@ public final class Scanner {
     Bytes.pretty(buf, start_key);
     buf.append(", stop_key=");
     Bytes.pretty(buf, stop_key);
-    buf.append(", family=");
-    Bytes.pretty(buf, family);
-    buf.append(", qualifiers=");
-    Bytes.pretty(buf, qualifiers);
-    buf.append(", populate_blockcache=").append(populate_blockcache)
+    buf.append(", columns={");
+    familiesToString(buf);
+    buf.append("}, populate_blockcache=").append(populate_blockcache)
       .append(", max_num_rows=").append(max_num_rows)
       .append(", max_num_kvs=").append(max_num_kvs)
-      .append(", region=").append(region);
+      .append(", region=").append(region)
+      .append(", filter=").append(filter);
     buf.append(", scanner_id=").append(Bytes.hex(scanner_id))
       .append(')');
     return buf.toString();
+  }
+
+  /** Helper method for {@link toString}.  */
+  private void familiesToString(final StringBuilder buf) {
+    if (families == null) {
+      return;
+    }
+    for (int i = 0; i < families.length; i++) {
+      Bytes.pretty(buf, families[i]);
+      if (qualifiers != null && qualifiers[i] != null) {
+        buf.append(':');
+        Bytes.pretty(buf, qualifiers[i]);
+      }
+      buf.append(", ");
+    }
+    buf.setLength(buf.length() - 2);  // Remove the extra ", ".
   }
 
   // ---------------------- //
@@ -924,6 +1077,83 @@ public final class Scanner {
     }
   }
 
+  /**
+   * Wraps the RPC response for scan requests from HBase 0.95+.
+   * When de-serializing a response to a "Scan" RPC from HBase 0.95+ we
+   * create this temporarily object at the time of the de-serialization
+   * of the RPC so that our callback can access a few more fields along
+   * with the actual payload of the response.
+   */
+  final static class Response {
+    /** The ID associated with the scanner that issued the request.  */
+    private final long scanner_id;
+    /** The actual payload of the response.  */
+    private final ArrayList<ArrayList<KeyValue>> rows;
+    /**
+     * If false, the filter we use decided there was no more data to scan.
+     * In this case, the server has automatically closed the scanner for us,
+     * so we don't need to explicitly close it.
+     */
+    private final boolean more;
+
+    Response(final long scanner_id,
+             final ArrayList<ArrayList<KeyValue>> rows,
+             final boolean more) {
+      this.scanner_id = scanner_id;
+      this.rows = rows;
+      this.more = more;
+    }
+
+    public String toString() {
+      return "Scanner$Response(scanner_id=" + Bytes.hex(scanner_id)
+        + ", rows=" + rows + ", more=" + more + ")";
+    }
+  }
+
+  /**
+   * Extracts the rows from the given {@link ScanResponse}.
+   * @param resp The protobuf of the RPC response.
+   * @param buf The buffer the response was read from.  The actual KeyValues
+   * of the response will be read from there if cell blocks are in use.
+   * @param cell_size The number of bytes of the cell block that follows,
+   * in the buffer.
+   */
+  private ArrayList<ArrayList<KeyValue>> getRows(final ScanResponse resp,
+                                                 final ChannelBuffer buf,
+                                                 final int cell_size) {
+    final int nrows = (cell_size == 0
+                       ? resp.getResultsCount()
+                       : resp.getCellsPerResultCount());
+    if (nrows == 0) {
+      return null;
+    }
+    HBaseRpc.checkArrayLength(buf, nrows);
+    final ArrayList<ArrayList<KeyValue>> rows =
+      new ArrayList<ArrayList<KeyValue>>(nrows);
+    if (cell_size != 0) {
+      KeyValue kv = null;
+      for (int i = 0; i < nrows; i++) {
+        final int nkvs = resp.getCellsPerResult(i);
+        HBaseRpc.checkArrayLength(buf, nkvs);
+        final ArrayList<KeyValue> row = new ArrayList<KeyValue>(nkvs);
+        for (int j = 0; j < nkvs; j++) {
+          final int kv_length = buf.readInt();
+          kv = KeyValue.fromBuffer(buf, kv);
+          row.add(kv);
+        }
+        rows.add(row);
+      }
+    } else {
+      for (int i = 0; i < nrows; i++) {
+        rows.add(GetRequest.convertResult(resp.getResults(i), buf, cell_size));
+      }
+    }
+    return rows;
+  }
+
+  /** RPC method name to use with HBase 0.95+.  */
+  private static final byte[] SCAN = new byte[] { 'S', 'c', 'a', 'n' };
+
   private static final byte[] OPEN_SCANNER = new byte[] {
     'o', 'p', 'e', 'n', 'S', 'c', 'a', 'n', 'n', 'e', 'r'
   };
@@ -934,7 +1164,14 @@ public final class Scanner {
   private final class OpenScannerRequest extends HBaseRpc {
 
     public OpenScannerRequest() {
-      super(OPEN_SCANNER, Scanner.this.table, start_key);
+      super(Scanner.this.table, start_key);
+    }
+
+    @Override
+    byte[] method(final byte server_version) {
+      return (server_version >= RegionClient.SERVER_VERSION_095_OR_ABOVE
+              ? SCAN
+              : OPEN_SCANNER);
     }
 
     /**
@@ -964,20 +1201,25 @@ public final class Scanner {
       size += 1;  // bool: Whether or not to populate the blockcache.
       size += 1;  // byte: Whether or not to use a filter.
       if (filter != null) {
-        size += filter.length;
+        size += filter.predictSerializedSize();
       }
       size += 8;  // long: Minimum timestamp.
       size += 8;  // long: Maximum timestamp.
       size += 1;  // byte: Boolean: "all time".
       size += 4;  // int:  Number of families.
-      if (family != null) {
-        size += 1;  // vint: Family length (guaranteed on 1 byte).
-        size += family.length;  // The family.
-        size += 4;  // int:  How many qualifiers follow?
-        if (qualifiers != null) {
-          for (byte[] qualifier : qualifiers) {
-            size += 3;                 // vint: Qualifier length.
-            size += qualifier.length;  // The qualifier.
+      if (families != null) {
+        // vint: Family length (guaranteed on 1 byte) for each family.
+        size += families.length;
+        for (int i = 0; i < families.length; i++) {
+          byte[] family = families[i];
+          size += family.length;  // The family.
+          size += 4;  // int:  How many qualifiers follow?
+          if (qualifiers != null && qualifiers[i] != null) {
+            // vint: Qualifier length times number of qualifiers.
+            size += 3 * qualifiers[i].length;
+            for (byte[] qualifier : qualifiers[i]) {
+              size += qualifier.length;  // The qualifier.
+            }
           }
         }
       }
@@ -986,6 +1228,62 @@ public final class Scanner {
 
     /** Serializes this request.  */
     ChannelBuffer serialize(final byte server_version) {
+      // Save the region in the Scanner.  This kind of a kludge but it really
+      // is the easiest way to give the Scanner the RegionInfo it needs.
+      Scanner.this.region = super.region;
+
+      if (server_version < RegionClient.SERVER_VERSION_095_OR_ABOVE) {
+        return serializeOld(server_version);
+      }
+      final Scan.Builder scan = Scan.newBuilder()
+        .setStartRow(Bytes.wrap(start_key))
+        .setStopRow(Bytes.wrap(stop_key));
+      if (families != null) {
+        for (int i = 0; i < families.length; i++) {
+          final Column.Builder columns = Column.newBuilder();
+          columns.setFamily(Bytes.wrap(families[i]));
+          if (qualifiers != null && qualifiers[i] != null) {
+            for (byte[] qualifier : qualifiers[i]) {
+              columns.addQualifier(Bytes.wrap(qualifier));
+            }
+          }
+          scan.addColumn(columns);
+        }
+      }
+      if (filter != null) {
+        scan.setFilter(FilterPB.Filter.newBuilder()
+                       .setNameBytes(Bytes.wrap(filter.name()))
+                       .setSerializedFilter(Bytes.wrap(filter.serialize()))
+                       .build());
+      }
+      if (min_timestamp != 0 || max_timestamp != Long.MAX_VALUE) {
+        final TimeRange.Builder time = TimeRange.newBuilder();
+        if (min_timestamp != 0) {
+          time.setFrom(min_timestamp);
+        }
+        if (max_timestamp != Long.MAX_VALUE) {
+          time.setTo(max_timestamp);
+        }
+        scan.setTimeRange(time.build());
+      }
+      if (versions != 1) {
+        scan.setMaxVersions(versions);
+      }
+      if (!populate_blockcache) {
+        scan.setCacheBlocks(false);
+      }
+      scan.setBatchSize(max_num_kvs);
+      scan.setMaxResultSize(max_num_bytes);
+      final ScanRequest req = ScanRequest.newBuilder()
+        .setRegion(region.toProtobuf())
+        .setScan(scan.build())
+        .setNumberOfRows(max_num_rows)
+        .build();
+      return toChannelBuffer(SCAN, req);
+    }
+
+    /** Serializes this request for HBase 0.94 and before.  */
+    private ChannelBuffer serializeOld(final byte server_version) {
       final ChannelBuffer buf = newBuffer(server_version,
                                           predictSerializedSize());
       buf.writeInt(2);  // Number of parameters.
@@ -1016,7 +1314,7 @@ public final class Scanner {
         buf.writeByte(0x00); // boolean (false): don't use a filter.
       } else {
         buf.writeByte(0x01); // boolean (true): use a filter.
-        buf.writeBytes(filter);
+        filter.serializeOld(buf);
       }
 
       // TimeRange
@@ -1027,47 +1325,41 @@ public final class Scanner {
                     ? 0x00 : 0x01);
 
       // Families.
-      buf.writeInt(family != null ? 1 : 0);  // Number of families that follow.
-
-      if (family != null) {
-        // Each family is then written like so:
-        writeByteArray(buf, family);  // Column family name.
-        // How many qualifiers do we want?
-        buf.writeInt(qualifiers == null ? 0 : qualifiers.length);
-        if (qualifiers != null) {
-          for (byte[] qualifier : qualifiers) {
-            writeByteArray(buf, qualifier);  // Column qualifier name.
+      if (families != null) {
+        buf.writeInt(families.length);  // Number of families that follow.
+        for (int i = 0; i < families.length; i++) {
+          // Each family is then written like so:
+          writeByteArray(buf, families[i]);  // Column family name.
+          if (qualifiers != null && qualifiers[i] != null) {
+            buf.writeInt(qualifiers[i].length);  // How many qualifiers do we want?
+            for (byte[] qualifier : qualifiers[i]) {
+              writeByteArray(buf, qualifier);  // Column qualifier name.
+            }
+          } else {
+            buf.writeInt(0);  // No qualifiers.
           }
         }
+      } else {
+        buf.writeInt(0);  // No families.
       }
 
-      // Save the region in the Scanner.  This kind of a kludge but it really
-      // is the easiest way to give the Scanner the RegionInfo it needs.
-      Scanner.this.region = super.region;
       return buf;
     }
 
+    @Override
+    Response deserialize(final ChannelBuffer buf, final int cell_size) {
+      final ScanResponse resp = readProtobuf(buf, ScanResponse.PARSER);
+      if (!resp.hasScannerId()) {
+        throw new InvalidResponseException("Scan RPC response doesn't contain a"
+                                           + " scanner ID", resp);
+      }
+      return new Response(resp.getScannerId(),
+                          getRows(resp, buf, cell_size),
+                          resp.getMoreResults());
+    }
+
     public String toString() {
-      final StringBuilder buf = new StringBuilder(12 + start_key.length + 2
-                                                  + 11 + stop_key.length + 2
-                                                  + 14 + 4
-                                                  + 22 + 5);
-      buf.append(", start_key=");
-      Bytes.pretty(buf, start_key);
-      buf.append(", stop_key=");
-      Bytes.pretty(buf, stop_key);
-      buf.append(", max_num_kvs=").append(max_num_kvs)
-        .append(", populate_blockcache=").append(populate_blockcache);
-      if (min_timestamp != 0) {
-        buf.append(", min_timestamp=").append(min_timestamp);
-      }
-      if (max_timestamp != Long.MAX_VALUE) {
-        buf.append(", max_timestamp=").append(max_timestamp);
-      }
-      return super.toStringWithQualifiers("OpenScannerRequest",
-                                          family, qualifiers,
-                                          null,
-                                          buf.toString());
+      return "OpenScannerRequest(scanner=" + Scanner.this.toString() + ')';
     }
 
   }
@@ -1079,23 +1371,49 @@ public final class Scanner {
    */
   private final class GetNextRowsRequest extends HBaseRpc {
 
-    public GetNextRowsRequest() {
-      super(NEXT);  // "next"...  Great method name!
-      this.filteringCallback = Scanner.this.filteringCallback;
+    @Override
+    byte[] method(final byte server_version) {
+      return (server_version >= RegionClient.SERVER_VERSION_095_OR_ABOVE
+              ? SCAN
+              : NEXT);  // "next"...  Great method name!
     }
 
     /** Serializes this request.  */
     ChannelBuffer serialize(final byte server_version) {
-      final ChannelBuffer buf = newBuffer(server_version,
-                                          4 + 1 + 8 + 1 + 4);
-      buf.writeInt(2);  // Number of parameters.
-      writeHBaseLong(buf, scanner_id);
-      writeHBaseInt(buf, max_num_rows);
-      return buf;
+      if (server_version < RegionClient.SERVER_VERSION_095_OR_ABOVE) {
+        final ChannelBuffer buf = newBuffer(server_version,
+                                            4 + 1 + 8 + 1 + 4);
+        buf.writeInt(2);  // Number of parameters.
+        writeHBaseLong(buf, scanner_id);
+        writeHBaseInt(buf, max_num_rows);
+        return buf;
+      }
+
+      final ScanRequest req = ScanRequest.newBuilder()
+        .setScannerId(scanner_id)
+        .setNumberOfRows(max_num_rows)
+        .build();
+      return toChannelBuffer(SCAN, req);
+    }
+
+    @Override
+    Response deserialize(final ChannelBuffer buf, final int cell_size) {
+      final ScanResponse resp = readProtobuf(buf, ScanResponse.PARSER);
+      final long id = resp.getScannerId();
+      if (scanner_id != id) {
+        throw new InvalidResponseException("Scan RPC response was for scanner"
+                                           + " ID " + id + " but we expected"
+                                           + scanner_id, resp);
+      }
+      final ArrayList<ArrayList<KeyValue>> rows = getRows(resp, buf, cell_size);
+      if (rows == null) {
+        return null;
+      }
+      return new Response(resp.getScannerId(), rows, resp.getMoreResults());
     }
 
     public String toString() {
-      return "GetNextRowsRequest(scanner_id=" + scanner_id
+      return "GetNextRowsRequest(scanner_id=" + Bytes.hex(scanner_id)
         + ", max_num_rows=" + max_num_rows
         + ", region=" + region
         + ", attempt=" + attempt + ')';
@@ -1113,21 +1431,48 @@ public final class Scanner {
     private final long scanner_id;
 
     public CloseScannerRequest(final long scanner_id) {
-      super(CLOSE);  // "close"...  Great method name!
       this.scanner_id = scanner_id;
+    }
+
+    @Override
+    byte[] method(final byte server_version) {
+      return (server_version >= RegionClient.SERVER_VERSION_095_OR_ABOVE
+              ? SCAN
+              : CLOSE);  // "close"...  Great method name!
     }
 
     /** Serializes this request.  */
     ChannelBuffer serialize(final byte server_version) {
-      final ChannelBuffer buf = newBuffer(server_version,
-                                          4 + 1 + 8);
-      buf.writeInt(1);  // Number of parameters.
-      writeHBaseLong(buf, scanner_id);
-      return buf;
+      if (server_version < RegionClient.SERVER_VERSION_095_OR_ABOVE) {
+        final ChannelBuffer buf = newBuffer(server_version,
+                                            4 + 1 + 8);
+        buf.writeInt(1);  // Number of parameters.
+        writeHBaseLong(buf, scanner_id);
+        return buf;
+      }
+
+      final ScanRequest req = ScanRequest.newBuilder()
+        .setScannerId(scanner_id)
+        .setCloseScanner(true)
+        .build();
+      return toChannelBuffer(SCAN, req);
+    }
+
+    @Override
+    Object deserialize(final ChannelBuffer buf, final int cell_size) {
+      HBaseRpc.ensureNoCell(cell_size);
+      final ScanResponse resp = readProtobuf(buf, ScanResponse.PARSER);
+      final long id = resp.getScannerId();
+      if (scanner_id != id) {
+        throw new InvalidResponseException("Scan RPC response was for scanner"
+                                           + " ID " + id + " but we expected"
+                                           + scanner_id, resp);
+      }
+      return null;
     }
 
     public String toString() {
-      return "CloseScannerRequest(scanner_id=" + scanner_id
+      return "CloseScannerRequest(scanner_id=" + Bytes.hex(scanner_id)
         + ", attempt=" + attempt + ')';
     }
 

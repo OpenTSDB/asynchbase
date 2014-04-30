@@ -1,7 +1,53 @@
 AsyncHBase - User visible and noteworthy changes.
 This project uses Semantic Versioning (see http://semver.org/).
 
-* Version 1.5.0 (2013-??-??) [???????]
+* Version 1.5.0 (2013-12-13) [67fc3b7]
+
+This release introduces compatibility with HBase 0.96 and up, and adds
+a dependency on Google's protobuf-java library.  Note that HBase 0.95.x,
+which was a "developer preview" release train, is NOT supported.
+
+Please note that support for explicit row locks has been removed from
+HBase 0.95 and up.  While the classes and functionality remain usable
+when using earlier versions of HBase, an `UnsupportedOperationException'
+will be raised if one attempt to send a `RowLockRequest' to a newer
+version of HBase.
+
+Please note that while AsyncHBase never made any guarantees about
+the exact order in which multiple edits are applied within a batch,
+the order is now different when talking to HBase 0.96 and up.
+
+New public APIs:
+  - Scanners can now use a variety of different filters via the new
+    `ScanFilter' interfaces and its various implementations.
+  - It's possible to specify specific families to scan via `setFamilies'.
+  - Scanners can put an upper bound on the amount of data fetched by RPC
+    via the new `setMaxNumKeyValues' (works with HBase 0.96 and up only).
+  - HBaseRpc now has a `failfast()' and a `setFailfast(boolean)' pair
+    of methods to allow RPCs to fail as soon as their encounter an
+    issue out of the ordinary (e.g. not just a `NotSuchRegionException').
+  - `GetRequest' has additional constructor overloads that make its API
+    more uniform with that of other RPCs.
+  - HBaseClient has new `prefetchMeta' methods to prefetch metadata about
+    the regions of a table (for the entire table or a given key range).
+
+Noteworthy bug fixes:
+  - DeleteRequest wasn't honoring its timestamp if one was given (#58).
+  - When a connection attempt fails, buffered RPCs weren't cleaned up
+    or retried properly.
+  - When one RPC fails because of another one (e.g. we fail to send an
+    RPC because a META lookup failed), the asynchronous exception that
+    is given to the callback now properly carries the original RPC that
+    failed.
+  - There was an unlikely race condition that could cause an NPE while
+    trying to retrieve the ROOT region from ZooKeeper.
+  - There was an unlikely race if the client got disconnected right
+    after successfully establishing a connection to a RegionServer, while
+    it was flushing RPC buffered while waiting to be connected.  Also
+    when those RPCs were flushed, the batchable RPCs weren't given a
+    chance to get batched.
+  - It was not possible to scan the ROOT region (or the hbase:meta region
+    when using HBase 0.96+).
 
 
 * Version 1.4.1 (2013-02-14) [1cbc303]

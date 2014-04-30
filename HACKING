@@ -1,6 +1,17 @@
 Want to contribute?  Great!  This file will guide you through some of
 design decision / ideology you should try to adhere to.
 
+Getting started:
+
+  # You need this & javac on $PATH. The first run will download dependencies.
+  $ make
+
+  # Run the unit tests
+  $ make check
+
+  # Run the integration tests.  See also "Testing" below.
+  $ HBASE_HOME=~/src/hbase make integration ARGS='test f'
+
 The basics:
   - Know the complexity of your algorithms.  When you're calling a
     method in another library, make sure you're aware of the its
@@ -49,3 +60,18 @@ Code:
   - Local variables are named_like_this, I think it's more readable
     compared to somethingLikeThis.  I think there's a reason why latin
     languages put a space between words.
+
+Testing:
+  - Write unit tests whenever possible, especially regression tests.
+  - Integration tests need to exercise the functionality against a real
+    HBase instance.  You can run them with this command:
+      $ HBASE_HOME=~/src/hbase make integration ARGS='test f'
+    This will run the tests against a set of tables that all have names
+    starting with `test' and families starting with `f'.  The tables will
+    be created / dropped when needed.
+  - Tip: After you've run the integration tests once, you can speed up
+    subsequent runs by passing TEST_NO_TRUNCATE=1 before HBASE_HOME on
+    the command above.  This will skip truncating the table in between
+    tests, which makes them run much faster.
+  - Tip: You can also specify only one integration test to run, by adding
+    the following before HBASE_HOME on the command above: TEST_NAME=XXX.

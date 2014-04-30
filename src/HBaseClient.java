@@ -40,10 +40,10 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentSkipListMap;
 import java.util.concurrent.Executor;
 import java.util.concurrent.Executors;
-import java.util.concurrent.ThreadFactory;
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
 
 import com.google.common.cache.LoadingCache;
+import com.google.protobuf.InvalidProtocolBufferException;
 
 import org.apache.zookeeper.AsyncCallback;
 import org.apache.zookeeper.KeeperException.Code;
@@ -70,6 +70,8 @@ import org.slf4j.LoggerFactory;
 
 import com.stumbleupon.async.Callback;
 import com.stumbleupon.async.Deferred;
+
+import org.hbase.async.generated.ZooKeeperPB;
 
 /**
  * A fully asynchronous, thread-safe, modern HBase client.
@@ -202,12 +204,34 @@ public final class HBaseClient {
    */
   public static final byte[] EMPTY_ARRAY = new byte[0];
 
+  /** A byte array containing a single zero byte.  */
+  private static final byte[] ZERO_ARRAY = new byte[] { 0 };
+
   private static final byte[] ROOT = new byte[] { '-', 'R', 'O', 'O', 'T', '-' };
   private static final byte[] ROOT_REGION = new byte[] { '-', 'R', 'O', 'O', 'T', '-', ',', ',', '0' };
   private static final byte[] META = new byte[] { '.', 'M', 'E', 'T', 'A', '.' };
-  private static final byte[] INFO = new byte[] { 'i', 'n', 'f', 'o' };
+  static final byte[] INFO = new byte[] { 'i', 'n', 'f', 'o' };
   private static final byte[] REGIONINFO = new byte[] { 'r', 'e', 'g', 'i', 'o', 'n', 'i', 'n', 'f', 'o' };
   private static final byte[] SERVER = new byte[] { 's', 'e', 'r', 'v', 'e', 'r' };
+  /** HBase 0.95 and up: .META. is now hbase:meta */
+  private static final byte[] HBASE96_META =
+    new byte[] { 'h', 'b', 'a', 's', 'e', ':', 'm', 'e', 't', 'a' };
+  /** New for HBase 0.95 and up: the name of META is fixed.  */
+  private static final byte[] META_REGION_NAME =
+    new byte[] { 'h', 'b', 'a', 's', 'e', ':', 'm', 'e', 't', 'a', ',', ',', '1' };
+  /** New for HBase 0.95 and up: the region info for META is fixed.  */
+  private static final RegionInfo META_REGION =
+    new RegionInfo(HBASE96_META, META_REGION_NAME, EMPTY_ARRAY);
+
+  /**
+   * In HBase 0.95 and up, this magic number is found in a couple places.
+   * It's used in the znode that points to the .META. region, to
+   * indicate that the contents of the znode is a protocol buffer.
+   * It's also used in the value of the KeyValue found in the .META. table
+   * that contain a {@link RegionInfo}, to indicate that the value contents
+   * is a protocol buffer.
+   */
+  static final int PBUF_MAGIC = 1346524486;  // 4 bytes: "PBUF"
 
   /**
    * Timer we use to handle all our timeouts.
@@ -246,10 +270,17 @@ public final class HBaseClient {
    * If this is {@code null} then we currently don't know where the -ROOT-
    * region is and we're waiting for a notification from ZooKeeper to tell
    * us where it is.
+   * Note that with HBase 0.95, {@link #has_root} would be false, and this
+   * would instead point to the .META. region.
    */
   private volatile RegionClient rootregion;
 
-  byte server_version = -1;
+  /**
+   * Whether or not there is a -ROOT- region.
+   * When connecting to HBase 0.95 and up, this would be set to false, so we
+   * would go straight to .META. instead.
+   */
+  volatile boolean has_root = true;
 
   /**
    * Maps {@code (table, start_key)} pairs to the {@link RegionInfo} that
@@ -434,17 +465,8 @@ public final class HBaseClient {
   }
 
   /** Creates a default channel factory in case we haven't been given one.  */
-  /** NOTE(avh): create daemon threads to work around incomplete netty shutdown  */
   private static NioClientSocketChannelFactory defaultChannelFactory() {
-    final Executor executor = Executors.newCachedThreadPool(
-        new ThreadFactory() {
-            public Thread newThread(Runnable r)
-            {
-                Thread t = new Thread(r);
-                t.setDaemon(true);
-                return t;
-            }
-        });
+    final Executor executor = Executors.newCachedThreadPool();
     return new NioClientSocketChannelFactory(executor, executor);
   }
 
@@ -550,10 +572,12 @@ public final class HBaseClient {
       // because some of those RPCs could be edits that we must wait on.
       final Deferred<Object> d = zkclient.getDeferredRootIfBeingLookedUp();
       if (d != null) {
-        LOG.debug("Flush needs to wait on -ROOT- to come back");
+        LOG.debug("Flush needs to wait on {} to come back",
+                  has_root ? "-ROOT-" : ".META.");
         final class RetryFlush implements Callback<Object, Object> {
           public Object call(final Object arg) {
-            LOG.debug("Flush retrying after -ROOT- came back");
+            LOG.debug("Flush retrying after {} came back",
+                      has_root ? "-ROOT-" : ".META.");
             return flush();
           }
           public String toString() {
@@ -795,10 +819,12 @@ public final class HBaseClient {
     // because some of those RPCs could be edits that we must not lose.
     final Deferred<Object> d = zkclient.getDeferredRootIfBeingLookedUp();
     if (d != null) {
-      LOG.debug("Shutdown needs to wait on -ROOT- to come back");
+      LOG.debug("Shutdown needs to wait on {} to come back",
+                has_root ? "-ROOT-" : ".META.");
       final class RetryShutdown implements Callback<Object, Object> {
         public Object call(final Object arg) {
-          LOG.debug("Shutdown retrying after -ROOT- came back");
+          LOG.debug("Shutdown retrying after {} came back",
+                    has_root ? "-ROOT-" : ".META.");
           return shutdown();
         }
         public String toString() {
@@ -913,9 +939,9 @@ public final class HBaseClient {
     // useful thing to do but gets the job done for now.  TODO(tsuna): Improve.
     final HBaseRpc dummy;
     if (family == EMPTY_ARRAY) {
-      dummy = GetRequest.exists(table, EMPTY_ARRAY);
+      dummy = GetRequest.exists(table, ZERO_ARRAY);
     } else {
-      dummy = GetRequest.exists(table, EMPTY_ARRAY, family);
+      dummy = GetRequest.exists(table, ZERO_ARRAY, family);
     }
     @SuppressWarnings("unchecked")
     final Deferred<Object> d = (Deferred) sendRpcToRegion(dummy);
@@ -1046,9 +1072,10 @@ public final class HBaseClient {
   /**
    * Package-private access point for {@link Scanner}s to open themselves.
    * @param scanner The scanner to open.
-   * @return A deferred scanner ID.
+   * @return A deferred scanner ID (long) if HBase 0.94 and before, or a
+   * deferred {@link Scanner.Response} if HBase 0.95 and up.
    */
-  Deferred<Long> openScanner(final Scanner scanner) {
+  Deferred<Object> openScanner(final Scanner scanner) {
     num_scanners_opened.increment();
     return sendRpcToRegion(scanner.getOpenRequest()).addCallbacks(
       scanner_opened,
@@ -1065,10 +1092,13 @@ public final class HBaseClient {
   }
 
   /** Singleton callback to handle responses of "openScanner" RPCs.  */
-  private static final Callback<Long, Object> scanner_opened =
-    new Callback<Long, Object>() {
-      public Long call(final Object response) {
-        if (response instanceof Long) {
+  private static final Callback<Object, Object> scanner_opened =
+    new Callback<Object, Object>() {
+      public Object call(final Object response) {
+        if (response instanceof Scanner.Response) {  // HBase 0.95 and up
+          return (Scanner.Response) response;
+        } else if (response instanceof Long) {
+          // HBase 0.94 and before: we expect just a long (the scanner ID).
           return (Long) response;
         } else {
           throw new InvalidResponseException(Long.class, response);
@@ -1080,6 +1110,20 @@ public final class HBaseClient {
     };
 
   /**
+   * Returns the client currently known to hose the given region, or NULL.
+   */
+  private RegionClient clientFor(final RegionInfo region) {
+    if (region == null) {
+      return null;
+    } else if (region == META_REGION || Bytes.equals(region.table(), ROOT)) {
+      // HBase 0.95+: META_REGION (which is 0.95 specific) is our root.
+      // HBase 0.94 and earlier: if we're looking for -ROOT-, stop here.
+      return rootregion;
+    }
+    return region2client.get(region);
+  }
+
+  /**
    * Package-private access point for {@link Scanner}s to scan more rows.
    * @param scanner The scanner to use.
    * @param nrows The maximum number of rows to retrieve.
@@ -1087,8 +1131,7 @@ public final class HBaseClient {
    */
   Deferred<Object> scanNextRows(final Scanner scanner) {
     final RegionInfo region = scanner.currentRegion();
-    final RegionClient client = (region == null ? null
-                                 : region2client.get(region));
+    final RegionClient client = clientFor(region);
     if (client == null) {
       // Oops, we no longer know anything about this client or region.  Our
       // cache was probably invalidated while the client was scanning.  This
@@ -1114,8 +1157,7 @@ public final class HBaseClient {
    */
   Deferred<Object> closeScanner(final Scanner scanner) {
     final RegionInfo region = scanner.currentRegion();
-    final RegionClient client = (region == null ? null
-                                 : region2client.get(region));
+    final RegionClient client = clientFor(region);
     if (client == null) {
       // Oops, we no longer know anything about this client or region.  Our
       // cache was probably invalidated while the client was scanning.  So
@@ -1472,8 +1514,7 @@ public final class HBaseClient {
       // So let's just pretend the row has been unlocked.
       return Deferred.fromResult(null);
     }
-    final RegionClient client = (region == null ? null
-                                 : region2client.get(region));
+    final RegionClient client = clientFor(region);
     if (client == null) {
       // Oops, we no longer know anything about this client or region.  Our
       // cache was probably invalidated while the client was holding the lock.
@@ -1502,6 +1543,141 @@ public final class HBaseClient {
   }
 
   /**
+   * Eagerly prefetches and caches a table's region metadata from HBase.
+   * @param table The name of the table whose metadata you intend to prefetch.
+   * @return A deferred object that indicates the completion of the request.
+   * The {@link Object} has no special meaning and can be {@code null}
+   * (think of it as {@code Deferred<Void>}).  But you probably want to attach
+   * at least an errback to this {@code Deferred} to handle failures.
+   * @since 1.5
+   */
+  public Deferred<Object> prefetchMeta(final String table) {
+    return prefetchMeta(table.getBytes(), EMPTY_ARRAY, EMPTY_ARRAY);
+  }
+
+  /**
+   * Eagerly prefetches and caches part of a table's region metadata from HBase.
+   * <p>
+   * The part to prefetch is identified by a row key range, given by
+   * {@code start} and {@code stop}.
+   * @param table The name of the table whose metadata you intend to prefetch.
+   * @param start The start of the row key range to prefetch metadata for.
+   * @param stop The end of the row key range to prefetch metadata for.
+   * @return A deferred object that indicates the completion of the request.
+   * The {@link Object} has no special meaning and can be {@code null}
+   * (think of it as {@code Deferred<Void>}).  But you probably want to attach
+   * at least an errback to this {@code Deferred} to handle failures.
+   * @since 1.5
+   */
+  public Deferred<Object> prefetchMeta(final String table,
+                                       final String start,
+                                       final String stop) {
+    return prefetchMeta(table.getBytes(), start.getBytes(), stop.getBytes());
+  }
+
+  /**
+   * Eagerly prefetches and caches a table's region metadata from HBase.
+   * @param table The name of the table whose metadata you intend to prefetch.
+   * @return A deferred object that indicates the completion of the request.
+   * The {@link Object} has no special meaning and can be {@code null}
+   * (think of it as {@code Deferred<Void>}).  But you probably want to attach
+   * at least an errback to this {@code Deferred} to handle failures.
+   * @since 1.5
+   */
+  public Deferred<Object> prefetchMeta(final byte[] table) {
+    return prefetchMeta(table, EMPTY_ARRAY, EMPTY_ARRAY);
+  }
+
+  /**
+   * Eagerly prefetches and caches part of a table's region metadata from HBase.
+   * <p>
+   * The part to prefetch is identified by a row key range, given by
+   * {@code start} and {@code stop}.
+   * @param table The name of the table whose metadata you intend to prefetch.
+   * @param start The start of the row key range to prefetch metadata for.
+   * @param stop The end of the row key range to prefetch metadata for.
+   * @return A deferred object that indicates the completion of the request.
+   * The {@link Object} has no special meaning and can be {@code null}
+   * (think of it as {@code Deferred<Void>}).  But you probably want to attach
+   * at least an errback to this {@code Deferred} to handle failures.
+   * @since 1.5
+   */
+  public Deferred<Object> prefetchMeta(final byte[] table,
+                                       final byte[] start,
+                                       final byte[] stop) {
+    // We're going to scan .META. for the table between the row keys and filter
+    // out all but the latest entries on the client side.  Whatever remains
+    // will be inserted into the region cache.
+
+    // But we don't want to do this for .META. or -ROOT-.
+    if (Bytes.equals(table, META) || Bytes.equals(table, ROOT)) {
+      return Deferred.fromResult(null);
+    }
+
+    // Create the scan bounds.
+    final byte[] meta_start = createRegionSearchKey(table, start);
+    // In this case, we want the scan to start immediately at the
+    // first entry, but createRegionSearchKey finds the last entry.
+    meta_start[meta_start.length - 1] = 0;
+
+    // The stop bound is trickier.  If the user wants the whole table,
+    // expressed by passing EMPTY_ARRAY, then we need to append a null
+    // byte to the table name (thus catching all rows in the desired
+    // table, but excluding those from others.)  If the user specifies
+    // an explicit stop key, we must leave the table name alone.
+    final byte[] meta_stop;
+    if (stop.length == 0) {
+      meta_stop = createRegionSearchKey(table, stop); // will return "table,,:"
+      meta_stop[table.length] = 0;  // now have "table\0,:"
+      meta_stop[meta_stop.length - 1] = ',';  // now have "table\0,,"
+    } else {
+      meta_stop = createRegionSearchKey(table, stop);
+    }
+
+    if (rootregion == null) {
+      // If we don't know where the root region is, we don't yet know whether
+      // there is even a -ROOT- region at all (pre HBase 0.95).  So we can't
+      // start scanning meta right away, because we don't yet know whether
+      // meta is named ".META." or "hbase:meta".  So instead we first check
+      // whether the table exists, which will force us to do a first meta
+      // lookup (and therefore figure out what the name of meta is).
+      class RetryPrefetch implements Callback<Object, Object> {
+        public Object call(final Object unused) {
+          return prefetchMeta(table, start, stop);
+        }
+        public String toString() {
+          return "retry prefetchMeta(" + Bytes.pretty(table) + ", "
+            + Bytes.pretty(start) + ", " + Bytes.pretty(stop) + ")";
+        }
+      }
+      return ensureTableExists(table).addCallback(new RetryPrefetch());
+    }
+
+    final Scanner meta_scanner = newScanner(has_root ? META : HBASE96_META);
+    meta_scanner.setStartKey(meta_start);
+    meta_scanner.setStopKey(meta_stop);
+
+    class PrefetchMeta
+      implements Callback<Object, ArrayList<ArrayList<KeyValue>>> {
+      public Object call(final ArrayList<ArrayList<KeyValue>> results) {
+        if (results != null && !results.isEmpty()) {
+          for (final ArrayList<KeyValue> row : results) {
+            discoverRegion(row);
+          }
+          return meta_scanner.nextRows().addCallback(this);
+        }
+        return null;
+      }
+
+      public String toString() {
+        return "prefetchMeta scanner=" + meta_scanner;
+      }
+    }
+
+    return meta_scanner.nextRows().addCallback(new PrefetchMeta());
+  }
+
+  /**
    * Sends an RPC targeted at a particular region to the right RegionServer.
    * <p>
    * This method is package-private so that the low-level {@link RegionClient}
@@ -1523,10 +1699,21 @@ public final class HBaseClient {
     final class RetryRpc implements Callback<Deferred<Object>, Object> {
       public Deferred<Object> call(final Object arg) {
         if (arg instanceof NonRecoverableException) {
-          request.callback(arg);
-          return Deferred.fromError((NonRecoverableException) arg);
+          // No point in retrying here, so fail the RPC.
+          HBaseException e = (NonRecoverableException) arg;
+          if (e instanceof HasFailedRpcException
+              && ((HasFailedRpcException) e).getFailedRpc() != request) {
+            // If we get here it's because a dependent RPC (such as a META
+            // lookup) has failed.  Therefore the exception we're getting
+            // indicates that the META lookup failed, but we need to return
+            // to our caller here that it's their RPC that failed.  Here we
+            // re-create the exception but with the correct RPC in argument.
+            e = e.make(e, request);  // e is likely a PleaseThrottleException.
+          }
+          request.callback(e);
+          return Deferred.fromError(e);
         }
-        return sendRpcToRegion(request);
+        return sendRpcToRegion(request);  // Retry the RPC.
       }
       public String toString() {
         return "retry RPC";
@@ -1543,8 +1730,7 @@ public final class HBaseClient {
         handleNSRE(request, region.name(), nsre);
         return d;
       }
-      final RegionClient client = (Bytes.equals(region.table(), ROOT)
-                                   ? rootregion : region2client.get(region));
+      final RegionClient client = clientFor(region);
       if (client != null && client.isAlive()) {
         request.setRegion(region);
         final Deferred<Object> d = request.getDeferred();
@@ -1668,12 +1854,21 @@ public final class HBaseClient {
     // First, see if we already know where to look in .META.
     // Except, obviously, we don't wanna search in META for META or ROOT.
     final byte[] meta_key = is_root ? null : createRegionSearchKey(table, key);
-    final RegionInfo meta_region = (is_meta || is_root
-                                    ? null : getRegion(META, meta_key));
+    final byte[] meta_name;
+    final RegionInfo meta_region;
+    if (has_root) {
+      meta_region = is_meta || is_root ? null : getRegion(META, meta_key);
+      meta_name = META;
+    } else {
+      meta_region = META_REGION;
+      meta_name = HBASE96_META;
+    }
 
-    if (meta_region != null) {
+    if (meta_region != null) {  // Always true with HBase 0.95 and up.
       // Lookup in .META. which region server has the region we want.
-      final RegionClient client = region2client.get(meta_region);
+      final RegionClient client = (has_root
+                                   ? region2client.get(meta_region) // Pre 0.95
+                                   : rootregion);                  // Post 0.95
       if (client != null && client.isAlive()) {
         final boolean has_permit = client.acquireMetaLookupPermit();
         if (!has_permit) {
@@ -1685,7 +1880,7 @@ public final class HBaseClient {
           }
         }
         final Deferred<Object> d =
-          client.getClosestRowBefore(meta_region, META, meta_key, INFO)
+          client.getClosestRowBefore(meta_region, meta_name, meta_key, INFO)
           .addCallback(meta_lookup_done);
         if (has_permit) {
           final class ReleaseMetaLookupPermit implements Callback<Object, Object> {
@@ -1715,6 +1910,8 @@ public final class HBaseClient {
     } else if (is_root) {  // Don't search ROOT in ROOT.
       return Deferred.fromResult(null);  // We already got ROOT (w00t).
     }
+    // The rest of this function is only executed with HBase 0.94 and before.
+
     // Alright so we don't even know where to look in .META.
     // Let's lookup the right .META. entry in -ROOT-.
     final byte[] root_key = createRegionSearchKey(META, meta_key);
@@ -1815,8 +2012,12 @@ public final class HBaseClient {
    * information in which we currently believe that the given row ought to be.
    */
   private RegionInfo getRegion(final byte[] table, final byte[] key) {
-    if (Bytes.equals(table, ROOT)) {
-      return new RegionInfo(ROOT, ROOT_REGION, EMPTY_ARRAY);
+    if (has_root) {
+      if (Bytes.equals(table, ROOT)) {               // HBase 0.94 and before.
+        return new RegionInfo(ROOT, ROOT_REGION, EMPTY_ARRAY);
+      }
+    } else if (Bytes.equals(table, HBASE96_META)) {  // HBase 0.95 and up.
+      return META_REGION;
     }
 
     byte[] region_name = createRegionSearchKey(table, key);
@@ -2023,10 +2224,11 @@ public final class HBaseClient {
   private void invalidateRegionCache(final byte[] region_name,
                                      final boolean mark_as_nsred,
                                      final String reason) {
-    if (region_name == ROOT_REGION) {
+    if ((region_name == META_REGION_NAME && !has_root)  // HBase 0.95+
+        || region_name == ROOT_REGION) {                // HBase <= 0.94
       if (reason != null) {
-        LOG.info("Invalidated cache for -ROOT- as " + rootregion
-                 + ' ' + reason);
+        LOG.info("Invalidated cache for " + (has_root ? "-ROOT-" : ".META.")
+                 + " as " + rootregion + ' ' + reason);
       }
       rootregion = null;
       return;
@@ -2148,7 +2350,11 @@ public final class HBaseClient {
     HBaseRpc exists_rpc = null;  // Our "probe" RPC.
     if (nsred_rpcs == null) {  // Looks like this could be a new NSRE...
       final ArrayList<HBaseRpc> newlist = new ArrayList<HBaseRpc>(64);
-      exists_rpc = GetRequest.exists(rpc.table, rpc.key);
+      // In HBase 0.95 and up, the exists RPC can't use the empty row key,
+      // which could happen if we were trying to scan from the beginning of
+      // the table.  So instead use "\0" as the key.
+      final byte[] testkey = rpc.key.length != 0 ? rpc.key : ZERO_ARRAY;
+      exists_rpc = GetRequest.exists(rpc.table, testkey);
       newlist.add(exists_rpc);
       if (can_retry_rpc) {
         newlist.add(rpc);
@@ -2418,7 +2624,10 @@ public final class HBaseClient {
     final SocketChannelConfig config = chan.getConfig();
     config.setConnectTimeoutMillis(5000);
     config.setTcpNoDelay(true);
-    config.setKeepAlive(true);  // TODO(tsuna): Is this really needed?
+    // Unfortunately there is no way to override the keep-alive timeout in
+    // Java since the JRE doesn't expose any way to call setsockopt() with
+    // TCP_KEEPIDLE.  And of course the default timeout is >2h.  Sigh.
+    config.setKeepAlive(true);
     chan.connect(new InetSocketAddress(host, port));  // Won't block.
     return client;
   }
@@ -2582,7 +2791,8 @@ public final class HBaseClient {
   private void removeClientFromCache(final RegionClient client,
                                      final SocketAddress remote) {
     if (client == rootregion) {
-      LOG.info("Lost connection with the -ROOT- region");
+      LOG.info("Lost connection with the "
+               + (has_root ? "-ROOT-" : ".META.") + " region");
       rootregion = null;
     }
     ArrayList<RegionInfo> regions = client2regions.remove(client);
@@ -2693,12 +2903,6 @@ public final class HBaseClient {
    */
   private final class ZKClient implements Watcher {
 
-    /**
-     * HBASE-3065 (r1151751) prepends meta-data in ZooKeeper files.
-     * The meta-data always starts with this magic byte.
-     */
-    private static final byte MAGIC = (byte) 0xFF;
-
     /** The specification of the quorum, e.g. "host1,host2,host3"  */
     private final String quorum_spec;
 
@@ -2742,7 +2946,8 @@ public final class HBaseClient {
         try {
           connectZK();  // Kick off a connection if needed.
           if (deferred_rootregion == null) {
-            LOG.info("Need to find the -ROOT- region");
+            LOG.info("Need to find the "
+                     + (has_root ? "-ROOT-" : ".META.") + " region");
             deferred_rootregion = new ArrayList<Deferred<Object>>();
           }
           deferred_rootregion.add(d);
@@ -2882,15 +3087,11 @@ public final class HBaseClient {
     }
 
     /** Schedule a timer to retry {@link #getRootRegion} after some time.  */
-    private void retryGetRootRegionLater(final AsyncCallback.DataCallback cb) {
+    private void retryGetRootRegionLater() {
       newTimeout(new TimerTask() {
           public void run(final Timeout timeout) {
-            if (zk != null) {
-              LOG.debug("Retrying to find the -ROOT- region in ZooKeeper");
-              zk.getData(base_path + "/root-region-server",
-                         ZKClient.this, cb, null);
-            } else {
-              connectZK();
+            if (!getRootRegion()) {  // Try to read the znodes
+              connectZK();  // unless we need to connect first.
             }
           }
         }, 1000 /* milliseconds */);
@@ -2900,126 +3101,238 @@ public final class HBaseClient {
      * Puts a watch in ZooKeeper to monitor the file of the -ROOT- region.
      * This method just registers an asynchronous callback.
      */
-    private void getRootRegion() {
-      final AsyncCallback.DataCallback cb = new AsyncCallback.DataCallback() {
-        @SuppressWarnings("fallthrough")
-        public void processResult(final int rc, final String path,
-                                  final Object ctx, final byte[] data,
-                                  final Stat stat) {
-          if (rc == Code.NONODE.intValue()) {
+    final class ZKCallback implements AsyncCallback.DataCallback {
+
+      /**
+       * HBASE-3065 (r1151751) prepends meta-data in ZooKeeper files.
+       * The meta-data always starts with this magic byte.
+       */
+      private static final byte MAGIC = (byte) 0xFF;
+
+      private static final byte UNKNOWN = 0;  // Callback still pending.
+      private static final byte FOUND = 1;    // We found the znode.
+      private static final byte NOTFOUND = 2; // The znode didn't exist.
+
+      private byte found_root;
+      private byte found_meta;  // HBase 0.95 and up
+
+      public void processResult(final int rc, final String path,
+                                final Object ctx, final byte[] data,
+                                final Stat stat) {
+        final boolean is_root;  // True if ROOT znode, false if META znode.
+        if (path.endsWith("/root-region-server")) {
+          is_root = true;
+        } else if (path.endsWith("/meta-region-server")) {
+          is_root = false;
+        } else {
+          LOG.error("WTF? We got a callback from ZooKeeper for a znode we did"
+                    + " not expect: " + path + " / stat: " + stat + " / data: "
+                    + Bytes.pretty(data));
+          retryGetRootRegionLater();
+          return;
+        }
+
+        if (rc == Code.NONODE.intValue()) {
+          final boolean both_znode_failed;
+          if (is_root) {
+            found_root = NOTFOUND;
+            both_znode_failed = found_meta == NOTFOUND;
+          } else {  // META (HBase 0.95 and up)
+            found_meta = NOTFOUND;
+            both_znode_failed = found_root == NOTFOUND;
+          }
+          if (both_znode_failed) {
             LOG.error("The znode for the -ROOT- region doesn't exist!");
-            retryGetRootRegionLater(this);
-            return;
-          } else if (rc != Code.OK.intValue()) {
-            LOG.error("Looks like our ZK session expired or is broken, rc="
-                      + rc + ": " + Code.get(rc));
-            disconnectZK();
-            connectZK();
-            return;
+            retryGetRootRegionLater();
           }
-          if (data == null || data.length == 0 || data.length > Short.MAX_VALUE) {
-            LOG.error("The location of the -ROOT- region in ZooKeeper is "
-                      + (data == null || data.length == 0 ? "empty"
-                         : "too large (" + data.length + " bytes!)"));
-            retryGetRootRegionLater(this);
-            return;  // TODO(tsuna): Add a watch to wait until the file changes.
-          }
-          // There are 3 cases.  Older versions of HBase encode the location
-          // of the root region as "host:port", 0.91 uses "host,port,startcode"
-          // and newer versions of 0.91 use "<metadata>host,port,startcode"
-          // where the <metadata> starts with MAGIC, then a 4 byte integer,
-          // then that many bytes of meta data.
-          boolean newstyle;     // True if we expect a 0.91 style location.
-          final short offset;   // Bytes to skip at the beginning of data.
-          short firstsep = -1;  // Index of the first separator (':' or ',').
-          if (data[0] == MAGIC) {
-            newstyle = true;
-            final int metadata_length = Bytes.getInt(data, 1);
-            if (metadata_length < 1 || metadata_length > 65000) {
-              LOG.error("Malformed meta-data in " + Bytes.pretty(data)
-                        + ", invalid metadata length=" + metadata_length);
-              retryGetRootRegionLater(this);
-              return;  // TODO(tsuna): Add a watch to wait until the file changes.
-            }
-            offset = (short) (1 + 4 + metadata_length);
-          } else {
-            newstyle = false;  // Maybe true, the loop below will tell us.
-            offset = 0;
-          }
-          final short n = (short) data.length;
-          // Look for the first separator.  Skip the offset, and skip the
-          // first byte, because we know the separate can only come after
-          // at least one byte.
-          loop: for (short i = (short) (offset + 1); i < n; i++) {
-             switch (data[i]) {
-              case ',':
-                newstyle = true;
-                /* fall through */
-              case ':':
-                firstsep = i;
-                break loop;
-            }
-          }
-          if (firstsep == -1) {
-            LOG.error("-ROOT- location doesn't contain a separator"
-                      + " (':' or ','): " + Bytes.pretty(data));
-            retryGetRootRegionLater(this);
-            return;  // TODO(tsuna): Add a watch to wait until the file changes.
-          }
-          final String host;
-          final short portend;  // Index past where the port number ends.
-          if (newstyle) {
-            host = new String(data, offset, firstsep - offset);
-            short i;
-            for (i = (short) (firstsep + 2); i < n; i++) {
-              if (data[i] == ',') {
-                break;
-              }
-            }
-            portend = i;  // Port ends on the comma.
-          } else {
-            host = new String(data, 0, firstsep);
-            portend = n;  // Port ends at the end of the array.
-          }
-          final int port = parsePortNumber(new String(data, firstsep + 1,
-                                                      portend - firstsep - 1));
-          final String ip = getIP(host);
-          if (ip == null) {
-            LOG.error("Couldn't resolve the IP of the -ROOT- region from "
-                      + host + " in \"" + Bytes.pretty(data) + '"');
-            retryGetRootRegionLater(this);
-            return;  // TODO(tsuna): Add a watch to wait until the file changes.
-          }
-          LOG.info("Connecting to -ROOT- region @ " + ip + ':' + port);
-          final RegionClient client = rootregion = newClient(ip, port);
-          final ArrayList<Deferred<Object>> ds = atomicGetAndRemoveWaiters();
-          if (ds != null) {
-            for (final Deferred<Object> d : ds) {
-              d.callback(client);
-            }
-          }
+          return;
+        } else if (rc != Code.OK.intValue()) {
+          LOG.error("Looks like our ZK session expired or is broken, rc="
+                    + rc + ": " + Code.get(rc));
           disconnectZK();
-          // By the time we're done, we may need to find -ROOT- again.  So
-          // check to see if there are people waiting to find it again, and if
-          // there are, re-open a new session with ZK.
-          // TODO(tsuna): This typically happens when the address of -ROOT- in
-          // ZK is stale.  In this case, we should setup a watch to get
-          // notified once the znode gets updated, instead of continuously
-          // polling ZK and creating new sessions.
-          synchronized (ZKClient.this) {
-            if (deferred_rootregion != null) {
-              connectZK();
-            }
+          connectZK();
+          return;
+        }
+        if (data == null || data.length == 0 || data.length > Short.MAX_VALUE) {
+          LOG.error("The location of the -ROOT- region in ZooKeeper is "
+                    + (data == null || data.length == 0 ? "empty"
+                       : "too large (" + data.length + " bytes!)"));
+          retryGetRootRegionLater();
+          return;  // TODO(tsuna): Add a watch to wait until the file changes.
+        }
+
+        final RegionClient client;
+        if (is_root) {
+          found_root = FOUND;
+          client = handleRootZnode(data);
+        } else {  // META (HBase 0.95 and up)
+          found_meta = FOUND;
+          client = handleMetaZnode(data);
+        }
+
+        if (client == null) {         // We failed to get a client.
+          retryGetRootRegionLater();  // So retry later.
+          return;
+        }
+
+        final ArrayList<Deferred<Object>> ds = atomicGetAndRemoveWaiters();
+        if (ds != null) {
+          for (final Deferred<Object> d : ds) {
+            d.callback(client);
           }
         }
-      };
 
-      synchronized (this) {
-        if (zk != null) {
-          LOG.debug("Finding the -ROOT- region in ZooKeeper");
-          zk.getData(base_path + "/root-region-server", this, cb, null);
+        disconnectZK();
+        // By the time we're done, we may need to find -ROOT- again.  So
+        // check to see if there are people waiting to find it again, and if
+        // there are, re-open a new session with ZK.
+        // TODO(tsuna): This typically happens when the address of -ROOT- in
+        // ZK is stale.  In this case, we should setup a watch to get
+        // notified once the znode gets updated, instead of continuously
+        // polling ZK and creating new sessions.
+        synchronized (ZKClient.this) {
+          if (deferred_rootregion != null) {
+            connectZK();
+          }
         }
       }
+
+      /** Returns a new client for the RS found in the root-region-server.  */
+      @SuppressWarnings("fallthrough")
+      private RegionClient handleRootZnode(final byte[] data) {
+        // There are 3 cases.  Older versions of HBase encode the location
+        // of the root region as "host:port", 0.91 uses "host,port,startcode"
+        // and newer versions of 0.91 use "<metadata>host,port,startcode"
+        // where the <metadata> starts with MAGIC, then a 4 byte integer,
+        // then that many bytes of meta data.
+        boolean newstyle;     // True if we expect a 0.91 style location.
+        final short offset;   // Bytes to skip at the beginning of data.
+        short firstsep = -1;  // Index of the first separator (':' or ',').
+        if (data[0] == MAGIC) {
+          newstyle = true;
+          final int metadata_length = Bytes.getInt(data, 1);
+          if (metadata_length < 1 || metadata_length > 65000) {
+            LOG.error("Malformed meta-data in " + Bytes.pretty(data)
+                      + ", invalid metadata length=" + metadata_length);
+            return null;  // TODO(tsuna): Add a watch to wait until the file changes.
+          }
+          offset = (short) (1 + 4 + metadata_length);
+        } else {
+          newstyle = false;  // Maybe true, the loop below will tell us.
+          offset = 0;
+        }
+        final short n = (short) data.length;
+        // Look for the first separator.  Skip the offset, and skip the
+        // first byte, because we know the separate can only come after
+        // at least one byte.
+        loop: for (short i = (short) (offset + 1); i < n; i++) {
+           switch (data[i]) {
+            case ',':
+              newstyle = true;
+              /* fall through */
+            case ':':
+              firstsep = i;
+              break loop;
+          }
+        }
+        if (firstsep == -1) {
+          LOG.error("-ROOT- location doesn't contain a separator"
+                    + " (':' or ','): " + Bytes.pretty(data));
+          return null;  // TODO(tsuna): Add a watch to wait until the file changes.
+        }
+        final String host;
+        final short portend;  // Index past where the port number ends.
+        if (newstyle) {
+          host = new String(data, offset, firstsep - offset);
+          short i;
+          for (i = (short) (firstsep + 2); i < n; i++) {
+            if (data[i] == ',') {
+              break;
+            }
+          }
+          portend = i;  // Port ends on the comma.
+        } else {
+          host = new String(data, 0, firstsep);
+          portend = n;  // Port ends at the end of the array.
+        }
+        final int port = parsePortNumber(new String(data, firstsep + 1,
+                                                    portend - firstsep - 1));
+        final String ip = getIP(host);
+        if (ip == null) {
+          LOG.error("Couldn't resolve the IP of the -ROOT- region from "
+                    + host + " in \"" + Bytes.pretty(data) + '"');
+          return null;  // TODO(tsuna): Add a watch to wait until the file changes.
+        }
+        LOG.info("Connecting to -ROOT- region @ " + ip + ':' + port);
+        has_root = true;
+        final RegionClient client = rootregion = newClient(ip, port);
+        return client;
+      }
+
+      /**
+       * Returns a new client for the RS found in the meta-region-server.
+       * This is used in HBase 0.95 and up.
+       */
+      private RegionClient handleMetaZnode(final byte[] data) {
+        if (data[0] != MAGIC) {
+          LOG.error("Malformed META region meta-data in " + Bytes.pretty(data)
+                    + ", invalid leading magic number: " + data[0]);
+          return null;
+        }
+
+        final int metadata_length = Bytes.getInt(data, 1);
+        if (metadata_length < 1 || metadata_length > 65000) {
+          LOG.error("Malformed META region meta-data in " + Bytes.pretty(data)
+                    + ", invalid metadata length=" + metadata_length);
+          return null;  // TODO(tsuna): Add a watch to wait until the file changes.
+        }
+        short offset = (short) (1 + 4 + metadata_length);
+
+        final int pbuf_magic = Bytes.getInt(data, offset);
+        if (pbuf_magic != PBUF_MAGIC) {
+          LOG.error("Malformed META region meta-data in " + Bytes.pretty(data)
+                    + ", invalid magic number=" + pbuf_magic);
+          return null;  // TODO(tsuna): Add a watch to wait until the file changes.
+        }
+        offset += 4;
+
+        final String ip;
+        final int port;
+        try {
+          final ZooKeeperPB.MetaRegionServer meta =
+            ZooKeeperPB.MetaRegionServer.newBuilder()
+            .mergeFrom(data, offset, data.length - offset).build();
+          ip = getIP(meta.getServer().getHostName());
+          port = meta.getServer().getPort();
+        } catch (InvalidProtocolBufferException e) {
+          LOG.error("Failed to parse the protobuf in " + Bytes.pretty(data), e);
+          return null;  // TODO(tsuna): Add a watch to wait until the file changes.
+        }
+
+        LOG.info("Connecting to .META. region @ " + ip + ':' + port);
+        has_root = false;
+        final RegionClient client = rootregion = newClient(ip, port);
+        return client;
+      }
+
+    }
+
+    /**
+     * Attempts to lookup the ROOT region (or META, if 0.95 and up).
+     * @return true if a lookup was kicked off, false if not because we
+     * weren't connected to ZooKeeper.
+     */
+    private boolean getRootRegion() {
+      synchronized (this) {
+        if (zk != null) {
+          LOG.debug("Finding the -ROOT- or .META. region in ZooKeeper");
+          final ZKCallback cb = new ZKCallback();
+          zk.getData(base_path + "/root-region-server", this, cb, null);
+          zk.getData(base_path + "/meta-region-server", this, cb, null);
+          return true;
+        }
+      }
+      return false;
     }
 
   }

@@ -33,6 +33,16 @@ import java.util.Comparator;
 
 import org.jboss.netty.buffer.ChannelBuffer;
 
+import org.hbase.async.generated.ClientPB.Action;
+import org.hbase.async.generated.ClientPB.MultiRequest;
+import org.hbase.async.generated.ClientPB.MultiResponse;
+import org.hbase.async.generated.ClientPB.MutationProto;
+import org.hbase.async.generated.ClientPB.RegionAction;
+import org.hbase.async.generated.ClientPB.RegionActionResult;
+import org.hbase.async.generated.ClientPB.Result;
+import org.hbase.async.generated.ClientPB.ResultOrException;
+import org.hbase.async.generated.HBasePB.NameBytesPair;
+
 /**
  * Package-private class to batch multiple RPCs for a same region together.
  * <p>
@@ -54,13 +64,16 @@ final class MultiAction extends HBaseRpc implements HBaseRpc.IsEdit {
   // believe me, what's here is -- in my biased opinion -- significantly
   // better than the insane spaghetti mess in HBase's client and server.
 
-  private static final byte[] MULTI_PUT = new byte[] {
+  /** RPC method name for HBase before 0.92.  */
+  private static final byte[] MULTI_PUT = {
     'm', 'u', 'l', 't', 'i', 'P', 'u', 't'
   };
 
-  private static final byte[] MULTI = new byte[] {
-    'm', 'u', 'l', 't', 'i'
-  };
+  /** RPC method name for HBase 0.92 to 0.94.  */
+  private static final byte[] MULTI = { 'm', 'u', 'l', 't', 'i' };
+
+  /** RPC method name for HBase 0.95 and above.  */
+  private static final byte[] MMULTI = { 'M', 'u', 'l', 't', 'i' };
 
   /** Template for NSREs.  */
   private static final NotServingRegionException NSRE =
@@ -81,11 +94,12 @@ final class MultiAction extends HBaseRpc implements HBaseRpc.IsEdit {
    */
   private final ArrayList<BatchableRpc> batch = new ArrayList<BatchableRpc>();
 
-  /**
-   * Constructor.
-   */
-  public MultiAction(final byte server_version) {
-    super(server_version >= USE_MULTI ? MULTI : MULTI_PUT);
+  @Override
+  byte[] method(final byte server_version) {
+    if (server_version >= RegionClient.SERVER_VERSION_095_OR_ABOVE) {
+       return MMULTI;
+    }
+    return server_version >= USE_MULTI ? MULTI : MULTI_PUT;
   }
 
   /** Returns the number of RPCs in this batch.  */
@@ -130,7 +144,7 @@ final class MultiAction extends HBaseRpc implements HBaseRpc.IsEdit {
     size += 4;  // int:  How many regions do we want to affect?
 
     // Are we serializing a `multi' RPC, or `multiPut'?
-    final boolean use_multi = method() == MULTI;
+    final boolean use_multi = method(server_version) == MULTI;
 
     BatchableRpc prev = PutRequest.EMPTY_PUT;
     for (final BatchableRpc rpc : batch) {
@@ -192,6 +206,38 @@ final class MultiAction extends HBaseRpc implements HBaseRpc.IsEdit {
 
   /** Serializes this request.  */
   ChannelBuffer serialize(final byte server_version) {
+    if (server_version < RegionClient.SERVER_VERSION_095_OR_ABOVE) {
+      return serializeOld(server_version);
+    }
+
+    Collections.sort(batch, SORT_BY_REGION);
+    final MultiRequest.Builder req = MultiRequest.newBuilder();
+    RegionAction.Builder actions = null;
+    byte[] prev_region = HBaseClient.EMPTY_ARRAY;
+    int i = 0;
+    for (final BatchableRpc rpc : batch) {
+      final RegionInfo region = rpc.getRegion();
+      final boolean new_region = !Bytes.equals(prev_region, region.name());
+      if (new_region) {
+        if (actions != null) {  // If not the first iteration ...
+          req.addRegionAction(actions.build());  // ... push actions thus far.
+        }
+        actions = RegionAction.newBuilder();
+        actions.setRegion(rpc.getRegion().toProtobuf());
+        prev_region = region.name();
+      }
+      final Action action = Action.newBuilder()
+        .setIndex(i++)
+        .setMutation(rpc.toMutationProto())
+        .build();
+      actions.addAction(action);
+    }
+    req.addRegionAction(actions.build());
+    return toChannelBuffer(MMULTI, req.build());
+  }
+
+  /** Serializes this request for HBase 0.94 and before.  */
+  private ChannelBuffer serializeOld(final byte server_version) {
     // Due to the wire format expected by HBase, we need to group all the
     // edits by region, then by key, then by family.  HBase does this by
     // building a crazy map-of-map-of-map-of-list-of-edits, but this is
@@ -210,7 +256,7 @@ final class MultiAction extends HBaseRpc implements HBaseRpc.IsEdit {
     buf.writeInt(1);  // Number of parameters.
 
     // Are we serializing a `multi' RPC, or `multiPut'?
-    final boolean use_multi = method() == MULTI;
+    final boolean use_multi = method(server_version) == MULTI;
 
     {  // 1st and only param.
       final int code = use_multi ? 66 : 57;  // `MultiAction' or `MultiPut'.
@@ -374,7 +420,7 @@ final class MultiAction extends HBaseRpc implements HBaseRpc.IsEdit {
     buf.setInt(nkeys_index, nkeys);
 
     // Monkey-patch the number of regions affected by this RPC.
-    int header_length = 4 + 4 + 2 + method().length;
+    int header_length = 4 + 4 + 2 + method(server_version).length;
     if (server_version >= RegionClient.SERVER_VERSION_092_OR_ABOVE) {
       header_length += 1 + 8 + 4;
     }
@@ -424,7 +470,10 @@ final class MultiAction extends HBaseRpc implements HBaseRpc.IsEdit {
    */
   static final MultiActionComparator MULTI_CMP = new MultiActionComparator();
 
-  /** Sorts {@link BatchableRpc}s appropriately for the `multi' RPC.  */
+  /**
+   * Sorts {@link BatchableRpc}s appropriately for the `multi' RPC.
+   * Used with HBase 0.94 and earlier only.
+   */
   private static final class MultiActionComparator
     implements Comparator<BatchableRpc> {
 
@@ -450,6 +499,96 @@ final class MultiAction extends HBaseRpc implements HBaseRpc.IsEdit {
       return Bytes.memcmp(a.family(), b.family());
     }
 
+  }
+
+  /**
+   * Sorts {@link BatchableRpc}s appropriately for HBase 0.95+ multi-action.
+   */
+  static final RegionComparator SORT_BY_REGION = new RegionComparator();
+
+  /**
+   * Sorts {@link BatchableRpc}s by region.
+   * Used with HBase 0.95+ only.
+   */
+  private static final class RegionComparator
+    implements Comparator<BatchableRpc> {
+
+    private RegionComparator() {  // Can't instantiate outside of this class.
+    }
+
+    @Override
+    /** Compares two RPCs.  */
+    public int compare(final BatchableRpc a, final BatchableRpc b) {
+      return Bytes.memcmp(a.getRegion().name(), b.getRegion().name());
+    }
+
+  }
+
+  @Override
+  Object deserialize(final ChannelBuffer buf, final int cell_size) {
+    HBaseRpc.ensureNoCell(cell_size);
+    final MultiResponse resp = readProtobuf(buf, MultiResponse.PARSER);
+    final int nrpcs = batch.size();
+    final Object[] resps = new Object[nrpcs];
+    int n = 0;  // Index in `batch'.
+    int r = 0;  // Index in `regionActionResult' in the PB.
+    while (n < nrpcs) {
+      final RegionActionResult results = resp.getRegionActionResult(r++);
+      final int nresults = results.getResultOrExceptionCount();
+      if (results.hasException()) {
+        if (nresults != 0) {
+          throw new InvalidResponseException("All edits in a batch failed yet"
+                                             + " we found " + nresults
+                                             + " results", results);
+        }
+        // All the edits for this region have failed, however the PB doesn't
+        // tell us how many edits there were for that region, and we don't
+        // keep track of this information except temporarily during
+        // serialization.  So we need to go back through our list again to
+        // re-count how many we did put together in this batch, so we can fail
+        // all those RPCs.
+        int last_edit = n + 1; // +1 because we have at least 1 edit.
+        final byte[] region_name = batch.get(n).getRegion().name();
+        while (last_edit < nrpcs
+               && Bytes.equals(region_name,
+                               batch.get(last_edit).getRegion().name())) {
+          last_edit++;
+        }
+        final NameBytesPair pair = results.getException();
+        for (int j = n; j < last_edit; j++) {
+          resps[j] = RegionClient.decodeExceptionPair(batch.get(j), pair);
+        }
+        n = last_edit - 1;  // -1 because we're going to do n++;
+        continue;  // This batch failed, move on (this will cause n++).
+      }  // else: parse out the individual results:
+      for (int j = 0; j < nresults; j++) {
+        final ResultOrException roe = results.getResultOrException(j);
+        final int index = roe.getIndex();
+        if (index != n) {
+          throw new InvalidResponseException("Expected result #" + n
+                                             + " but got result #" + index,
+                                             results);
+        }
+        final Object result;
+        if (roe.hasException()) {
+          final NameBytesPair pair = roe.getException();
+          // This RPC failed, get what the exception was.
+          result = RegionClient.decodeExceptionPair(batch.get(n), pair);
+        } else {
+          // We currently don't care what the result was: if it wasn't an
+          // error, it was a success, period.  For a put/delete the result
+          // would be empty anyway.
+          result = SUCCESS;
+        }
+        resps[n++] = result;
+      }
+    }
+    if (n != nrpcs) {
+      throw new InvalidResponseException("Expected " + nrpcs
+                                         + " results but got " + n,
+                                         resp);
+    }
+    return new Response(resps);
   }
 
   /**
@@ -484,6 +623,7 @@ final class MultiAction extends HBaseRpc implements HBaseRpc.IsEdit {
   /**
    * De-serializes the response to a {@link MultiAction} RPC.
    * See HBase's {@code MultiResponse}.
+   * Only used with HBase 0.94 and earlier.
    */
   Response responseFromBuffer(final ChannelBuffer buf, int rpcid, RegionClient rc) {
     switch (buf.readByte()) {
@@ -498,7 +638,7 @@ final class MultiAction extends HBaseRpc implements HBaseRpc.IsEdit {
 
   /**
    * De-serializes a {@code MultiResponse}.
-   * This is only used when talking to HBase 0.92 and above.
+   * This is only used when talking to HBase 0.92.x to 0.94.x.
    */
   Response deserializeMultiResponse(final ChannelBuffer buf, final int rpcid, RegionClient rc) {
     final int nregions = buf.readInt();

@@ -26,6 +26,13 @@
  */
 package org.hbase.async;
 
+import java.io.IOException;
+
+import com.google.protobuf.AbstractMessageLite;
+import com.google.protobuf.CodedOutputStream;
+import com.google.protobuf.InvalidProtocolBufferException;
+import com.google.protobuf.Parser;
+
 import org.jboss.netty.buffer.ChannelBuffer;
 import org.jboss.netty.buffer.ChannelBuffers;
 import org.jboss.netty.util.CharsetUtil;
@@ -174,6 +181,8 @@ public abstract class HBaseRpc {
    * @since 1.4
    */
   interface IsEdit {
+    /** RPC method name to use with HBase 0.95+.  */
+    static final byte[] MUTATE = { 'M', 'u', 't', 'a', 't', 'e' };
   }
 
   /*
@@ -315,7 +324,7 @@ public abstract class HBaseRpc {
   /**
    * To be implemented by the concrete sub-type.
    * This method is expected to instantiate a {@link ChannelBuffer} using
-   * either {@link #newBuffer} or {@link #newDynamicBuffer} and return it
+   * either {@link #newBuffer} and return it
    * properly populated so it's ready to be written out to the wire (except
    * for the "RPC header" that contains the RPC ID and method name and such,
    * which is going to be populated automatically just before sending the RPC
@@ -329,10 +338,32 @@ public abstract class HBaseRpc {
   abstract ChannelBuffer serialize(byte server_version);
 
   /**
-   * Name of the method to invoke on the server side.
-   * This is the name of a method of {@code HRegionInterface}.
+   * To be implemented by the concrete sub-type.
+   * This method is expected to de-serialize a response received for the
+   * current RPC, when communicating with HBase 0.95 and newer.
+   *
+   * Notice that this method is package-private, so only classes within this
+   * package can use this as a base class.
+   *
+   * @param buf The buffer from which to de-serialize the response.
+   * @param cell_size The size, in bytes, of the "cell block" that follows the
+   * protobuf of the RPC response.  If 0, then there is just the protobuf.
+   * The value is guaranteed to be both positive and of a "reasonable" size.
    */
-  private final byte[] method;
+   abstract Object deserialize(ChannelBuffer buf, int cell_size);
+
+  /**
+   * Throws an exception if the argument is non-zero.
+   */
+  static void ensureNoCell(final int cell_size) {
+    if (cell_size != 0) {
+      throw new InvalidResponseException(
+        "Should not have gotten any cell blocks, yet there are "
+        + cell_size + " bytes that follow the protobuf response."
+        + "  This should never happen."
+        + "  Are you using an incompatible version of HBase?", null);
+    }
+  }
 
   /**
    * The Deferred that will be invoked when this RPC completes or fails.
@@ -395,25 +426,49 @@ public abstract class HBaseRpc {
   Callback<KeyValue,KeyValue> filteringCallback;
 
   /**
-   * Package private constructor for RPCs that aren't for any region.
-   * @param method The name of the method to invoke on the RegionServer.
+   * If true, this RPC should fail-fast as soon as we know we have a problem.
    */
-  HBaseRpc(final byte[] method) {
-    this.method = method;
+  boolean failfast = false;
+
+  /**
+   * Set whether or not the RPC not be retried upon encountering a problem.
+   * <p>
+   * RPCs can be retried for various legitimate reasons (e.g. NSRE due to a
+   * region moving), but under certain failure circumstances (such as a node
+   * going down) we want to give up and be alerted as soon as possible.
+   * @param failfast If {@code true}, this RPC should fail-fast as soon as
+   * we know we have a problem.
+   * @since 1.5
+   */
+  public final boolean setFailfast(final boolean failfast) {
+    return this.failfast = failfast;
+  }
+
+  /**
+   * Returns whether or not the RPC not be retried upon encountering a problem.
+   * @see #setFailfast
+   * @since 1.5
+   */
+  public final boolean failfast() {
+    return failfast;
+  }
+
+  /**
+   * Package private constructor for RPCs that aren't for any region.
+   */
+  HBaseRpc() {
     table = null;
     key = null;
   }
 
   /**
    * Package private constructor for RPCs that are for a region.
-   * @param method The name of the method to invoke on the RegionServer.
    * @param table The name of the table this RPC is for.
    * @param row The name of the row this RPC is for.
    */
-  HBaseRpc(final byte[] method, final byte[] table, final byte[] key) {
+  HBaseRpc(final byte[] table, final byte[] key) {
     KeyValue.checkTable(table);
     KeyValue.checkKey(key);
-    this.method = method;
     this.table = table;
     this.key = key;
   }
@@ -422,10 +477,11 @@ public abstract class HBaseRpc {
   // Package private stuff. //
   // ---------------------- //
 
-  /** Package private way of getting the name of the RPC method.  */
-  final byte[] method() {
-    return method;
-  }
+  /**
+   * Package private way of getting the name of the RPC method.
+   * @param server_version What RPC protocol version the server is running.
+   */
+  abstract byte[] method(byte server_version);
 
   /**
    * Sets the region this RPC is going to.
@@ -496,13 +552,14 @@ public abstract class HBaseRpc {
 
   public String toString() {
     // Try to rightsize the buffer.
-    final StringBuilder buf = new StringBuilder(16 + method.length + 2
+    final String method = new String(this.method((byte) 0));
+    final StringBuilder buf = new StringBuilder(16 + method.length() + 2
       + 8 + (table == null ? 4 : table.length + 2)  // Assumption: ASCII => +2
       + 6 + (key == null ? 4 : key.length * 2)      // Assumption: binary => *2
       + 9 + (region == null ? 4 : region.stringSizeHint())
       + 10 + 1 + 1);
     buf.append("HBaseRpc(method=");
-    Bytes.pretty(buf, method);
+    buf.append(method);
     buf.append(", table=");
     Bytes.pretty(buf, table);
     buf.append(", key=");
@@ -636,53 +693,61 @@ public abstract class HBaseRpc {
    * The approximation must be an upper bound on the expected size of the
    * payload as trying to store more than {@code max_payload_size} bytes in
    * the buffer returned will cause an {@link ArrayIndexOutOfBoundsException}.
-   * <p>
-   * When no reasonable upper bound on the payload size can be easily
-   * estimated ahead of time, you can use {@link #newDynamicBuffer} instead.
    */
   final ChannelBuffer newBuffer(final byte server_version,
                                 final int max_payload_size) {
     // Add extra bytes for the RPC header:
-    //   4 bytes: Payload size.
+    //   4 bytes: Payload size (always present, even in HBase 0.95+).
     //   4 bytes: RPC ID.
     //   2 bytes: Length of the method name.
     //   N bytes: The method name.
-    final int header = 4 + 4 + 2 + method.length
+    final int header = 4 + 4 + 2 + method(server_version).length
       // Add extra bytes for the RPC header used in HBase 0.92 and above:
       //   1 byte:  RPC header version.
       //   8 bytes: Client version.  Yeah, 8 bytes, WTF seriously.
       //   4 bytes: Method fingerprint.
       + (server_version < RegionClient.SERVER_VERSION_092_OR_ABOVE ? 0
          : 1 + 8 + 4);
+    // Note: with HBase 0.95 and up, the size of the protobuf header varies.
+    // It is currently made of (see RequestHeader in RPC.proto):
+    //   - uint32 callId: varint 1 to 5 bytes
+    //   - RPCTInfo traceInfo: two uint64 varint so 4 to 20 bytes.
+    //   - string methodName: varint length (1 byte) and method name.
+    //   - bool requestParam: 1 byte
+    //   - CellBlockMeta cellBlockMeta: one uint32 varint so 2 to 6 bytes.
+    // Additionally each field costs an extra 1 byte, and there is a varint
+    // prior to the header for the size of the header.  We don't set traceInfo
+    // right now so that leaves us with 4 fields for a total maximum size of
+    // 1 varint + 4 fields + 5 + 1 + N + 1 + 6 = 18 bytes max + method name.
+    // Since for HBase 0.92 we reserve 19 bytes, we're good, we over-allocate
+    // at most 1 bytes.  So the logic above doesn't need to change for 0.95+.
     final ChannelBuffer buf = ChannelBuffers.buffer(header + max_payload_size);
     buf.setIndex(0, header);  // Advance the writerIndex past the header.
     return buf;
   }
 
   /**
-   * Creates a new dynamic-length buffer on the heap.
-   * @param server_version What RPC protocol version the server is running.
-   * @param max_payload_size A good approximation of the size of the payload.
-   * The approximation should be an upper bound on the expected size of the
-   * payload.  Trying to store more than {@code max_payload_size} bytes in
-   * this buffer will be automatically resized, which involves doubling the
-   * size of the buffer (or more) and copying the contents of the old buffer
-   * to the new one.
-   * <p>
-   * Whenever possible, {@link #newBuffer} should be used instead.  In a
-   * benchmark I did, writing to a dynamic-length buffer was about 16% slower
-   * and that's without ever re-sizing the buffer!
+   * Serializes the given protobuf object into a Netty {@link ChannelBuffer}.
+   * @param method The name of the method of the RPC we're going to send.
+   * @param pb The protobuf to serialize.
+   * @return A new channel buffer containing the serialized protobuf, with
+   * enough free space at the beginning to tack on the RPC header.
    */
-  final ChannelBuffer newDynamicBuffer(final byte server_version,
-                                       final int max_payload_size) {
-    // See the comment in newBuffer above.
-    final int header = 4 + 4 + 2 + method.length
-      + (server_version < RegionClient.SERVER_VERSION_092_OR_ABOVE ? 0
-         : 1 + 8 + 4);
-    final ChannelBuffer buf = ChannelBuffers.dynamicBuffer(header
-                                                           + max_payload_size);
-    buf.setIndex(0, header);  // Advance the writerIndex past the header.
-    return buf;
+  static final ChannelBuffer toChannelBuffer(final byte[] method,
+                                             final AbstractMessageLite pb) {
+    final int pblen = pb.getSerializedSize();
+    final int vlen = CodedOutputStream.computeRawVarint32Size(pblen);
+    final byte[] buf = new byte[4 + 19 + method.length + vlen + pblen];
+    try {
+      final CodedOutputStream out = CodedOutputStream.newInstance(buf, 4 + 19 + method.length,
+                                                                  vlen + pblen);
+      out.writeRawVarint32(pblen);
+      pb.writeTo(out);
+      out.checkNoSpaceLeft();
+    } catch (IOException e) {
+      throw new RuntimeException("Should never happen", e);
+    }
+    return ChannelBuffers.wrappedBuffer(buf);
   }
 
   /**
@@ -765,7 +830,7 @@ public abstract class HBaseRpc {
    * The Hadoop RPC protocol doesn't do any checksumming as they probably
    * assumed that TCP checksums would be sufficient (they're not).
    */
-  private static final long MAX_BYTE_ARRAY_MASK =
+  public static final long MAX_BYTE_ARRAY_MASK =
     0xFFFFFFFFE0000000L;  // => max = 512MB
 
   /**
@@ -855,6 +920,38 @@ public abstract class HBaseRpc {
     final byte[] s = new byte[length];
     buf.readBytes(s);
     return new String(s, CharsetUtil.UTF_8);
+  }
+
+  /**
+   * De-serializes a protobuf from the given buffer.
+   * <p>
+   * The protobuf is assumed to be prefixed by a varint indicating its size.
+   * @param buf The buffer to de-serialize the protobuf from.
+   * @param parser The protobuf parser to use for this type of protobuf.
+   * @return An instance of the de-serialized type.
+   * @throws InvalidResponseException if the buffer contained an invalid
+   * protobuf that couldn't be de-serialized.
+   */
+  static <T> T readProtobuf(final ChannelBuffer buf, final Parser<T> parser) {
+    final int length = HBaseRpc.readProtoBufVarint(buf);
+    HBaseRpc.checkArrayLength(buf, length);
+    final byte[] payload;
+    final int offset;
+    if (buf.hasArray()) {  // Zero copy.
+      payload = buf.array();
+      offset = buf.arrayOffset() + buf.readerIndex();
+    } else {  // We have to copy the entire payload out of the buffer :(
+      payload = new byte[length];
+      buf.readBytes(payload);
+      offset = 0;
+    }
+    try {
+      return parser.parseFrom(payload, offset, length);
+    } catch (InvalidProtocolBufferException e) {
+      final String msg = "Invalid RPC response: length=" + length
+        + ", payload=" + Bytes.pretty(payload);
+      throw new InvalidResponseException(msg, e);
+    }
   }
 
   // -------------------------------------- //
@@ -1061,6 +1158,41 @@ public abstract class HBaseRpc {
         result |= b & 0xFF;
     }
     return negate ? ~result : result;
+  }
+
+  /**
+   * Reads a 32-bit variable-length integer value as used in Protocol Buffers.
+   * @param buf The buffer to read from.
+   * @return The integer read.
+   */
+  static int readProtoBufVarint(final ChannelBuffer buf) {
+    int result = buf.readByte();
+    if (result >= 0) {
+      return result;
+    }
+    result &= 0x7F;
+    result |= buf.readByte() << 7;
+    if (result >= 0) {
+      return result;
+    }
+    result &= 0x3FFF;
+    result |= buf.readByte() << 14;
+    if (result >= 0) {
+      return result;
+    }
+    result &= 0x1FFFFF;
+    result |= buf.readByte() << 21;
+    if (result >= 0) {
+      return result;
+    }
+    result &= 0x0FFFFFFF;
+    final byte b = buf.readByte();
+    result |= b << 28;
+    if (b >= 0) {
+      return result;
+    }
+    throw new IllegalArgumentException("Not a 32 bit varint: " + result
+                                       + " (5th byte: " + b + ")");
   }
 
 }

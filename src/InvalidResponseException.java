@@ -45,6 +45,16 @@ public final class InvalidResponseException extends NonRecoverableException {
   }
 
   /**
+   * Constructor.
+   * @param msg The message of the exception.
+   * @param cause The exception explaining why the response is invalid.
+   */
+  InvalidResponseException(final String msg, final Exception cause) {
+    super(msg, cause);
+    this.response = null;
+  }
+
+  /**
    * Constructor for unexpected response types.
    * @param expected The type of the response that was expected.
    * @param response The response that was received from the server.

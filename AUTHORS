@@ -1,12 +1,33 @@
-The Async HBase Authors
------------------------
+The AsyncHBase Authors
+----------------------
 
-Async HBase ("asynchbase") was originally written by Benoit Sigoure.
-The following organizations and people have contributed code to Async HBase.
+AsyncHBase ("asynchbase") was originally written by Benoit Sigoure.
+
+All contributors are required to sign a "Contributor License Agreement" at
+  http://opentsdb.net/contributing.html
+
+The following organizations and people have contributed at least 0.5% of the
+current code of AsyncHBase.
 (Please keep both lists sorted alphabetically.)
 
 
+Arista Networks, Inc.
 StumbleUpon, Inc.
 
 
-Benoit Sigoure <tsunanet@gmail.com>
+Andrey Stepachev
+Benoit Sigoure
+Brandon Forehand
+Viral Bajaria
+
+
+
+This list can be obtained at any time with the following script:
+
+find src test -type f \
+| while read i; do \
+  git blame -t $i 2>/dev/null; \
+  done \
+| sed 's/^[0-9a-f]\{8\} [^(]*(\([^)]*\) [-+0-9 ]\{14,\}).*/\1/;s/ *$//' \
+| awk '{a[$0]++; t++} END{for(n in a) if (a[n]*100.0/t > 0.5) print n}' \
+| sort

@@ -36,6 +36,9 @@ import java.util.Iterator;
 import java.util.Map;
 import java.util.TreeMap;
 
+import com.google.protobuf.ByteString;
+import com.google.protobuf.ZeroCopyLiteralByteString;
+
 import org.jboss.netty.buffer.ChannelBuffer;
 import org.jboss.netty.util.CharsetUtil;
 
@@ -275,6 +278,25 @@ public final class Bytes {
     return b;
   }
 
+  /**
+   * Wraps a byte array in a {@link ByteString} without copying it.
+   * @param array A byte array that must be considered read-only from there on.
+   * @since 1.5
+   */
+  public static ByteString wrap(final byte[] array) {
+    return ZeroCopyLiteralByteString.wrap(array);
+  }
+
+  /**
+   * Extracts the byte array from the given {@link ByteString} without copy.
+   * @param buf A buffer from which to extract the array.  This buffer must be
+   * actually an instance of a {@code LiteralByteString}.
+   * @since 1.5
+   */
+  public static byte[] get(final ByteString buf) {
+    return ZeroCopyLiteralByteString.zeroCopyGetBytes(buf);
+  }
+
   /** Transforms a string into an UTF-8 encoded byte array.  */
   public static byte[] UTF8(final String s) {
     return s.getBytes(CharsetUtil.UTF_8);
@@ -300,16 +322,6 @@ public final class Bytes {
    * @param array The (possibly {@code null}) array to pretty-print.
    */
   public static void pretty(final StringBuilder outbuf, final byte[] array) {
-    pretty(outbuf, array, Integer.MAX_VALUE);
-  }
-
-  /**
-   * Pretty-prints a byte array into a human-readable output buffer.
-   * @param outbuf The (possibly {@code null}) buffer where to write the output.
-   * @param array The array to pretty-print.
-   * @param limit The maximum number of bytes to print.
-   */
-  public static void pretty(final StringBuilder outbuf, final byte[] array, int limit) {
     if (array == null) {
       outbuf.append("null");
       return;
@@ -332,10 +344,6 @@ public final class Bytes {
         outbuf.append("\\x")
           .append((char) HEX[(b >>> 4) & 0x0F])
           .append((char) HEX[b & 0x0F]);
-      }
-      if (--limit < 0) {
-        outbuf.append("<trunc>");
-        break;
       }
     }
     if (ascii < n / 2) {
@@ -377,23 +385,12 @@ public final class Bytes {
    * @param array The (possibly {@code null}) array to pretty-print.
    * @return The array in a pretty-printed string.
    */
-  public static String pretty(final byte[] array)
-  {
-    return pretty(array, Integer.MAX_VALUE);
-  }
-
-  /**
-   * Pretty-prints a byte array into a human-readable string.
-   * @param array The (possibly {@code null}) array to pretty-print.
-   * @param limit The maximum number of bytes to print.
-   * @return The array in a pretty-printed string.
-   */
-  public static String pretty(final byte[] array, int limit) {
+  public static String pretty(final byte[] array) {
     if (array == null) {
       return "null";
     }
     final StringBuilder buf = new StringBuilder(1 + array.length + 1);
-    pretty(buf, array, limit);
+    pretty(buf, array);
     return buf.toString();
   }
 
@@ -469,15 +466,6 @@ public final class Bytes {
    * @return The buffer in a pretty-printed string.
    */
   public static String pretty(final ChannelBuffer buf) {
-    return pretty(buf, Integer.MAX_VALUE);
-  }
-  /**
-   * Pretty-prints all the bytes of a buffer into a human-readable string.
-   * @param buf The (possibly {@code null}) buffer to pretty-print.
-   * @param limit The maximum number of bytes to print.
-   * @return The buffer in a pretty-printed string.
-   */
-  public static String pretty(final ChannelBuffer buf, int limit) {
     if (buf == null) {
       return "null";
     }
@@ -499,7 +487,7 @@ public final class Bytes {
     } catch (InvocationTargetException e) {
       throw new AssertionError("Should not happen: " + e);
     }
-    return pretty(array, limit);
+    return pretty(array);
   }
 
   // ---------------------- //

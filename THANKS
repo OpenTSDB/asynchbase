@@ -1,5 +1,5 @@
-Async HBase THANKS File
------------------------
+AsyncHBase THANKS File
+----------------------
 
 The following persons contributed to the library by reporting problems,
 suggesting improvements, submitting patches or proofreading the code.
@@ -7,10 +7,19 @@ suggesting improvements, submitting patches or proofreading the code.
 Andrey Stepachev
 Arthur van Hoff
 Berk D. Demir
+Brandon Forehand
 Guo Sijie
 Ishan Chhabra
+James Baldassari
 Jonathan Payne
 Michael Rose
 Michael Stack
 Nicolas Thiébaud
+Phil Smith
 Shrijeet Paliwal
+Michael Stack
+Viral Bajaria
+Xun Liu
+
+This list can be obtained at any time with the following one-liner:
+git log --pretty=format:'%an' | sort -u

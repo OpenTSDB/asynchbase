@@ -12,3 +12,9 @@ Basic Installation
 Just type `make', and everything should work as long as you have Java
 and GNU make installed in your PATH.  On some BSD systems, you may have
 to type `gmake' instead.
+
+Maven Users
+==================
+If you would use Maven, ensure protoc is on your path (2.5.0) and then
+type 'make pom.xml' to generate a pom.xml file.  Thereafter run
+'mvn install' to generate the asynchbase jar file.
