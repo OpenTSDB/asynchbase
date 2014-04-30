@@ -37,6 +37,7 @@ import org.jboss.netty.buffer.ChannelBuffer;
 import org.jboss.netty.buffer.ChannelBuffers;
 import org.jboss.netty.util.CharsetUtil;
 
+import com.stumbleupon.async.Callback;
 import com.stumbleupon.async.Deferred;
 
 /**
@@ -132,6 +133,25 @@ public abstract class HBaseRpc {
      * <strong>DO NOT MODIFY THE CONTENTS OF THE ARRAY RETURNED.</strong>
      */
     public byte[] value();
+  }
+
+  /**
+   * An RPC from which you can get a filter.
+   * @since 1.xx
+   */
+  public interface HasFilter {
+    /**
+     * Returns the filter contained in this RPC.
+     * <p>
+     * <strong>DO NOT MODIFY THE CONTENTS OF THE ARRAY RETURNED.</strong>
+     */
+    public byte[] filter();
+    /**
+     * Returns the name of the filter contained in this RPC.
+     * <p>
+     * <strong>DO NOT MODIFY THE CONTENTS OF THE ARRAY RETURNED.</strong>
+     */
+    public byte[] filterName();
   }
 
   /**
@@ -399,6 +419,13 @@ public abstract class HBaseRpc {
   byte attempt;  // package-private for RegionClient and HBaseClient only.
 
   /**
+   * A filtering Callback instance. If it is non-null it will be invoked for
+   * each KeyValue encountered during a scan or get. If the filter returns
+   * its argument, the KeyValue will be included in the results.
+   */
+  Callback<KeyValue,KeyValue> filteringCallback;
+
+  /**
    * If true, this RPC should fail-fast as soon as we know we have a problem.
    */
   boolean failfast = false;
@@ -509,6 +536,18 @@ public abstract class HBaseRpc {
   /** Checks whether or not this RPC has a Deferred without creating one.  */
   final boolean hasDeferred() {
     return deferred != null;
+  }
+
+  /**
+   * Invokes the KeyValue filter, if present, to decide whether to keep the KeyValue
+   * and add it to the collection.
+   * @see RegionClient
+   */
+  KeyValue invokeFilter(KeyValue kv) throws Exception {
+    if (filteringCallback != null) {
+      return filteringCallback.call(kv);
+    }
+    return kv;
   }
 
   public String toString() {
@@ -791,8 +830,8 @@ public abstract class HBaseRpc {
    * The Hadoop RPC protocol doesn't do any checksumming as they probably
    * assumed that TCP checksums would be sufficient (they're not).
    */
-  static final long MAX_BYTE_ARRAY_MASK =
-    0xFFFFFFFFF0000000L;  // => max = 256MB
+  public static final long MAX_BYTE_ARRAY_MASK =
+    0xFFFFFFFFE0000000L;  // => max = 512MB
 
   /**
    * Verifies that the given length looks like a reasonable array length.

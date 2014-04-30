@@ -43,7 +43,8 @@ import org.hbase.async.generated.ClientPB;
  */
 public final class GetRequest extends HBaseRpc
   implements HBaseRpc.HasTable, HBaseRpc.HasKey,
-             HBaseRpc.HasFamily, HBaseRpc.HasQualifiers {
+             HBaseRpc.HasFamily, HBaseRpc.HasQualifiers,
+             HBaseRpc.HasFilter {
 
   private static final byte[] GET = new byte[] { 'g', 'e', 't' };
   static final byte[] GGET = new byte[] { 'G', 'e', 't' };  // HBase 0.95+
@@ -53,6 +54,10 @@ public final class GetRequest extends HBaseRpc
   private byte[] family;     // TODO(tsuna): Handle multiple families?
   private byte[][] qualifiers;
   private long lockid = RowLock.NO_LOCK;
+  private long min_timestamp = 0;
+  private long max_timestamp = Long.MAX_VALUE;
+  private byte[] filter;
+  private byte[] filterName;
 
   /**
    * How many versions of each cell to retrieve.
@@ -258,6 +263,38 @@ public final class GetRequest extends HBaseRpc
     return qualifier(qualifier.getBytes());
   }
 
+  /** Specifies an filter..  */
+  public GetRequest filter(final byte[] filter) {
+    this.filter = filter;
+    return this;
+  }
+
+  /** Specifies an filter..  */
+  public GetRequest filterName(final byte[] filterName) {
+    this.filterName = filterName;
+    return this;
+  }
+
+  /** Specifies a minimum timestamp.  */
+  public GetRequest minTimestamp(final long timestamp) {
+    this.min_timestamp = timestamp;
+    return this;
+  }
+
+  public long minTimestamp() {
+    return this.min_timestamp;
+  }
+
+  /** Specifies a maximum timestamp.  */
+  public GetRequest maxTimestamp(final long timestamp) {
+    this.max_timestamp = timestamp;
+    return this;
+  }
+
+  public long maxTimestamp() {
+    return this.max_timestamp;
+  }
+
   /** Specifies an explicit row lock to use with this request.  */
   public GetRequest withRowLock(final RowLock lock) {
     lockid = lock.id();
@@ -321,6 +358,16 @@ public final class GetRequest extends HBaseRpc
     return qualifiers;
   }
 
+  @Override
+  public byte[] filter() {
+    return filter;
+  }
+
+  @Override
+  public byte[] filterName() {
+    return filterName;
+  }
+
   public String toString() {
     final String klass = isGetRequest() ? "GetRequest" : "Exists";
     return super.toStringWithQualifiers(klass, family, qualifiers);
@@ -352,6 +399,11 @@ public final class GetRequest extends HBaseRpc
     size += 8;  // long: Lock ID.
     size += 4;  // int:  Max number of versions to return.
     size += 1;  // byte: Whether or not to use a filter.
+    if (filterName != null && filter != null) {
+      size += 3;  // vint: row filter name length (3 bytes => max length = 32768).
+      size += filterName.length;  // The filter name.
+      size += filter.length;  // serialized filter see org.apache.hadoop.hbase.util.Writables.getBytes
+    }
     if (server_version >= 26) {  // New in 0.90 (because of HBASE-3174).
       size += 1;  // byte: Whether or not to cache the blocks read.
     }
@@ -429,18 +481,22 @@ public final class GetRequest extends HBaseRpc
     writeByteArray(buf, key);
     buf.writeLong(lockid);  // Lock ID.
     buf.writeInt(maxVersions()); // Max number of versions to return.
-    buf.writeByte(0x00); // boolean (false): whether or not to use a filter.
-    // If the previous boolean was true:
-    //   writeByteArray(buf, filter name as byte array);
-    //   write the filter itself
+
+    if (filterName != null && filter != null) {
+      buf.writeByte(0x01); // boolean (true): whether or not to use a filter.
+      writeByteArray(buf, filterName); // the filter name
+      buf.writeBytes(filter); // the filter
+    } else {
+      buf.writeByte(0x00); // boolean (false): whether or not to use a filter.
+    }
 
     if (server_version >= 26) {  // New in 0.90 (because of HBASE-3174).
       buf.writeByte(0x01);  // boolean (true): whether to cache the blocks.
     }
 
     // TimeRange
-    buf.writeLong(0);               // Minimum timestamp.
-    buf.writeLong(Long.MAX_VALUE);  // Maximum timestamp.
+    buf.writeLong(this.min_timestamp); // Minimum timestamp.
+    buf.writeLong(this.max_timestamp);  // Maximum timestamp.
     buf.writeByte(0x01);            // Boolean: "all time".
     // The "all time" boolean indicates whether or not this time range covers
     // all possible times.  Not sure why it's part of the serialized RPC...
