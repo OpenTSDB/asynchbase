@@ -1687,8 +1687,7 @@ public final class HBaseClient {
         final NotServingRegionException nsre =
           new NotServingRegionException("Region known to be unavailable",
                                         request);
-        final Deferred<Object> d = request.getDeferred()
-          .addBothDeferring(new RetryRpc());
+        final Deferred<Object> d = request.getDeferred();
         handleNSRE(request, region.name(), nsre);
         return d;
       }

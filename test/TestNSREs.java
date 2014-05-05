@@ -406,12 +406,7 @@ final class TestNSREs {
     // Check the return result is same for main
     assertSame(row, mainRpcDeferred.joinUninterruptibly());
     // Number of times this RPC is sent to regionServer
-    // this is 2 since attachment of RetryRpc() in the codePath
-    verify(regionclient, times(2)).sendRpc(mainGet);
-    // But the above is not the behaviour we expect to see as the RPC
-    // is sent twice even after the initial RPC succeeded
-    // This will also can lead to very erroneous behaviour when probe RPC
-    // got expired due to tooManyRetries exception
+    verify(regionclient, times(1)).sendRpc(mainGet);
   }
 
 
@@ -585,8 +580,7 @@ final class TestNSREs {
       // Check the number of times RPC is sent to region client this will be
       // equals to probe_expire_count for each RetryRpc during failure
       //  + 1 after the NSRE is cleared
-      //  + 1 for the initial RetryRpc attached as the region is in NSRE
-      verify(regionclient, times(probe_expire_count + 2)).sendRpc(dummyGet[i]);
+      verify(regionclient, times(1)).sendRpc(dummyGet[i]);
     }
   }
 
