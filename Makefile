@@ -89,6 +89,7 @@ asynchbase_SOURCES := \
 	src/RecoverableException.java	\
 	src/RegionClient.java	\
 	src/RegionInfo.java	\
+	src/RegionLocation.java	\
 	src/RegionOfflineException.java	\
 	src/RemoteException.java	\
 	src/RowLock.java	\
