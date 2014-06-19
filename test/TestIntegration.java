@@ -850,6 +850,7 @@ final public class TestIntegration {
     assertEq("v4", value_rows.get(0).get(1).value());
 
     final Scanner dependent_scanner = client.newScanner(table);
+    dependent_scanner.setMaxNumKeyValues(-1);
     dependent_scanner.setFilter(
         new DependentColumnFilter(Bytes.UTF8(family), Bytes.UTF8("dep")));
     final ArrayList<ArrayList<KeyValue>> dependent_rows =
@@ -860,6 +861,7 @@ final public class TestIntegration {
     assertEq("v4", dependent_rows.get(0).get(1).value());
 
     final Scanner dependent_value_scanner = client.newScanner(table);
+    dependent_value_scanner.setMaxNumKeyValues(-1);
     dependent_value_scanner.setFilter(
         new DependentColumnFilter(
             Bytes.UTF8(family),
