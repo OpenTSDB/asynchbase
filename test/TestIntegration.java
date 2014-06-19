@@ -57,16 +57,23 @@ import org.powermock.reflect.Whitebox;
 import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertNull;
 
 import com.stumbleupon.async.Callback;
 import com.stumbleupon.async.Deferred;
 import com.stumbleupon.async.DeferredGroupException;
 
 import org.hbase.async.AtomicIncrementRequest;
+import org.hbase.async.BinaryComparator;
+import org.hbase.async.BinaryPrefixComparator;
+import org.hbase.async.BitComparator;
 import org.hbase.async.Bytes;
 import org.hbase.async.ColumnPrefixFilter;
 import org.hbase.async.ColumnRangeFilter;
+import org.hbase.async.CompareFilter.CompareOp;
 import org.hbase.async.DeleteRequest;
+import org.hbase.async.DependentColumnFilter;
+import org.hbase.async.FamilyFilter;
 import org.hbase.async.FilterList;
 import org.hbase.async.GetRequest;
 import org.hbase.async.HBaseClient;
@@ -74,9 +81,15 @@ import org.hbase.async.KeyRegexpFilter;
 import org.hbase.async.KeyValue;
 import org.hbase.async.NoSuchColumnFamilyException;
 import org.hbase.async.PutRequest;
+import org.hbase.async.QualifierFilter;
+import org.hbase.async.RegexStringComparator;
+import org.hbase.async.RowFilter;
 import org.hbase.async.ScanFilter;
 import org.hbase.async.Scanner;
+import org.hbase.async.SubstringComparator;
 import org.hbase.async.TableNotFoundException;
+import org.hbase.async.TimestampsFilter;
+import org.hbase.async.ValueFilter;
 
 import org.hbase.async.test.Common;
 
@@ -695,6 +708,174 @@ final public class TestIntegration {
     assertEq("v3", kvs.get(0).value());
   }
 
+  @Test
+  public void filterComparators() throws Exception {
+    client.setFlushInterval(FAST_FLUSH);
+    final PutRequest put1 = new PutRequest(table, "fc1", family, "a", "v1");
+    final PutRequest put2 = new PutRequest(table, "fc2", family, "a", "v2");
+    final PutRequest put3 = new PutRequest(table, "fc3", family, "a", "v3");
+    Deferred.group(client.put(put1), client.put(put2), client.put(put3)).join();
+
+    final Scanner binary_scanner = client.newScanner(table);
+    binary_scanner.setStartKey("fc1");
+    binary_scanner.setStopKey("fc4");
+    binary_scanner.setFilter(
+        new RowFilter(CompareOp.LESS, new BinaryComparator(Bytes.UTF8("fc2"))));
+    final ArrayList<ArrayList<KeyValue>> binary_rows =
+        binary_scanner.nextRows().join();
+    assertSizeIs(1, binary_rows);
+    assertSizeIs(1, binary_rows.get(0));
+    assertEq("v1", binary_rows.get(0).get(0).value());
+
+    final Scanner prefix_scanner = client.newScanner(table);
+    prefix_scanner.setStartKey("fc1");
+    prefix_scanner.setStopKey("fc4");
+    prefix_scanner.setFilter(
+        new RowFilter(CompareOp.GREATER_OR_EQUAL,
+            new BinaryPrefixComparator(Bytes.UTF8("fc2"))));
+    final ArrayList<ArrayList<KeyValue>> prefix_rows =
+        prefix_scanner.nextRows().join();
+    assertSizeIs(2, prefix_rows);
+    assertSizeIs(1, prefix_rows.get(0));
+    assertEq("v2", prefix_rows.get(0).get(0).value());
+    assertSizeIs(1, prefix_rows.get(1));
+    assertEq("v3", prefix_rows.get(1).get(0).value());
+
+    final Scanner bit_scanner = client.newScanner(table);
+    bit_scanner.setStartKey("fc1");
+    bit_scanner.setStopKey("fc4");
+    bit_scanner.setFilter(
+        new RowFilter(CompareOp.EQUAL,
+            new BitComparator(Bytes.UTF8("fc2"), BitComparator.BitwiseOp.XOR)));
+    final ArrayList<ArrayList<KeyValue>> bit_rows =
+        bit_scanner.nextRows().join();
+    assertSizeIs(2, bit_rows);
+    assertSizeIs(1, bit_rows.get(0));
+    assertEq("v1", bit_rows.get(0).get(0).value());
+    assertSizeIs(1, bit_rows.get(1));
+    assertEq("v3", bit_rows.get(1).get(0).value());
+
+    final Scanner regex_scanner = client.newScanner(table);
+    regex_scanner.setStartKey("fc1");
+    regex_scanner.setStopKey("fc4");
+    regex_scanner.setFilter(
+        new RowFilter(CompareOp.EQUAL, new RegexStringComparator("fc2")));
+    final ArrayList<ArrayList<KeyValue>> regex_rows =
+        regex_scanner.nextRows().join();
+    assertSizeIs(1, regex_rows);
+    assertSizeIs(1, regex_rows.get(0));
+    assertEq("v2", regex_rows.get(0).get(0).value());
+
+    final Scanner substring_scanner = client.newScanner(table);
+    substring_scanner.setStartKey("fc1");
+    substring_scanner.setStopKey("fc4");
+    substring_scanner.setFilter(
+        new RowFilter(CompareOp.EQUAL, new SubstringComparator("2")));
+    final ArrayList<ArrayList<KeyValue>> substring_rows =
+        substring_scanner.nextRows().join();
+    assertSizeIs(1, substring_rows);
+    assertSizeIs(1, substring_rows.get(0));
+    assertEq("v2", substring_rows.get(0).get(0).value());
+  }
+
+  @Test
+  public void compareFilters() throws Exception {
+    client.setFlushInterval(FAST_FLUSH);
+    final PutRequest put1 = new PutRequest(table, "cf1", family, "a", "v1");
+    final PutRequest put2 = new PutRequest(table, "cf2", family, "b", "v2");
+    final PutRequest put3 = new PutRequest(
+        Bytes.UTF8(table),
+        Bytes.UTF8("cf3"),
+        Bytes.UTF8(family),
+        Bytes.UTF8("c"),
+        Bytes.UTF8("v3"),
+        42);
+    final PutRequest put4 = new PutRequest(
+        Bytes.UTF8(table),
+        Bytes.UTF8("cf3"),
+        Bytes.UTF8(family),
+        Bytes.UTF8("dep"),
+        Bytes.UTF8("v4"),
+        42);
+    Deferred.group(
+        Deferred.group(client.put(put1), client.put(put2)),
+        Deferred.group(client.put(put3), client.put(put4))).join();
+
+    final Scanner row_scanner = client.newScanner(table);
+    row_scanner.setStartKey("cf1");
+    row_scanner.setStopKey("cf4");
+    row_scanner.setFilter(
+        new RowFilter(CompareOp.NOT_EQUAL, new BinaryComparator(Bytes.UTF8("cf2"))));
+    final ArrayList<ArrayList<KeyValue>> row_rows =
+        row_scanner.nextRows().join();
+    assertSizeIs(2, row_rows);
+    assertSizeIs(1, row_rows.get(0));
+    assertEq("v1", row_rows.get(0).get(0).value());
+    assertSizeIs(2, row_rows.get(1));
+    assertEq("v3", row_rows.get(1).get(0).value());
+    assertEq("v4", row_rows.get(1).get(1).value());
+
+    final Scanner family_scanner = client.newScanner(table);
+    family_scanner.setFilter(
+        new FamilyFilter(CompareOp.LESS_OR_EQUAL,
+            new BinaryComparator(Bytes.UTF8("aSomeOtherFamily"))));
+    final ArrayList<ArrayList<KeyValue>> family_rows =
+        family_scanner.nextRows().join();
+    assertNull(family_rows);
+
+    final Scanner qualifier_scanner = client.newScanner(table);
+    qualifier_scanner.setStartKey("cf1");
+    qualifier_scanner.setStopKey("cf4");
+    qualifier_scanner.setFilter(
+        new QualifierFilter(CompareOp.GREATER,
+            new BinaryComparator(Bytes.UTF8("b"))));
+    final ArrayList<ArrayList<KeyValue>> qualifier_rows =
+        qualifier_scanner.nextRows().join();
+    assertSizeIs(1, qualifier_rows);
+    assertSizeIs(2, qualifier_rows.get(0));
+    assertEq("v3", qualifier_rows.get(0).get(0).value());
+    assertEq("v4", qualifier_rows.get(0).get(1).value());
+
+    final Scanner value_scanner = client.newScanner(table);
+    value_scanner.setStartKey("cf1");
+    value_scanner.setStopKey("cf4");
+    value_scanner.setFilter(
+        new ValueFilter(CompareOp.GREATER_OR_EQUAL,
+            new BinaryComparator(Bytes.UTF8("v3"))));
+    final ArrayList<ArrayList<KeyValue>> value_rows =
+        value_scanner.nextRows().join();
+    assertSizeIs(1, value_rows);
+    assertSizeIs(2, value_rows.get(0));
+    assertEq("v3", value_rows.get(0).get(0).value());
+    assertEq("v4", value_rows.get(0).get(1).value());
+
+    final Scanner dependent_scanner = client.newScanner(table);
+    dependent_scanner.setMaxNumKeyValues(-1);
+    dependent_scanner.setFilter(
+        new DependentColumnFilter(Bytes.UTF8(family), Bytes.UTF8("dep")));
+    final ArrayList<ArrayList<KeyValue>> dependent_rows =
+        dependent_scanner.nextRows().join();
+    assertSizeIs(1, dependent_rows);
+    assertSizeIs(2, dependent_rows.get(0));
+    assertEq("v3", dependent_rows.get(0).get(0).value());
+    assertEq("v4", dependent_rows.get(0).get(1).value());
+
+    final Scanner dependent_value_scanner = client.newScanner(table);
+    dependent_value_scanner.setMaxNumKeyValues(-1);
+    dependent_value_scanner.setFilter(
+        new DependentColumnFilter(
+            Bytes.UTF8(family),
+            Bytes.UTF8("dep"),
+            true,
+            CompareOp.EQUAL,
+            new BinaryComparator(Bytes.UTF8("v4"))));
+    final ArrayList<ArrayList<KeyValue>> dependent_value_rows =
+        dependent_value_scanner.nextRows().join();
+    assertSizeIs(1, dependent_value_rows);
+    assertSizeIs(1, dependent_value_rows.get(0));
+    assertEq("v3", dependent_value_rows.get(0).get(0).value());
+  }
+
   /** Simple column filter list tests.  */
   @Test
   public void filterList() throws Exception {
@@ -734,6 +915,33 @@ final public class TestIntegration {
     kvs = rows.get(1);
     assertSizeIs(1, kvs);   // KV from "fl2":
     assertEq("v4", kvs.get(0).value());
+  }
+
+  /** Simple timestamps filter list tests.  */
+  @Test
+  public void timestampsFilter() throws Exception {
+    client.setFlushInterval(FAST_FLUSH);
+    final byte[] tableBytes = Bytes.UTF8(table);
+    final byte[] familyBytes = Bytes.UTF8(family);
+    final byte[] qualifier = Bytes.UTF8("q");
+    final PutRequest put1 =
+      new PutRequest(tableBytes, Bytes.UTF8("tf1"), familyBytes, qualifier, Bytes.UTF8("v1"), 1L);
+    final PutRequest put2 =
+      new PutRequest(tableBytes, Bytes.UTF8("tf2"), familyBytes, qualifier, Bytes.UTF8("v2"), 2L);
+    final PutRequest put3 =
+      new PutRequest(tableBytes, Bytes.UTF8("tf3"), familyBytes, qualifier, Bytes.UTF8("v3"), 3L);
+    Deferred.group(client.put(put1), client.put(put2), client.put(put3)).join();
+    final Scanner scanner = client.newScanner(table);
+    scanner.setFamily(family);
+    scanner.setStartKey(Bytes.UTF8("tf"));
+    scanner.setStopKey(Bytes.UTF8("tf4"));
+    scanner.setFilter(new TimestampsFilter(1L, 3L));
+    final ArrayList<ArrayList<KeyValue>> rows = scanner.nextRows().join();
+    assertSizeIs(2, rows);
+    assertSizeIs(1, rows.get(0));
+    assertEq("v1", rows.get(0).get(0).value());
+    assertSizeIs(1, rows.get(1));
+    assertEq("v3", rows.get(1).get(0).value());
   }
 
   @Test

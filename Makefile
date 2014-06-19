@@ -61,6 +61,9 @@ BUILT_SOURCES := $(asynchbase_PROTOS:protobuf/%.proto=$(PROTOBUF_GEN_DIR)/%PB.ja
 asynchbase_SOURCES := \
 	src/AtomicIncrementRequest.java	\
 	src/BatchableRpc.java	\
+	src/BinaryComparator.java	\
+	src/BinaryPrefixComparator.java	\
+	src/BitComparator.java	\
 	src/BrokenMetaException.java	\
 	src/BufferedIncrement.java	\
 	src/Bytes.java	\
@@ -68,9 +71,13 @@ asynchbase_SOURCES := \
 	src/ColumnPrefixFilter.java	\
 	src/ColumnRangeFilter.java	\
 	src/CompareAndSetRequest.java	\
+	src/CompareFilter.java	\
 	src/ConnectionResetException.java	\
 	src/Counter.java	\
 	src/DeleteRequest.java	\
+	src/DependentColumnFilter.java	\
+	src/FamilyFilter.java	\
+	src/FilterComparator.java	\
 	src/FilterList.java		\
 	src/GetRequest.java	\
 	src/HBaseClient.java	\
@@ -86,19 +93,25 @@ asynchbase_SOURCES := \
 	src/NotServingRegionException.java	\
 	src/PleaseThrottleException.java	\
 	src/PutRequest.java	\
+	src/QualifierFilter.java	\
 	src/RecoverableException.java	\
+	src/RegexStringComparator.java	\
 	src/RegionClient.java	\
 	src/RegionInfo.java	\
 	src/RegionOfflineException.java	\
 	src/RemoteException.java	\
+	src/RowFilter.java	\
 	src/RowLock.java	\
 	src/RowLockRequest.java	\
 	src/ScanFilter.java	\
 	src/Scanner.java	\
 	src/SingletonList.java	\
+	src/SubstringComparator.java	\
 	src/TableNotFoundException.java	\
+	src/TimestampsFilter.java	\
 	src/UnknownRowLockException.java	\
 	src/UnknownScannerException.java	\
+	src/ValueFilter.java	\
 	src/VersionMismatchException.java	\
 	src/jsr166e/LongAdder.java	\
 	src/jsr166e/Striped64.java	\
