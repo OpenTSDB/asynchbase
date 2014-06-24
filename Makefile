@@ -82,6 +82,7 @@ asynchbase_SOURCES := \
 	src/FamilyFilter.java	\
 	src/FilterComparator.java	\
 	src/FilterList.java		\
+	src/FirstKeyOnlyFilter.java	\
 	src/FuzzyRowFilter.java \
 	src/GetRequest.java	\
 	src/HBaseClient.java	\
