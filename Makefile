@@ -72,6 +72,7 @@ asynchbase_SOURCES := \
 	src/Counter.java	\
 	src/DeleteRequest.java	\
 	src/FilterList.java		\
+	src/FirstKeyOnlyFilter.java	\
 	src/GetRequest.java	\
 	src/HBaseClient.java	\
 	src/HBaseException.java	\

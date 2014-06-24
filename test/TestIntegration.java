@@ -68,6 +68,7 @@ import org.hbase.async.ColumnPrefixFilter;
 import org.hbase.async.ColumnRangeFilter;
 import org.hbase.async.DeleteRequest;
 import org.hbase.async.FilterList;
+import org.hbase.async.FirstKeyOnlyFilter;
 import org.hbase.async.GetRequest;
 import org.hbase.async.HBaseClient;
 import org.hbase.async.KeyRegexpFilter;
@@ -734,6 +735,38 @@ final public class TestIntegration {
     kvs = rows.get(1);
     assertSizeIs(1, kvs);   // KV from "fl2":
     assertEq("v4", kvs.get(0).value());
+  }
+  
+  /** Simple first key only filter tests.  */
+  @Test
+  public void firstKeyOnlyFilter() throws Exception {
+    client.setFlushInterval(FAST_FLUSH);
+    final PutRequest put1 = new PutRequest(table, "row1", family, "q1", "v1");
+    final PutRequest put2 = new PutRequest(table, "row1", family, "q1", "v2");
+    final PutRequest put3 = new PutRequest(table, "row2", family, "q1", "v3");
+    final PutRequest put4 = new PutRequest(table, "row3", family, "q1", "v4");
+    // Add some extra values to rows 1 and 3
+    final PutRequest put5 = new PutRequest(table, "row1", family, "q1", "v5");
+    final PutRequest put6 = new PutRequest(table, "row3", family, "q1", "v6");
+    Deferred.group(Deferred.group(client.put(put1), client.put(put2)),
+        Deferred.group(client.put(put3), client.put(put4))).join();
+    Deferred.group(client.put(put5), client.put(put6)).join();
+    final Scanner scanner = client.newScanner(table);
+    scanner.setFamily(family);
+    scanner.setStartKey("row1");
+    scanner.setStopKey("row4");
+    scanner.setFilter(new FirstKeyOnlyFilter());
+    final ArrayList<ArrayList<KeyValue>> rows = scanner.nextRows().join();
+    assertSizeIs(3, rows);  // One KV from row "row1", one from "row2", and one from "row3".
+    ArrayList<KeyValue> kvs = rows.get(0);
+    assertSizeIs(1, kvs);
+    assertEq("v5", kvs.get(0).value());
+    kvs = rows.get(1);
+    assertSizeIs(1, kvs);
+    assertEq("v3", kvs.get(0).value());
+    kvs = rows.get(2);
+    assertSizeIs(1, kvs);
+    assertEq("v6", kvs.get(0).value());
   }
 
   @Test
