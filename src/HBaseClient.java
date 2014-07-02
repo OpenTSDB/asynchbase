@@ -223,6 +223,8 @@ public final class HBaseClient {
   private static final RegionInfo META_REGION =
     new RegionInfo(HBASE96_META, META_REGION_NAME, EMPTY_ARRAY);
 
+  public static final int MAX_RETRY_ATTEMPT = 10;
+
   /**
    * In HBase 0.95 and up, this magic number is found in a couple places.
    * It's used in the znode that points to the .META. region, to
@@ -435,6 +437,9 @@ public final class HBaseClient {
   /** Number calls to {@link #put}.  */
   private final Counter num_puts = new Counter();
 
+  /** Number calls to {@link #put}.  */
+  private final Counter num_appends = new Counter();
+
   /** Number calls to {@link #lockRow}.  */
   private final Counter num_row_locks = new Counter();
 
@@ -549,6 +554,7 @@ public final class HBaseClient {
       num_scanners_opened.get(),
       num_scans.get(),
       num_puts.get(),
+      num_appends.get(),
       num_row_locks.get(),
       num_deletes.get(),
       num_atomic_increments.get(),
@@ -1343,6 +1349,25 @@ public final class HBaseClient {
     return sendRpcToRegion(request);
   }
 
+
+  /**
+   * Stores data in HBase.
+   * <p>
+   * Note that this provides no guarantee as to the order in which subsequent
+   * {@code append} requests are going to be applied to the backend.  If you need
+   * ordering, you must enforce it manually yourself by starting the next
+   * {@code append} once the {@link Deferred} of this one completes successfully.
+   * @param request The {@code append} request.
+   * @return A deferred object that indicates the completion of the request.
+   * The {@link Object} has not special meaning and can be {@code null}
+   * (think of it as {@code Deferred<Void>}).  But you probably want to attach
+   * at least an errback to this {@code Deferred} to handle failures.
+   */
+  public Deferred<Object> append(final AppendRequest request) {
+    num_appends.increment();
+    return sendRpcToRegion(request);
+  }
+
   /**
    * Atomic Compare-And-Set (CAS) on a single cell.
    * <p>
@@ -1656,7 +1681,16 @@ public final class HBaseClient {
     request.attempt++;
     final byte[] table = request.table;
     final byte[] key = request.key;
-    final RegionInfo region = getRegion(table, key);
+    final RegionInfo region;
+
+    if (request.isProbe()) {
+      //it is a probe, to find a region.
+      //so don't use the cache, it might have stale data
+      region = null;
+    }
+    else {
+      region = getRegion(table, key);
+    }
 
     final class RetryRpc implements Callback<Deferred<Object>, Object> {
       public Deferred<Object> call(final Object arg) {
@@ -1771,7 +1805,7 @@ public final class HBaseClient {
    * already.
    */
   static boolean cannotRetryRequest(final HBaseRpc rpc) {
-    return rpc.attempt > 10;  // XXX Don't hardcode.
+    return rpc.attempt > MAX_RETRY_ATTEMPT;  // XXX Don't hardcode.
   }
 
   /**
@@ -2317,6 +2351,7 @@ public final class HBaseClient {
       // the table.  So instead use "\0" as the key.
       final byte[] testkey = rpc.key.length != 0 ? rpc.key : ZERO_ARRAY;
       exists_rpc = GetRequest.exists(rpc.table, testkey);
+      exists_rpc.setProbe(true);
       newlist.add(exists_rpc);
       if (can_retry_rpc) {
         newlist.add(rpc);
@@ -2344,6 +2379,7 @@ public final class HBaseClient {
             got_nsre.putIfAbsent(region_name, nsred_rpcs);
           if (added == null) {  // We've just put `nsred_rpcs'.
             exists_rpc = GetRequest.exists(rpc.table, rpc.key);
+            exists_rpc.setProbe(true);
             nsred_rpcs.add(exists_rpc);  // We hold the lock on nsred_rpcs
             if (can_retry_rpc) {
               nsred_rpcs.add(rpc);         // so we can safely add those 2.
@@ -2364,6 +2400,7 @@ public final class HBaseClient {
                             + " an empty list of NSRE'd RPCs (" + added
                             + ") for " + Bytes.pretty(region_name));
                   exists_rpc = GetRequest.exists(rpc.table, rpc.key);
+                  exists_rpc.setProbe(true);
                   added.add(exists_rpc);
                 } else {
                   exists_rpc = added.get(0);

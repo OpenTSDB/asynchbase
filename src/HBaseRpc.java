@@ -427,6 +427,19 @@ public abstract class HBaseRpc {
   }
 
   /**
+   * Set to true for probes use to rediscover regions
+   */
+  boolean probe = false;
+
+  public boolean isProbe() {
+    return probe;
+  }
+
+  public void setProbe(boolean probe) {
+    this.probe = probe;
+  }
+
+  /**
    * Package private constructor for RPCs that aren't for any region.
    */
   HBaseRpc() {
