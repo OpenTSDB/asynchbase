@@ -1312,8 +1312,13 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
         decoded = deserialize(buf, rpc);
       }
     } catch (RuntimeException e) {
-      LOG.error("Uncaught error during de-serialization of " + rpc
-                + ", rpcid=" + rpcid);
+      final String msg = "Uncaught error during de-serialization of " + rpc
+        + ", rpcid=" + rpcid;
+      LOG.error(msg);
+      if (!(e instanceof HBaseException)) {
+        e = new NonRecoverableException(msg, e);
+      }
+      rpc.callback(e);
       throw e;
     }
 
