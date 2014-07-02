@@ -59,6 +59,7 @@ PROTOBUF_GEN_DIR = $(top_builddir)/src/org/hbase/async/generated
 BUILT_SOURCES := $(asynchbase_PROTOS:protobuf/%.proto=$(PROTOBUF_GEN_DIR)/%PB.java)
 
 asynchbase_SOURCES := \
+	src/AppendRequest.java	\
 	src/AtomicIncrementRequest.java	\
 	src/BatchableRpc.java	\
 	src/BrokenMetaException.java	\

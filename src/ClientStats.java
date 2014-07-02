@@ -52,6 +52,7 @@ public final class ClientStats {
   private final long num_scanners_opened;
   private final long num_scans;
   private final long num_puts;
+  private final long num_appends;
   private final long num_row_locks;
   private final long num_deletes;
   private final long num_atomic_increments;
@@ -70,6 +71,7 @@ public final class ClientStats {
               final long num_scanners_opened,
               final long num_scans,
               final long num_puts,
+              final long num_appends,
               final long num_row_locks,
               final long num_deletes,
               final long num_atomic_increments,
@@ -87,6 +89,7 @@ public final class ClientStats {
     this.num_scanners_opened = num_scanners_opened;
     this.num_scans = num_scans;
     this.num_puts = num_puts;
+    this.num_appends = num_appends;
     this.num_row_locks = num_row_locks;
     this.num_deletes = num_deletes;
     this.num_atomic_increments = num_atomic_increments;
@@ -231,6 +234,17 @@ public final class ClientStats {
    */
   public long puts() {
     return num_puts;
+  }
+
+  /**
+   * Number calls to {@link HBaseClient#append}.
+   * <p>
+   * Note that this doesn't necessarily reflect the number of RPCs sent to
+   * HBase due to batching (see {@link HBaseClient#setFlushInterval}).
+   * @see #numBatchedRpcSent
+   */
+  public long appends() {
+    return num_appends;
   }
 
   /** Number calls to {@link HBaseClient#lockRow}.  */
