@@ -80,6 +80,7 @@ asynchbase_SOURCES := \
 	src/HBaseRpc.java	\
 	src/HasFailedRpcException.java	\
 	src/InvalidResponseException.java	\
+	src/KeyOnlyFilter.java	\
 	src/KeyRegexpFilter.java	\
 	src/KeyValue.java	\
 	src/MultiAction.java	\

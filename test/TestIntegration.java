@@ -39,6 +39,7 @@ import java.io.OutputStream;
 import java.util.ArrayList;
 import java.util.Collection;
 
+import org.hbase.async.KeyOnlyFilter;
 import org.jboss.netty.logging.InternalLoggerFactory;
 import org.jboss.netty.logging.Slf4JLoggerFactory;
 
@@ -836,6 +837,41 @@ final public class TestIntegration {
     kvs = rows.get(2);
     assertSizeIs(1, kvs);
     assertEq("v6", kvs.get(0).value());
+  }
+
+  /** Simple key only filter tests.  */
+  @Test
+  public void keyOnlyFilter() throws Exception {
+    client.setFlushInterval(FAST_FLUSH);
+    final PutRequest put1 = new PutRequest(table, "row1", family, "q1", "v1");
+    final PutRequest put2 = new PutRequest(table, "row1", family, "q2", "v2");
+    final PutRequest put3 = new PutRequest(table, "row2", family, "q1", "v3");
+    final PutRequest put4 = new PutRequest(table, "row3", family, "q1", "v4");
+    Deferred.group(Deferred.group(client.put(put1), client.put(put2)),
+        Deferred.group(client.put(put3), client.put(put4))).join();
+    final Scanner scanner = client.newScanner(table);
+    scanner.setFamily(family);
+    scanner.setStartKey("row1");
+    scanner.setStopKey("row4");
+    scanner.setFilter(new KeyOnlyFilter());
+    final ArrayList<ArrayList<KeyValue>> rows = scanner.nextRows().join();
+    assertSizeIs(3, rows);  // Should have all 3 rows
+    ArrayList<KeyValue> kvs = rows.get(0); // row1
+    assertSizeIs(2, kvs);
+    assertEq("row1", kvs.get(0).key());
+    assertEq("", kvs.get(0).value());
+    assertEq("row1", kvs.get(1).key());
+    assertEq("", kvs.get(1).value());
+
+    kvs = rows.get(1); // row2
+    assertSizeIs(1, kvs);
+    assertEq("row2", kvs.get(0).key());
+    assertEq("", kvs.get(0).value());
+
+    kvs = rows.get(2); // row3
+    assertSizeIs(1, kvs);
+    assertEq("row3", kvs.get(0).key());
+    assertEq("", kvs.get(0).value());
   }
 
   @Test
