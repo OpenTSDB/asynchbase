@@ -345,6 +345,34 @@ final public class TestIntegration {
     }
   }
 
+  /** Scan which closes before reaching end of results. */
+  @Test
+  public void scanCloseEarly() throws Exception {
+    client.setFlushInterval(FAST_FLUSH);
+    final PutRequest put1 = new PutRequest(table, "s1", family, "q", "v1");
+    final PutRequest put2 = new PutRequest(table, "s2", family, "q", "v2");
+    Deferred.group(client.put(put1), client.put(put2)).join();
+    // Scan for the first row twice.
+    for (int i = 0; i < 2; i++) {
+      LOG.info("------------ iteration #" + i);
+      final Scanner scanner = client.newScanner(table);
+      scanner.setStartKey("s0");
+      scanner.setStopKey("s3");
+      try {
+        final ArrayList<ArrayList<KeyValue>> rows = scanner.nextRows(1).join();
+        assertSizeIs(1, rows);
+        final ArrayList<KeyValue> kvs = rows.get(0);
+        final KeyValue kv = kvs.get(0);
+        assertSizeIs(1, kvs);
+        assertEq("s1", kv.key());
+        assertEq("q", kv.qualifier());
+        assertEq("v1", kv.value());
+      } finally {
+        scanner.close().join();
+      }
+    }
+  }
+
   /** Scan with multiple qualifiers. */
   @Test
   public void scanWithQualifiers() throws Exception {
