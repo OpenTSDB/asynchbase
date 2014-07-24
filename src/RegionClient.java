@@ -27,7 +27,6 @@
 package org.hbase.async;
 
 import java.io.IOException;
-import java.net.SocketAddress;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
@@ -190,6 +189,12 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
    */
   private final AtomicInteger rpcid = new AtomicInteger(-1);
 
+  private boolean useSecure = false;
+
+  private SecureRpcHelper secureRpcHelper;
+  private final String host;
+
+
   private final TimerTask flush_timer = new TimerTask() {
     public void run(final Timeout timeout) {
       periodicFlush();
@@ -212,8 +217,9 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
    * Constructor.
    * @param hbase_client The HBase client this instance belongs to.
    */
-  public RegionClient(final HBaseClient hbase_client) {
+  public RegionClient(final HBaseClient hbase_client, String host) {
     this.hbase_client = hbase_client;
+    this.host = host;
   }
 
   /**
@@ -559,10 +565,10 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
 
   }
 
-  private void becomeReady(final Channel chan, final byte server_version) {
-    this.server_version = server_version;
+  void becomeReady(final Channel chan, final byte server_version) {
     // The following line will make this client no longer queue incoming
     // RPCs, as we're now ready to communicate with the server.
+    this.server_version = server_version;
     this.chan = chan;  // Volatile write.
     sendQueuedRpcs();
   }
@@ -967,17 +973,24 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
                                final ChannelStateEvent e) {
     final Channel chan = e.getChannel();
     final ChannelBuffer header;
-    if (!hbase_client.has_root) {
-      header = header095();
-      Channels.write(chan, header);
-      becomeReady(chan, SERVER_VERSION_095_OR_ABOVE);
-      return;
-    } else if (System.getProperty("org.hbase.async.cdh3b3") != null) {
-      header = headerCDH3b3();
+
+    if(System.getProperty("org.hbase.async.security.94") != null) {
+      useSecure = true;
+      secureRpcHelper = new SecureRpcHelper94(this, host);
+      secureRpcHelper.sendHello(chan);
     } else {
-      header = header090();
+      if (!hbase_client.has_root) {
+        useSecure = true;
+        secureRpcHelper = new SecureRpcHelper96(this, host);
+        secureRpcHelper.sendHello(chan);
+        return;
+      } else if (System.getProperty("org.hbase.async.cdh3b3") != null) {
+        header = headerCDH3b3();
+      } else {
+        header = header090();
+      }
+      helloRpc(chan, header);
     }
-    helloRpc(chan, header);
   }
 
   /**
@@ -1232,6 +1245,9 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
         oldrpc.callback(new NonRecoverableException(wtf));
       }
     }
+    if(useSecure) {
+      payload = secureRpcHelper.wrap(payload);
+    }
     return payload;
   }
 
@@ -1251,13 +1267,22 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
   @Override
   protected Object decode(final ChannelHandlerContext ctx,
                           final Channel chan,
-                          final ChannelBuffer buf,
+                          final ChannelBuffer channelBuffer,
                           final VoidEnum unused) {
+    ChannelBuffer buf = channelBuffer;
     final long start = System.nanoTime();
     final int rdx = buf.readerIndex();
     LOG.debug("------------------>> ENTERING DECODE >>------------------");
     final int rpcid;
     final RPCPB.ResponseHeader header;
+
+    if(useSecure) {
+      buf = secureRpcHelper.handleResponse(buf, chan);
+      if(buf == null) {
+        return null;
+      }
+    }
+
     if (server_version >= SERVER_VERSION_095_OR_ABOVE) {
       final int size = buf.readInt();
       ensureReadable(buf, size);
@@ -1378,7 +1403,13 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
     //   0x00  Old style success (prior 0.92).
     //   0x01  RPC failed with an exception.
     //   0x02  New style success (0.92 and above).
-    final byte flags = buf.readByte();
+    final int flags;
+    if (useSecure) {
+      //0.94-security uses an int for the flag section
+      flags = buf.readInt();
+    } else {
+      flags = buf.readByte();
+    }
     if ((flags & HBaseRpc.RPC_FRAMED) != 0) {
       // Total size of the response, including the RPC ID (4 bytes) and flags
       // (1 byte) that we've already read, including the 4 bytes used by
@@ -1706,7 +1737,7 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
   private final static byte SIMPLE_AUTH = (byte) 0x50;
 
   /** Initial part of the header for 0.95 and up.  */
-  private final static byte[] HBASE = new byte[] { 'H', 'B', 'a', 's',
+  final static byte[] HBASE = new byte[] { 'H', 'B', 'a', 's',
                                                    0,     // RPC version.
                                                    SIMPLE_AUTH,
                                                    };
@@ -1720,34 +1751,6 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
     // "hrpc" followed by the version.
     // See HBaseServer#HEADER and HBaseServer#CURRENT_VERSION.
     header.writeBytes(hrpc);  // for 0.94 and earlier: 4 + 1. For 0.95+: 4 + 2
-    return header;
-  }
-
-  /** Hello header for HBase 0.95 and later.  */
-  private ChannelBuffer header095() {
-    final RPCPB.UserInformation user = RPCPB.UserInformation.newBuilder()
-      .setEffectiveUser(System.getProperty("user.name", "asynchbase"))
-      .build();
-    final RPCPB.ConnectionHeader pb = RPCPB.ConnectionHeader.newBuilder()
-      .setUserInfo(user)
-      .setServiceName("ClientService")
-      .setCellBlockCodecClass("org.apache.hadoop.hbase.codec.KeyValueCodec")
-      .build();
-    final int pblen = pb.getSerializedSize();
-    final byte[] buf = new byte[HBASE.length + 4 + pblen];
-    final ChannelBuffer header = commonHeader(buf, HBASE);
-    header.writeInt(pblen);  // 4 bytes
-    try {
-      final CodedOutputStream output =
-        CodedOutputStream.newInstance(buf, HBASE.length + 4, pblen);
-      pb.writeTo(output);
-      output.checkNoSpaceLeft();
-    } catch (IOException e) {
-      throw new RuntimeException("Should never happen", e);
-    }
-    // We wrote to the underlying buffer but Netty didn't see the writes,
-    // so move the write index forward.
-    header.writerIndex(buf.length);
     return header;
   }
 
@@ -1832,7 +1835,17 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
   private void helloRpc(final Channel chan, final ChannelBuffer header) {
     final GetProtocolVersionRequest rpc = new GetProtocolVersionRequest();
     rpc.getDeferred().addBoth(new ProtocolVersionCB(chan));
+
     Channels.write(chan, ChannelBuffers.wrappedBuffer(header, encode(rpc)));
   }
+
+  void sendVersion(final Channel chan) {
+    final GetProtocolVersionRequest rpc = new GetProtocolVersionRequest();
+    rpc.getDeferred().addBoth(new ProtocolVersionCB(chan));
+
+    Channels.write(chan, encode(rpc));
+  }
+
+
 
 }

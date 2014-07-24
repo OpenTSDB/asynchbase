@@ -65,6 +65,7 @@ asynchbase_SOURCES := \
 	src/BufferedIncrement.java	\
 	src/Bytes.java	\
 	src/ClientStats.java	\
+	src/ColumnPaginationFilter.java	\
 	src/ColumnPrefixFilter.java	\
 	src/ColumnRangeFilter.java	\
 	src/CompareAndSetRequest.java	\
@@ -72,12 +73,14 @@ asynchbase_SOURCES := \
 	src/Counter.java	\
 	src/DeleteRequest.java	\
 	src/FilterList.java		\
+	src/FirstKeyOnlyFilter.java	\
 	src/GetRequest.java	\
 	src/HBaseClient.java	\
 	src/HBaseException.java	\
 	src/HBaseRpc.java	\
 	src/HasFailedRpcException.java	\
 	src/InvalidResponseException.java	\
+	src/KeyOnlyFilter.java	\
 	src/KeyRegexpFilter.java	\
 	src/KeyValue.java	\
 	src/MultiAction.java	\
@@ -100,6 +103,11 @@ asynchbase_SOURCES := \
 	src/UnknownRowLockException.java	\
 	src/UnknownScannerException.java	\
 	src/VersionMismatchException.java	\
+	src/SecureRpcHelper.java	\
+	src/KerberosClientAuthProvider.java	\
+	src/SimpleClientAuthProvider.java	\
+	src/ClientAuthProvider.java	\
+	src/Login.java	\
 	src/jsr166e/LongAdder.java	\
 	src/jsr166e/Striped64.java	\
 
