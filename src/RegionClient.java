@@ -524,6 +524,13 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
       this.chan = chan;
     }
 
+    /**
+     * Handles the response of {@link #helloRpc}.
+     * @return null when it re-tried for a version mismatch. A version
+     * object if it was successful.
+     * @throws an exception If there was an error that we cannot retry. It
+     * includes ServerNotRunningYetExceptio, and NotServingRegionException.
+     */
     public Long call(final Object response) throws Exception {
       if (response instanceof VersionMismatchException) {
         if (server_version == SERVER_VERSION_UNKNWON) {
@@ -1077,7 +1084,7 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
   public void handleUpstream(final ChannelHandlerContext ctx,
                              final ChannelEvent e) throws Exception {
     if (LOG.isDebugEnabled()) {
-      LOG.debug(e.toString());
+      LOG.debug("handleUpstream {}", e);
     }
     super.handleUpstream(ctx, e);
   }
@@ -1834,13 +1841,24 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
    * This message is immediately followed by a {@link GetProtocolVersionRequest}
    * so we can learn what version the server is running to be able to talk to
    * it the way it expects.
-   * @param chan The channel connected to the server we need to handshake.
+   * @param new_chan The channel connected to the server we need to handshake.
    * @param header The header to use for the handshake.
    */
-  private void helloRpc(final Channel chan, final ChannelBuffer header) {
+  private void helloRpc(final Channel new_chan, final ChannelBuffer header) {
+    LOG.debug("helloRpc for the channel: {}", new_chan);
+    Callback<Object, Exception> errorback = new Callback<Object, Exception>() {
+
+      @Override
+      public Object call(final Exception e) throws Exception {
+        LOG.info("helloRpc failed. Closing the channel:" + new_chan, e);
+        Channels.close(new_chan);
+        return e;
+      }
+    };
     final GetProtocolVersionRequest rpc = new GetProtocolVersionRequest();
-    rpc.getDeferred().addBoth(new ProtocolVersionCB(chan));
-    Channels.write(chan, ChannelBuffers.wrappedBuffer(header, encode(rpc)));
+    rpc.getDeferred().addBoth(new ProtocolVersionCB(new_chan))
+                     .addErrback(errorback);
+    Channels.write(new_chan, ChannelBuffers.wrappedBuffer(header, encode(rpc)));
   }
 
 }

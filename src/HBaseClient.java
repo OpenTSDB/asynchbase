@@ -2125,6 +2125,7 @@ public final class HBaseClient {
       return client;            // discover this region, we lost the race.
     }
     RegionInfo oldregion;
+    final ArrayList<RegionInfo> regions;
     int nregions;
     // If we get a ConnectException immediately when trying to connect to the
     // RegionServer, Netty delivers a CLOSED ChannelStateEvent from a "boss"
@@ -2146,11 +2147,25 @@ public final class HBaseClient {
       // 3. Update the reverse mapping created in step 1.
       // This is done last because it's only used to gracefully handle
       // disconnections and isn't used for serving.
-      final ArrayList<RegionInfo> regions = client2regions.get(client);
-      synchronized (regions) {
-        regions.add(region);
-        nregions = regions.size();
+      regions = client2regions.get(client);
+      if (regions != null) {
+        synchronized (regions) {
+          regions.add(region);
+          nregions = regions.size();
+        }
+      } else {
+        // Lost a race, and other thread removed the client. It happens when
+        // the channel of this client is disconnected as soon as a client tries
+        // to connect a dead region server.
+        nregions = 0;
       }
+    }
+    if (nregions == 0 || regions != client2regions.get(client)) {
+      // Lost a race.
+      // TODO: Resolve the race condition among {@link #ip2client},
+      // {@link #client2regions}, {@link #region2client}, {@link #rootregion},
+      // and {@link #regions_cache}.
+      return null;
     }
 
     // Don't interleave logging with the operations above, in order to attempt
