@@ -90,6 +90,7 @@ asynchbase_SOURCES := \
 	src/RegionClient.java	\
 	src/RegionInfo.java	\
 	src/RegionOfflineException.java	\
+	src/RegionMovedException.java	\
 	src/RemoteException.java	\
 	src/RowLock.java	\
 	src/RowLockRequest.java	\

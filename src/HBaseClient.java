@@ -2303,7 +2303,7 @@ public final class HBaseClient {
    */
   void handleNSRE(HBaseRpc rpc,
                   final byte[] region_name,
-                  final NotServingRegionException e) {
+                  final RecoverableException e) {
     num_nsre_rpcs.increment();
     final boolean can_retry_rpc = !cannotRetryRequest(rpc);
     boolean known_nsre = true;  // We already aware of an NSRE for this region?
