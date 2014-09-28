@@ -585,6 +585,13 @@ final public class TestIntegration {
     final DeleteRequest del = new DeleteRequest(table, key, family, qual);
     del.setBufferable(false);
     client.delete(del).join();
+    // HBase 0.98 and up do not create a KV on atomic increment when the
+    // increment amount is 0.  So let's first send an increment of some
+    // arbitrary value, and then ensure that this value hasn't changed.
+    long n = client.atomicIncrement(new AtomicIncrementRequest(table, key,
+                                                               family, qual,
+                                                               42)).join();
+    assertEquals(42, n);
     bufferIncrement(table, key, family, qual, 1);
     bufferIncrement(table, key, family, qual, 2);
     bufferIncrement(table, key, family, qual, -3);
@@ -593,9 +600,11 @@ final public class TestIntegration {
       .family(family).qualifier(qual);
     final ArrayList<KeyValue> kvs = client.get(get).join();
     assertSizeIs(1, kvs);
-    assertEquals(0, Bytes.getLong(kvs.get(0).value()));
+    assertEquals(42, Bytes.getLong(kvs.get(0).value()));
     // The sum was 0, but must have sent the increment anyway.
-    assertEquals(1, client.stats().atomicIncrements());
+    // So in total we should have sent two increments, the initial one,
+    // that sets the value to 42, and the one incrementing by zero.
+    assertEquals(2, client.stats().atomicIncrements());
   }
 
   /** Helper method to create an atomic increment request.  */
