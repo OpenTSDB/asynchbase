@@ -558,8 +558,8 @@ final class MultiAction extends HBaseRpc implements HBaseRpc.IsEdit {
         for (int j = n; j < last_edit; j++) {
           resps[j] = RegionClient.decodeExceptionPair(batch.get(j), pair);
         }
-        n = last_edit - 1;  // -1 because we're going to do n++;
-        continue;  // This batch failed, move on (this will cause n++).
+        n = last_edit;
+        continue;  // This batch failed, move on.
       }  // else: parse out the individual results:
       for (int j = 0; j < nresults; j++) {
         final ResultOrException roe = results.getResultOrException(j);
