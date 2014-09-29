@@ -30,9 +30,8 @@ import java.nio.charset.Charset;
 import java.util.ArrayList;
 import java.util.Arrays;
 
+import com.google.common.annotations.VisibleForTesting;
 import org.jboss.netty.buffer.ChannelBuffer;
-import org.jboss.netty.buffer.ChannelBuffers;
-import org.jboss.netty.util.CharsetUtil;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -1060,6 +1059,29 @@ public final class Scanner {
     return new CloseScannerRequest(scanner_id);
   }
 
+
+  /**
+   * Opens and closes a Scanner (reads nothing) that is used as a probe, 
+   * You can reference https://github.com/OpenTSDB/asynchbase/issues/82 
+   * to see why the probe changed from a GetRequest.exists() to an open scanner probe.
+   * @return OpenScannerRequest rpc.
+   */
+  static HBaseRpc probe(HBaseClient client, final byte[] table, byte[] key) {
+    final Scanner scanner = new Scanner(client, table);
+    scanner.setStartKey(key);
+    scanner.setStopKey(key);
+    HBaseRpc openRequest = scanner.getOpenRequest();
+    openRequest.getDeferred().addBoth(new Callback<Object, Object>() {
+      @Override
+      public Object call(Object arg) throws Exception {
+        scanner.close();
+        LOG.info("Closed the probe scanner for: " + Bytes.pretty(table));
+        return arg;
+      }
+    });
+    return openRequest;
+  }
+
   /**
    * Throws an exception if scanning already started.
    * @throws IllegalStateException if scanning already started.
@@ -1154,7 +1176,7 @@ public final class Scanner {
   /**
    * RPC sent out to open a scanner on a RegionServer.
    */
-  private final class OpenScannerRequest extends HBaseRpc {
+  @VisibleForTesting final class OpenScannerRequest extends HBaseRpc {
 
     public OpenScannerRequest() {
       super(Scanner.this.table, start_key);

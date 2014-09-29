@@ -53,7 +53,6 @@ import org.apache.zookeeper.ZooKeeper;
 import org.apache.zookeeper.data.Stat;
 
 import org.jboss.netty.channel.ChannelEvent;
-import org.jboss.netty.channel.ChannelPipeline;
 import org.jboss.netty.channel.ChannelStateEvent;
 import org.jboss.netty.channel.DefaultChannelPipeline;
 import org.jboss.netty.channel.socket.ClientSocketChannelFactory;
@@ -2315,7 +2314,7 @@ public final class HBaseClient {
       // which could happen if we were trying to scan from the beginning of
       // the table.  So instead use "\0" as the key.
       final byte[] testkey = rpc.key.length != 0 ? rpc.key : ZERO_ARRAY;
-      exists_rpc = GetRequest.exists(rpc.table, testkey);
+      exists_rpc = Scanner.probe(this, rpc.table, testkey);
       newlist.add(exists_rpc);
       if (can_retry_rpc) {
         newlist.add(rpc);
@@ -2342,7 +2341,7 @@ public final class HBaseClient {
           final ArrayList<HBaseRpc> added =
             got_nsre.putIfAbsent(region_name, nsred_rpcs);
           if (added == null) {  // We've just put `nsred_rpcs'.
-            exists_rpc = GetRequest.exists(rpc.table, rpc.key);
+            exists_rpc = Scanner.probe(this, rpc.table, rpc.key);
             nsred_rpcs.add(exists_rpc);  // We hold the lock on nsred_rpcs
             if (can_retry_rpc) {
               nsred_rpcs.add(rpc);         // so we can safely add those 2.
@@ -2362,7 +2361,7 @@ public final class HBaseClient {
                   LOG.error("WTF?  Shouldn't happen!  Lost 2 races and found"
                             + " an empty list of NSRE'd RPCs (" + added
                             + ") for " + Bytes.pretty(region_name));
-                  exists_rpc = GetRequest.exists(rpc.table, rpc.key);
+                  exists_rpc = Scanner.probe(this, rpc.table, rpc.key);
                   added.add(exists_rpc);
                 } else {
                   exists_rpc = added.get(0);
