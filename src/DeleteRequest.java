@@ -403,6 +403,11 @@ public final class DeleteRequest extends BatchableRpc
           + "  table=" + Bytes.pretty(table)
           + ", key=" + Bytes.pretty(key));
       }
+      if (qualifiers.length == 0) {
+        throw new IllegalArgumentException("Don't pass an empty list of"
+          + " qualifiers, this would delete the entire row of table="
+          + Bytes.pretty(table) + " at key " + Bytes.pretty(key));
+      }
       for (final byte[] qualifier : qualifiers) {
         KeyValue.checkQualifier(qualifier);
       }
