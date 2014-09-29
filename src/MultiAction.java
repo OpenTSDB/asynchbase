@@ -151,13 +151,15 @@ final class MultiAction extends HBaseRpc implements HBaseRpc.IsEdit {
       final byte[] region_name = rpc.getRegion().name();
       final boolean new_region = !Bytes.equals(prev.getRegion().name(),
                                                region_name);
-      final byte[] family = rpc.family();
+      final byte[][] families = rpc.getFamilies();
       final boolean new_key = (new_region
                                || prev.code() != rpc.code()
                                || !Bytes.equals(prev.key, rpc.key)
-                               || family == DeleteRequest.WHOLE_ROW);
+                               // do not coalesce RPCs with multi CFs
+                               || families.length > 1 || prev.getFamilies().length > 1
+                               || families == DeleteRequest.WHOLE_ROW);
       final boolean new_family = new_key || !Bytes.equals(prev.family(),
-                                                          family);
+                                                          families[0]);
 
       if (new_region) {
         size += 3;  // vint: region name length (3 bytes => max length = 32768).
@@ -190,8 +192,13 @@ final class MultiAction extends HBaseRpc implements HBaseRpc.IsEdit {
       }
 
       if (new_family) {
+        if (families.length > 1) {
+          size += rpc.payloadsSize();
+          prev = rpc;
+          continue;
+        }
         size += 1;  // vint: Family length (guaranteed on 1 byte).
-        size += family.length;  // The family.
+        size += families[0].length;  // The family.
         size += 4;  // int:  Number of KeyValues that follow.
         if (rpc.code() == PutRequest.CODE) {
           size += 4;  // int:  Total number of bytes for all those KeyValues.
@@ -281,13 +288,15 @@ final class MultiAction extends HBaseRpc implements HBaseRpc.IsEdit {
       final byte[] region_name = rpc.getRegion().name();
       final boolean new_region = !Bytes.equals(prev.getRegion().name(),
                                                region_name);
-      final byte[] family = rpc.family();
+      final byte[][] families = rpc.getFamilies();
       final boolean new_key = (new_region
                                || prev.code() != rpc.code()
                                || !Bytes.equals(prev.key, rpc.key)
-                               || family == DeleteRequest.WHOLE_ROW);
+                               // do not coalesce RPCs with multi CFs
+                               || families.length > 1 || prev.getFamilies().length > 1
+                               || families == DeleteRequest.WHOLE_ROW);
       final boolean new_family = new_key || !Bytes.equals(prev.family(),
-                                                          family);
+                                                          families[0]);
 
       if (new_key && use_multi && nkeys_index > 0) {
         buf.writeInt(0);  // Number of "attributes" for the last key (none).
@@ -374,13 +383,20 @@ final class MultiAction extends HBaseRpc implements HBaseRpc.IsEdit {
           nbytes_per_family = 0;
         }
 
-        if (family == DeleteRequest.WHOLE_ROW) {
+        if (families == DeleteRequest.WHOLE_ROW) {
           prev = rpc;  // Short circuit.  We have no KeyValue to write.
           continue;    // So loop again directly.
+        } else if (families.length > 1) {
+          // do not coalesces RPCs with multiple families
+          nfamilies = families.length;
+          rpc.serializePayloads(buf);
+          nrpcs_per_key++;
+          prev = rpc;
+          continue;
         }
 
         nfamilies++;
-        writeByteArray(buf, family);  // The column family.
+        writeByteArray(buf, families[0]);  // The column family.
 
         nkeys_per_family_index = buf.writerIndex();
         // Number of "KeyValues" that follow.
@@ -408,7 +424,7 @@ final class MultiAction extends HBaseRpc implements HBaseRpc.IsEdit {
 
     // Note: the only case where nkeys_per_family_index remained -1 throughout
     // this whole ordeal is where we didn't have any KV to serialize because
-    // every RPC was a `DeleteRequest.WHOLE_ROW'.
+    // every RPC was a `DeleteRequest.WHOLE_ROW' or a multi-CF RPC.
     if (nkeys_per_family_index > 0) {
       // Monkey-patch everything for the last set of edits.
       buf.setInt(nkeys_per_family_index, nkeys_per_family);
@@ -495,10 +511,14 @@ final class MultiAction extends HBaseRpc implements HBaseRpc.IsEdit {
         return d;
       } else if ((d = Bytes.memcmp(a.key, b.key)) != 0) {
         return d;
+      } else if (a.getFamilies().length == 1 && b.getFamilies().length == 1) {
+        // within a row, group all actions with single CF
+        // in the front so that they can possibly coalesce
+        return Bytes.memcmp(a.family(), b.family());
       }
-      return Bytes.memcmp(a.family(), b.family());
-    }
 
+      return (a.getFamilies().length - b.getFamilies().length);
+    }
   }
 
   /**
@@ -683,7 +703,7 @@ final class MultiAction extends HBaseRpc implements HBaseRpc.IsEdit {
             // cloning "e", so instead we just abuse its `make' factory method
             // slightly to duplicate it.  This mangles the message a bit, but
             // that's mostly harmless.
-            resps[n + k] = e.make(e.getMessage(), batch.get(n + k));
+            resps[n + k] = e.make(e, batch.get(n + k));
           }
         } else {
           for (int k = 0; k < nrpcs_per_key; k++) {
@@ -783,6 +803,10 @@ final class MultiAction extends HBaseRpc implements HBaseRpc.IsEdit {
 
     @Override
     MultiPutFailedException make(final Object msg, final HBaseRpc rpc) {
+      if (msg == this || msg instanceof MultiPutFailedException) {
+        final MultiPutFailedException e = (MultiPutFailedException) msg;
+        return new MultiPutFailedException(e.getMessage(), rpc);
+      }
       return new MultiPutFailedException(msg.toString(), rpc);
     }
 

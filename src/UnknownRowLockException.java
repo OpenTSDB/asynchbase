@@ -53,6 +53,10 @@ implements HasFailedRpcException {
 
   @Override
   UnknownRowLockException make(final Object msg, final HBaseRpc rpc) {
+    if (msg == this || msg instanceof UnknownRowLockException) {
+      final UnknownRowLockException e = (UnknownRowLockException) msg;
+      return new UnknownRowLockException(e.getMessage(), rpc);
+    }
     return new UnknownRowLockException(msg.toString(), rpc);
   }
 

@@ -53,7 +53,7 @@ public final class RemoteException extends NonRecoverableException {
 
   @Override
   RemoteException make(final Object msg, final HBaseRpc rpc) {
-    if (msg instanceof RemoteException) {
+    if (msg == this || msg instanceof RemoteException) {
       final RemoteException e = (RemoteException) msg;
       return new RemoteException(e.getType(), e.getMessage());
     }

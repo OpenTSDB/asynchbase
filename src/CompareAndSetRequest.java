@@ -103,6 +103,11 @@ final class CompareAndSetRequest extends HBaseRpc
   }
 
   @Override
+  public byte[][] getFamilies() {
+    return put.getFamilies();
+  }
+
+  @Override
   public byte[] qualifier() {
     return put.qualifier();
   }

@@ -174,6 +174,11 @@ public final class AtomicIncrementRequest extends HBaseRpc
   }
 
   @Override
+  public byte[][] getFamilies() {
+    return new byte[][] { family };
+  }
+
+  @Override
   public byte[] qualifier() {
     return qualifier;
   }
