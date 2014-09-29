@@ -939,9 +939,9 @@ public final class HBaseClient {
     // useful thing to do but gets the job done for now.  TODO(tsuna): Improve.
     final HBaseRpc dummy;
     if (family == EMPTY_ARRAY) {
-      dummy = GetRequest.exists(table, ZERO_ARRAY);
+      dummy = GetRequest.exists(table, probeKey(ZERO_ARRAY));
     } else {
-      dummy = GetRequest.exists(table, ZERO_ARRAY, family);
+      dummy = GetRequest.exists(table, probeKey(ZERO_ARRAY), family);
     }
     @SuppressWarnings("unchecked")
     final Deferred<Object> d = (Deferred) sendRpcToRegion(dummy);
@@ -2314,8 +2314,7 @@ public final class HBaseClient {
       // In HBase 0.95 and up, the exists RPC can't use the empty row key,
       // which could happen if we were trying to scan from the beginning of
       // the table.  So instead use "\0" as the key.
-      final byte[] testkey = rpc.key.length != 0 ? rpc.key : ZERO_ARRAY;
-      exists_rpc = GetRequest.exists(rpc.table, testkey);
+      exists_rpc = GetRequest.exists(rpc.table, probeKey(rpc.key));
       newlist.add(exists_rpc);
       if (can_retry_rpc) {
         newlist.add(rpc);
@@ -2342,7 +2341,7 @@ public final class HBaseClient {
           final ArrayList<HBaseRpc> added =
             got_nsre.putIfAbsent(region_name, nsred_rpcs);
           if (added == null) {  // We've just put `nsred_rpcs'.
-            exists_rpc = GetRequest.exists(rpc.table, rpc.key);
+            exists_rpc = GetRequest.exists(rpc.table, probeKey(rpc.key));
             nsred_rpcs.add(exists_rpc);  // We hold the lock on nsred_rpcs
             if (can_retry_rpc) {
               nsred_rpcs.add(rpc);         // so we can safely add those 2.
@@ -2362,7 +2361,7 @@ public final class HBaseClient {
                   LOG.error("WTF?  Shouldn't happen!  Lost 2 races and found"
                             + " an empty list of NSRE'd RPCs (" + added
                             + ") for " + Bytes.pretty(region_name));
-                  exists_rpc = GetRequest.exists(rpc.table, rpc.key);
+                  exists_rpc = GetRequest.exists(rpc.table, probeKey(rpc.key));
                   added.add(exists_rpc);
                 } else {
                   exists_rpc = added.get(0);
@@ -2536,6 +2535,33 @@ public final class HBaseClient {
       ? 200 * (probe.attempt + 2)     // 400, 600, 800, 1000
       : 1000 + (1 << probe.attempt);  // 1016, 1032, 1064, 1128, 1256, 1512, ..
     newTimeout(new NSRETimer(), wait_ms);
+  }
+
+  /**
+   * Some arbitrary junk that is unlikely to appear in a real row key.
+   * @see probeKey
+   */
+  private static byte[] PROBE_SUFFIX = {
+    ':', 'A', 's', 'y', 'n', 'c', 'H', 'B', 'a', 's', 'e',
+    '~', 'p', 'r', 'o', 'b', 'e', '~', '<', ';', '_', '<',
+  };
+
+  /**
+   * Returns a newly allocated key to probe, to check a region is online.
+   * Sometimes we need to "poke" HBase to see if a region is online or a table
+   * exists.  Given a key, we prepend some unique suffix to make it a lot less
+   * likely that we hit a real key with our probe, as doing so might have some
+   * implications on the RegionServer's memory usage.  Yes, some people with
+   * very large keys were experiencing OOM's in their RegionServers due to
+   * AsyncHBase probes.
+   */
+  private static byte[] probeKey(final byte[] key) {
+    final byte[] testKey = new byte[key.length + 64];
+    System.arraycopy(key, 0, testKey, 0, key.length);
+    System.arraycopy(PROBE_SUFFIX, 0,
+                     testKey, testKey.length - PROBE_SUFFIX.length,
+                     PROBE_SUFFIX.length);
+    return testKey;
   }
 
   // ----------------------------------------------------------------- //
