@@ -217,6 +217,15 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
    * Constructor.
    * @param hbase_client The HBase client this instance belongs to.
    */
+  public RegionClient(final HBaseClient hbase_client) {
+    this(hbase_client, null);
+  }
+
+  /**
+   * Constructor.
+   * @param hbase_client The HBase client this instance belongs to.
+   * @param host hostname of host, required if security is enabled
+   */
   public RegionClient(final HBaseClient hbase_client, String host) {
     this.hbase_client = hbase_client;
     this.host = host;
