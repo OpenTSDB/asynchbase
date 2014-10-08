@@ -49,6 +49,35 @@ Noteworthy bug fixes:
   - Fix an issue where an RPC could be stranded in the inflight map when an
     exception is thrown.
 
+* Version 1.6.0 (2014-10-07) [a56249b]
+
+This is mostly a bugfix release, but the introduction of a few new APIs made
+it become 1.6.0 instead of 1.5.1.
+
+New public APIs:
+  - Introduction of RegionMovedException.
+  - Introduction of a lot of new filters (BinaryComparator,
+    BinaryPrefixComparator, BitComparator, CompareFilter,
+    DependentColumnFilter, FamilyFilter, FilterComparator,
+    QualifierFilter, RegexStringComparator, RowFilter,
+    SubstringComparator, TimestampsFilter, ValueFilter).
+Noteworthy bug fixes:
+  - When a region was unavailable, some RPCs could be spuriously retried more
+    than once, which could lead to double-counting when the RPC was an atomic
+    increment (#81).
+  - Fix an error handling bug that arises when an RPC response fails to be
+    de-serialized properly (something that shouldn't happen in the first
+    place).
+  - Fix a compatibility issue with the latest versions of CDH5 that were
+    causing scanners to raise an InvalidResponseException.
+  - Properly handle RegionMovedException.
+  - Make our probes to recover from moving regions more lightweight by
+    crafting an unlikely key that is very unlikely to be present in the table,
+    since unfortunately exists() still materializes the row in memory in the
+    RegionServer, which is problematic for tables with big rows (#82).
+  - Fixed an off-by-one in the serialization of batched RPCs that could lead
+    to an uncaught IndexOutOfBoundsException.
+
 * Version 1.5.0 (2013-12-13) [67fc3b7]
 
 This release introduces compatibility with HBase 0.96 and up, and adds
