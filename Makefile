@@ -114,6 +114,11 @@ asynchbase_SOURCES := \
 	src/UnknownScannerException.java	\
 	src/ValueFilter.java	\
 	src/VersionMismatchException.java	\
+	src/SecureRpcHelper.java	\
+	src/KerberosClientAuthProvider.java	\
+	src/SimpleClientAuthProvider.java	\
+	src/ClientAuthProvider.java	\
+	src/Login.java	\
 	src/jsr166e/LongAdder.java	\
 	src/jsr166e/Striped64.java	\
 
