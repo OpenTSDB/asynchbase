@@ -24,7 +24,7 @@
  * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
  * POSSIBILITY OF SUCH DAMAGE.
  */
-package org.hbase.async.test;
+package org.hbase.async;
 
 import java.lang.annotation.ElementType;
 import java.lang.annotation.Retention;
@@ -91,7 +91,7 @@ import org.hbase.async.TableNotFoundException;
 import org.hbase.async.TimestampsFilter;
 import org.hbase.async.ValueFilter;
 
-import org.hbase.async.test.Common;
+import org.hbase.async.Common;
 
 /**
  * Basic integration and regression tests for asynchbase.
