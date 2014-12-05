@@ -33,14 +33,37 @@ PACKAGE_BUGREPORT := opentsdb@googlegroups.com
 
 top_builddir := build
 package := org.hbase.async
+proto_package := $(package).protobuf.generated
+proto_generated_builddir := $(top_builddir)/src
+proto_builddir := $(top_builddir)/protobuf
 spec_title := Asynchronous HBase Client
 spec_vendor := The Async HBase Authors
 # Semantic Versioning (see http://semver.org/).
-spec_version := 1.5.0-SNAPSHOT
+spec_version := 1.6.0
 jar := $(top_builddir)/asynchbase-$(spec_version).jar
+
+asynchbase_PROTOS := \
+	protobuf/Cell.proto	\
+	protobuf/Client.proto	\
+	protobuf/Comparator.proto	\
+	protobuf/ErrorHandling.proto	\
+	protobuf/Filter.proto	\
+	protobuf/MultiRowMutation.proto	\
+	protobuf/RPC.proto	\
+	protobuf/Tracing.proto	\
+	protobuf/ZooKeeper.proto	\
+	protobuf/HBase.proto	\
+
+PROTOBUF_GEN_DIR = $(top_builddir)/src/org/hbase/async/generated
+
+BUILT_SOURCES := $(asynchbase_PROTOS:protobuf/%.proto=$(PROTOBUF_GEN_DIR)/%PB.java)
+
 asynchbase_SOURCES := \
 	src/AtomicIncrementRequest.java	\
 	src/BatchableRpc.java	\
+	src/BinaryComparator.java	\
+	src/BinaryPrefixComparator.java	\
+	src/BitComparator.java	\
 	src/BrokenMetaException.java	\
 	src/BufferedIncrement.java	\
 	src/Bytes.java	\
@@ -48,9 +71,13 @@ asynchbase_SOURCES := \
 	src/ColumnPrefixFilter.java	\
 	src/ColumnRangeFilter.java	\
 	src/CompareAndSetRequest.java	\
+	src/CompareFilter.java	\
 	src/ConnectionResetException.java	\
 	src/Counter.java	\
 	src/DeleteRequest.java	\
+	src/DependentColumnFilter.java	\
+	src/FamilyFilter.java	\
+	src/FilterComparator.java	\
 	src/FilterList.java		\
 	src/GetRequest.java	\
 	src/HBaseClient.java	\
@@ -66,22 +93,31 @@ asynchbase_SOURCES := \
 	src/NotServingRegionException.java	\
 	src/PleaseThrottleException.java	\
 	src/PutRequest.java	\
+	src/QualifierFilter.java	\
 	src/RecoverableException.java	\
+	src/RegexStringComparator.java	\
 	src/RegionClient.java	\
 	src/RegionInfo.java	\
 	src/RegionOfflineException.java	\
+	src/RegionMovedException.java	\
 	src/RemoteException.java	\
+	src/RowFilter.java	\
 	src/RowLock.java	\
 	src/RowLockRequest.java	\
 	src/ScanFilter.java	\
 	src/Scanner.java	\
 	src/SingletonList.java	\
+	src/SubstringComparator.java	\
 	src/TableNotFoundException.java	\
+	src/TimestampsFilter.java	\
 	src/UnknownRowLockException.java	\
 	src/UnknownScannerException.java	\
+	src/ValueFilter.java	\
 	src/VersionMismatchException.java	\
 	src/jsr166e/LongAdder.java	\
 	src/jsr166e/Striped64.java	\
+
+protobuf_SOURCES := src/protobuf/ZeroCopyLiteralByteString.java
 
 asynchbase_LIBADD := \
 	$(NETTY)	\
@@ -89,6 +125,7 @@ asynchbase_LIBADD := \
 	$(ZOOKEEPER)	\
 	$(SUASYNC)	\
 	$(GUAVA)	\
+	$(PROTOBUF)	\
 
 test_SOURCES := \
 	test/Common.java	\
@@ -114,34 +151,51 @@ test_LIBADD := \
         $(jar)
 
 package_dir := $(subst .,/,$(package))
-AM_JAVACFLAGS := -Xlint
+AM_JAVACFLAGS := -Xlint -source 6 -target 6
+JAVAC := javac
 JVM_ARGS :=
-classes := $(asynchbase_SOURCES:src/%.java=$(top_builddir)/$(package_dir)/%.class)
+PROTOC := protoc
+classes := $(asynchbase_SOURCES:src/%.java=$(top_builddir)/$(package_dir)/%.class) \
+ $(protobuf_SOURCES:src/%.java=$(top_builddir)/com/google/%.class) \
+ $(asynchbase_PROTOS:protobuf/%.proto=$(top_builddir)/$(package_dir)/generated/%PB.class)
 test_classes := $(test_SOURCES:test/%.java=$(top_builddir)/$(package_dir)/test/%.class)
 UNITTESTS := $(unittest_SRC:test/%.java=$(top_builddir)/$(package_dir)/%.class)
 
 jar: $(jar)
 
 get_dep_classpath = `echo $(asynchbase_LIBADD) | tr ' ' ':'`
-$(top_builddir)/.javac-stamp: $(asynchbase_SOURCES) $(asynchbase_LIBADD)
+$(top_builddir)/.javac-protobuf-stamp: $(PROTOBUF) $(protobuf_SOURCES) $(BUILT_SOURCES)
 	@mkdir -p $(top_builddir)
-	javac $(AM_JAVACFLAGS) -cp $(get_dep_classpath) \
+	$(JAVAC) $(AM_JAVACFLAGS) -cp $(PROTOBUF) \
+	  -d $(top_builddir) $(protobuf_SOURCES) $(BUILT_SOURCES)
+	@touch "$@"
+
+$(top_builddir)/.javac-stamp: $(top_builddir)/.javac-protobuf-stamp $(asynchbase_SOURCES) $(asynchbase_LIBADD)
+	$(JAVAC) $(AM_JAVACFLAGS) -cp $(get_dep_classpath):build \
 	  -d $(top_builddir) $(asynchbase_SOURCES)
 	@touch "$@"
 
+$(PROTOBUF_GEN_DIR)/%PB.java: protobuf/%.proto
+	@mkdir -p $(proto_generated_builddir)
+	@case `$(PROTOC) --version` in \
+	  (*2.5*) :;; \
+	  (*) echo You need the protobuf compiler v2.5 2>&1; exit 1;; \
+	esac
+	$(PROTOC) -Iprotobuf --java_out=$(proto_generated_builddir) $<
+
 get_runtime_dep_classpath = `echo $(test_LIBADD) | tr ' ' ':'`
 $(test_classes): $(jar) $(test_SOURCES) $(test_LIBADD)
-	javac $(AM_JAVACFLAGS) -cp $(get_runtime_dep_classpath) \
+	$(JAVAC) $(AM_JAVACFLAGS) -cp $(get_runtime_dep_classpath) \
 	  -d $(top_builddir) $(test_SOURCES)
 $(top_builddir)/.javac-test-stamp: $(jar) $(unittest_SRC) $(test_LIBADD)
-	javac $(AM_JAVACFLAGS) -cp $(get_runtime_dep_classpath) \
+	$(JAVAC) $(AM_JAVACFLAGS) -cp $(get_runtime_dep_classpath) \
 	  -d $(top_builddir) $(unittest_SRC)
 
 classes_with_nested_classes := $(classes:$(top_builddir)/%.class=%*.class)
 unittest_classes_with_nested_classes := $(UNITTESTS:$(top_builddir)/%.class=%*.class)
 test_classes_with_nested_classes := $(test_classes:$(top_builddir)/%.class=%*.class)
 
-run: $(test_classes)
+run: jar $(test_classes)
 	@test -n "$(CLASS)" || { echo 'usage: $(MAKE) run CLASS=<name>'; exit 1; }
 	$(JAVA) -ea -esa $(JVM_ARGS) -cp "$(get_runtime_dep_classpath):$(top_builddir)" $(package).test.$(CLASS) $(ARGS)
 
@@ -196,19 +250,25 @@ NETTY_JAVADOC := http://docs.jboss.org/netty/3.2/api
 SUASYNC_JAVADOC := http://tsunanet.net/~tsuna/async/api
 GUAVA_JAVADOC := http://docs.guava-libraries.googlecode.com/git/javadoc
 JAVADOCS = $(JDK_JAVADOC) $(NETTY_JAVADOC) $(SUASYNC_JAVADOC) $(GUAVA_JAVADOC)
-$(top_builddir)/api/index.html: $(asynchbase_SOURCES)
-	javadoc -d $(top_builddir)/api -classpath $(get_dep_classpath) \
+$(top_builddir)/api/index.html: $(asynchbase_SOURCES) $(jar)
+	javadoc -d $(top_builddir)/api -classpath $(get_dep_classpath):$(jar) \
           `echo $(JAVADOCS) | sed 's/\([^ ]*\)/-link \1/g'` $(asynchbase_SOURCES) \
 	  `find src -name package-info.java`
 
 clean:
 	@rm -f $(top_builddir)/.javac*-stamp
-	rm -f $(top_builddir)/manifest
+	rm -f $(top_builddir)/manifest pom.xml
+	rm -rf $(proto_generated_builddir)
 	cd $(top_builddir) || exit 0 \
 	  && rm -f $(classes_with_nested_classes) \
 	           $(unittest_classes_with_nested_classes) \
 	           $(test_classes_with_nested_classes) \
 		   *.class
+	for dir in $(top_builddir)/com/google/protobuf \
+	           $(top_builddir)/com/google \
+		   $(top_builddir)/com; do \
+	  test -d $$dir && rmdir $$dir; \
+	done; :
 	cd $(top_builddir) || exit 0 \
 	  && test -d $(package_dir) || exit 0 \
 	  && dir=$(package_dir) \
@@ -237,6 +297,7 @@ pom.xml: pom.xml.in Makefile
 	    -e 's/@NETTY_VERSION@/$(NETTY_VERSION)/' \
 	    -e 's/@OBJENESIS_VERSION@/$(OBJENESIS_VERSION)/' \
 	    -e 's/@POWERMOCK_MOCKITO_VERSION@/$(POWERMOCK_MOCKITO_VERSION)/' \
+	    -e 's/@PROTOBUF_VERSION@/$(PROTOBUF_VERSION)/' \
 	    -e 's/@SLF4J_API_VERSION@/$(SLF4J_API_VERSION)/' \
 	    -e 's/@SUASYNC_VERSION@/$(SUASYNC_VERSION)/' \
 	    -e 's/@ZOOKEEPER_VERSION@/$(ZOOKEEPER_VERSION)/' \

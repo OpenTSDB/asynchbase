@@ -26,8 +26,11 @@
  */
 package org.hbase.async;
 
-
 import org.jboss.netty.buffer.ChannelBuffer;
+
+import org.hbase.async.generated.ClientPB.MutateRequest;
+import org.hbase.async.generated.ClientPB.MutateResponse;
+import org.hbase.async.generated.ClientPB.MutationProto;
 
 /**
  * Deletes some data into HBase.
@@ -41,7 +44,9 @@ import org.jboss.netty.buffer.ChannelBuffer;
  * Irrespective of the order in which you send RPCs, a {@code DeleteRequest}
  * that is created with a specific timestamp in argument will only delete
  * values in HBase that were previously stored with a timestamp less than
- * or equal to that of the {@code DeleteRequest}.
+ * or equal to that of the {@code DeleteRequest} unless
+ * {@link #setDeleteAtTimestampOnly} is also called, in which case only the
+ * value at the specified timestamp is deleted.
  */
 public final class DeleteRequest extends BatchableRpc
   implements HBaseRpc.HasTable, HBaseRpc.HasKey,
@@ -62,6 +67,9 @@ public final class DeleteRequest extends BatchableRpc
   static final byte[] WHOLE_ROW = new byte[0];
 
   private final byte[][] qualifiers;
+
+  /** Whether to delete the value only at the specified timestamp. */
+  private boolean at_timestamp_only = false;
 
   /**
    * Constructor to delete an entire row.
@@ -383,7 +391,7 @@ public final class DeleteRequest extends BatchableRpc
                         final byte[][] qualifiers,
                         final long timestamp,
                         final long lockid) {
-    super(DELETE, table, key, family == null ? WHOLE_ROW : family, timestamp, lockid);
+    super(table, key, family == null ? WHOLE_ROW : family, timestamp, lockid);
     if (family != null) {
       KeyValue.checkFamily(family);
     }
@@ -395,6 +403,11 @@ public final class DeleteRequest extends BatchableRpc
           + "  table=" + Bytes.pretty(table)
           + ", key=" + Bytes.pretty(key));
       }
+      if (qualifiers.length == 0) {
+        throw new IllegalArgumentException("Don't pass an empty list of"
+          + " qualifiers, this would delete the entire row of table="
+          + Bytes.pretty(table) + " at key " + Bytes.pretty(key));
+      }
       for (final byte[] qualifier : qualifiers) {
         KeyValue.checkQualifier(qualifier);
       }
@@ -404,6 +417,32 @@ public final class DeleteRequest extends BatchableRpc
       // if `family == null', we'll delete the whole row anyway.
       this.qualifiers = DELETE_FAMILY_MARKER;
     }
+  }
+
+  /**
+   * Deletes only the cell value with the timestamp specified in the
+   * constructor.
+   * <p>
+   * Only applicable when qualifier(s) is also specified.
+   * @since 1.5
+   */
+  public void setDeleteAtTimestampOnly(final boolean at_timestamp_only) {
+    this.at_timestamp_only = at_timestamp_only;
+  }
+
+  /**
+   * Returns whether to only delete the cell value at the timestamp.
+   * @since 1.5
+   */
+  public boolean deleteAtTimestampOnly() {
+    return at_timestamp_only;
+  }
+
+  @Override
+  byte[] method(final byte server_version) {
+    return (server_version >= RegionClient.SERVER_VERSION_095_OR_ABOVE
+            ? MUTATE
+            : DELETE);
   }
 
   @Override
@@ -455,7 +494,11 @@ public final class DeleteRequest extends BatchableRpc
     }
     // Are we deleting a whole family at once or just a bunch of columns?
     final byte type = (qualifiers == DELETE_FAMILY_MARKER
-                       ? KeyValue.DELETE_FAMILY : KeyValue.DELETE_COLUMN);
+                       ? KeyValue.DELETE_FAMILY
+                       : (at_timestamp_only
+                          ? KeyValue.DELETE
+                          : KeyValue.DELETE_COLUMN));
+
     // Write the KeyValues
     for (final byte[] qualifier : qualifiers) {
       KeyValue.serialize(buf, type, timestamp,
@@ -517,8 +560,58 @@ public final class DeleteRequest extends BatchableRpc
     return size;
   }
 
+  @Override
+  MutationProto toMutationProto() {
+    final MutationProto.Builder del = MutationProto.newBuilder()
+      .setRow(Bytes.wrap(key))
+      .setMutateType(MutationProto.MutationType.DELETE);
+
+    if (family != WHOLE_ROW) {
+      final MutationProto.ColumnValue.Builder columns = // All columns ...
+        MutationProto.ColumnValue.newBuilder()
+        .setFamily(Bytes.wrap(family));                 // ... for this family.
+
+      final MutationProto.DeleteType type =
+        (qualifiers == DELETE_FAMILY_MARKER
+         ? MutationProto.DeleteType.DELETE_FAMILY
+         : (at_timestamp_only
+            ? MutationProto.DeleteType.DELETE_ONE_VERSION
+            : MutationProto.DeleteType.DELETE_MULTIPLE_VERSIONS));
+
+      // Now add all the qualifiers to delete.
+      for (int i = 0; i < qualifiers.length; i++) {
+        final MutationProto.ColumnValue.QualifierValue column =
+          MutationProto.ColumnValue.QualifierValue.newBuilder()
+          .setQualifier(Bytes.wrap(qualifiers[i]))
+          .setTimestamp(timestamp)
+          .setDeleteType(type)
+          .build();
+        columns.addQualifierValue(column);
+      }
+      del.addColumnValue(columns);
+    }
+
+    if (!durable) {
+      del.setDurability(MutationProto.Durability.SKIP_WAL);
+    }
+    return del.build();
+  }
+
   /** Serializes this request.  */
   ChannelBuffer serialize(final byte server_version) {
+    if (server_version < RegionClient.SERVER_VERSION_095_OR_ABOVE) {
+      return serializeOld(server_version);
+    }
+
+    final MutateRequest req = MutateRequest.newBuilder()
+      .setRegion(region.toProtobuf())
+      .setMutation(toMutationProto())
+      .build();
+    return toChannelBuffer(MUTATE, req);
+  }
+
+  /** Serializes this request for HBase 0.94 and before.  */
+  private ChannelBuffer serializeOld(final byte server_version) {
     final ChannelBuffer buf = newBuffer(server_version,
                                         predictSerializedSize());
     buf.writeInt(2);  // Number of parameters.
@@ -546,6 +639,13 @@ public final class DeleteRequest extends BatchableRpc
     buf.writeInt(qualifiers.length);  // How many KeyValues for this family?
     serializePayload(buf);
     return buf;
+  }
+
+  @Override
+  Object deserialize(final ChannelBuffer buf, int cell_size) {
+    HBaseRpc.ensureNoCell(cell_size);
+    final MutateResponse resp = readProtobuf(buf, MutateResponse.PARSER);
+    return null;
   }
 
 }

@@ -28,6 +28,8 @@ package org.hbase.async;
 
 import org.jboss.netty.buffer.ChannelBuffer;
 
+import org.hbase.async.generated.FilterPB;
+
 /**
  * Sets a binary prefix to filter results based on the column qualifier.
  * <p>
@@ -64,12 +66,25 @@ public final class ColumnPrefixFilter extends ScanFilter {
   }
 
   @Override
+  byte[] serialize() {
+    return FilterPB.ColumnPrefixFilter.newBuilder()
+      .setPrefix(Bytes.wrap(prefix))
+      .build()
+      .toByteArray();
+  }
+
+  @Override
+  byte[] name() {
+    return NAME;
+  }
+
+  @Override
   int predictSerializedSize() {
     return 1 + NAME.length + 3 + prefix.length;
   }
 
   @Override
-  void serialize(final ChannelBuffer buf) {
+  void serializeOld(final ChannelBuffer buf) {
     buf.writeByte((byte) NAME.length);     // 1
     buf.writeBytes(NAME);                  // 49
     HBaseRpc.writeByteArray(buf, prefix);  // 3 + prefix.length

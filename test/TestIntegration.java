@@ -53,27 +53,43 @@ import org.junit.runner.Request;
 import org.junit.runner.Result;
 import org.junit.runner.notification.Failure;
 import org.junit.runner.notification.RunListener;
+import org.powermock.reflect.Whitebox;
 import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertNull;
 
 import com.stumbleupon.async.Callback;
-import com.stumbleupon.async.CallbackOverflowError;
 import com.stumbleupon.async.Deferred;
+import com.stumbleupon.async.DeferredGroupException;
 
 import org.hbase.async.AtomicIncrementRequest;
+import org.hbase.async.BinaryComparator;
+import org.hbase.async.BinaryPrefixComparator;
+import org.hbase.async.BitComparator;
 import org.hbase.async.Bytes;
 import org.hbase.async.ColumnPrefixFilter;
 import org.hbase.async.ColumnRangeFilter;
+import org.hbase.async.CompareFilter.CompareOp;
 import org.hbase.async.DeleteRequest;
+import org.hbase.async.DependentColumnFilter;
+import org.hbase.async.FamilyFilter;
 import org.hbase.async.FilterList;
 import org.hbase.async.GetRequest;
 import org.hbase.async.HBaseClient;
 import org.hbase.async.KeyRegexpFilter;
 import org.hbase.async.KeyValue;
+import org.hbase.async.NoSuchColumnFamilyException;
 import org.hbase.async.PutRequest;
+import org.hbase.async.QualifierFilter;
+import org.hbase.async.RegexStringComparator;
+import org.hbase.async.RowFilter;
 import org.hbase.async.ScanFilter;
 import org.hbase.async.Scanner;
+import org.hbase.async.SubstringComparator;
 import org.hbase.async.TableNotFoundException;
+import org.hbase.async.TimestampsFilter;
+import org.hbase.async.ValueFilter;
 
 import org.hbase.async.test.Common;
 
@@ -179,8 +195,7 @@ final public class TestIntegration {
     client.setFlushInterval(FAST_FLUSH);
     final double write_time = System.currentTimeMillis();
     final PutRequest put = new PutRequest(table, "k", family, "q", "val");
-    final GetRequest get = new GetRequest(table, "k")
-      .family(family).qualifier("q");
+    final GetRequest get = new GetRequest(table, "k", family, "q");
     client.put(put).join();
     final ArrayList<KeyValue> kvs = client.get(get).join();
     assertSizeIs(1, kvs);
@@ -198,8 +213,7 @@ final public class TestIntegration {
   public void putReadDeleteRead() throws Exception {
     client.setFlushInterval(FAST_FLUSH);
     final PutRequest put = new PutRequest(table, "k", family, "q", "val");
-    final GetRequest get = new GetRequest(table, "k")
-      .family(family).qualifier("q");
+    final GetRequest get = new GetRequest(table, "k", family, "q");
     client.put(put).join();
     final ArrayList<KeyValue> kvs = client.get(get).join();
     assertSizeIs(1, kvs);
@@ -208,6 +222,38 @@ final public class TestIntegration {
     client.delete(del).join();
     final ArrayList<KeyValue> kvs2 = client.get(get).join();
     assertSizeIs(0, kvs2);
+  }
+
+  /**
+   * Write two values to a HBase column and read them back,
+   * delete one, and read back the other.
+   */
+  @Test
+  public void putReadDeleteAtTimestamp() throws Exception {
+    client.setFlushInterval(FAST_FLUSH);
+    byte[] t = table.getBytes();
+    byte[] k = "kprd@ts".getBytes();
+    byte[] f = family.getBytes();
+    // Make the qualifier unique to avoid running into HBASE-9879.
+    byte[] q = ("q" + System.currentTimeMillis()
+                + "-" + System.nanoTime()).getBytes();
+    byte[] v1 = "val1".getBytes();
+    byte[] v2 = "val2".getBytes();
+    final PutRequest put1 = new PutRequest(t, k, f, q, v1, 100L);
+    final PutRequest put2 = new PutRequest(t, k, f, q, v2, 200L);
+    client.put(put1).join();
+    client.put(put2).join();
+    final GetRequest get = new GetRequest(t, k, f, q).maxVersions(2);
+    final ArrayList<KeyValue> kvs = client.get(get).join();
+    assertSizeIs(2, kvs);
+    assertEq("val2", kvs.get(0).value());
+    assertEq("val1", kvs.get(1).value());
+    final DeleteRequest del = new DeleteRequest(t, k, f, q, 200L);
+    del.setDeleteAtTimestampOnly(true);
+    client.delete(del).join();
+    final ArrayList<KeyValue> kvs2 = client.get(get).join();
+    assertSizeIs(1, kvs2);
+    assertEq("val1", kvs2.get(0).value());
   }
 
   /** Basic scan test. */
@@ -277,14 +323,120 @@ final public class TestIntegration {
     assertEq("val3", kvs.get(1).value());
   }
 
+  /** Write a few KVs and delete them in one batch */
+  @Test
+  public void multiDelete() throws Exception {
+    client.setFlushInterval(FAST_FLUSH);
+    final PutRequest put2 = new PutRequest(table, "mdk1", family, "q2", "val2");
+    client.put(put2).join();
+    final PutRequest put3 = new PutRequest(table, "mdk2", family, "q3", "val3");
+    client.put(put3).join();
+    final PutRequest put1 = new PutRequest(table, "mdk1", family, "q1", "val1");
+    client.put(put1).join();
+    final DeleteRequest del2 = new DeleteRequest(table, "mdk1", family, "q2");
+    final DeleteRequest del3 = new DeleteRequest(table, "mdk2", family, "q3");
+    final DeleteRequest del1 = new DeleteRequest(table, "mdk1", family, "q1");
+    Deferred.group(client.delete(del2), client.delete(del3),
+                   client.delete(del1)).join();
+    GetRequest get = new GetRequest(table, "mdk1");
+    ArrayList<KeyValue> kvs = client.get(get).join();
+    assertSizeIs(0, kvs);
+    get = new GetRequest(table, "mdk2");
+    kvs = client.get(get).join();
+    assertSizeIs(0, kvs);
+  }
+
+  /** Write a few KVs in different regions and delete them in one batch */
+  @Test
+  public void multiRegionMultiDelete() throws Exception {
+    client.setFlushInterval(FAST_FLUSH);
+    final String table1 = args[0] + "1";
+    final String table2 = args[0] + "2";
+    createOrTruncateTable(client, table1, family);
+    createOrTruncateTable(client, table2, family);
+    final PutRequest put2 = new PutRequest(table1, "mdk1", family, "q2", "val2");
+    client.put(put2).join();
+    final PutRequest put3 = new PutRequest(table1, "mdk2", family, "q3", "val3");
+    client.put(put3).join();
+    final PutRequest put1 = new PutRequest(table2, "mdk1", family, "q1", "val1");
+    client.put(put1).join();
+    final DeleteRequest del2 = new DeleteRequest(table1, "mdk1", family, "q2");
+    final DeleteRequest del3 = new DeleteRequest(table1, "mdk2", family, "q3");
+    final DeleteRequest del1 = new DeleteRequest(table2, "mdk1", family, "q1");
+    Deferred.group(client.delete(del2), client.delete(del3),
+                   client.delete(del1)).join();
+    GetRequest get = new GetRequest(table1, "mdk1");
+    ArrayList<KeyValue> kvs = client.get(get).join();
+    assertSizeIs(0, kvs);
+    get = new GetRequest(table1, "mdk2");
+    kvs = client.get(get).join();
+    assertSizeIs(0, kvs);
+    get = new GetRequest(table2, "mdk1");
+    kvs = client.get(get).join();
+    assertSizeIs(0, kvs);
+  }
+
+  /** Attempt to write a column family that doesn't exist. */
+  @Test
+  public void putNonexistentFamily() throws Exception {
+    client.setFlushInterval(FAST_FLUSH);
+    final PutRequest put = new PutRequest(table, "k", family + family,
+                                          "q", "val");
+    try {
+      client.put(put).join();
+    } catch (NoSuchColumnFamilyException e) {
+      assertEquals(put, e.getFailedRpc());
+      return;
+    }
+    throw new AssertionError("Should never be here");
+  }
+
+  /** Send a bunch of edits with one that references a non-existent family. */
+  @Test
+  public void multiPutWithOneBadRpcInBatch() throws Exception {
+    client.setFlushInterval(FAST_FLUSH);
+    final PutRequest put1 = new PutRequest(table, "mk1", family, "m1", "mpb1");
+    // The following edit is destined to a non-existent family.
+    final PutRequest put2 = new PutRequest(table, "mk2", family + family,
+                                           "m2", "mpb2");
+    final PutRequest put3 = new PutRequest(table, "mk3", family, "m3", "mpb3");
+    try {
+      final ArrayList<Deferred<Object>> ds = new ArrayList<Deferred<Object>>(3);
+      ds.add(client.put(put1));
+      ds.add(client.put(put2));
+      ds.add(client.put(put3));
+      Deferred.groupInOrder(ds).join();
+    } catch (DeferredGroupException e) {
+      final ArrayList<Object> results = e.results();
+      final Object res2 = results.get(1);
+      if (!(res2 instanceof NoSuchColumnFamilyException)) {
+        throw new AssertionError("res2 wasn't a NoSuchColumnFamilyException: "
+                                 + res2);
+      }
+      assertEquals(put2, ((NoSuchColumnFamilyException) res2).getFailedRpc());
+      final GetRequest get1 = new GetRequest(table, "mk1", family, "m1");
+      ArrayList<KeyValue> kvs = client.get(get1).join();
+      assertSizeIs(1, kvs);
+      assertEq("mpb1", kvs.get(0).value());
+      final GetRequest get2 = new GetRequest(table, "mk2", family, "m2");
+      assertSizeIs(0, client.get(get2).join());
+      final GetRequest get3 = new GetRequest(table, "mk3", family, "m3");
+      kvs = client.get(get3).join();
+      assertSizeIs(1, kvs);
+      assertEq("mpb3", kvs.get(0).value());
+      return;
+    }
+    throw new AssertionError("Should never be here");
+  }
+
   /** Lots of buffered counter increments from multiple threads. */
   @Test
   public void bufferedIncrementStressTest() throws Exception {
     client.setFlushInterval(FAST_FLUSH);
-    final byte[] table = this.table.getBytes();
+    final byte[] table = TestIntegration.table.getBytes();
     final byte[] key1 = "cnt1".getBytes();  // Spread the increments..
     final byte[] key2 = "cnt2".getBytes();  // .. over these two counters.
-    final byte[] family = this.family.getBytes();
+    final byte[] family = TestIntegration.family.getBytes();
     final byte[] qual = { 'q' };
     final DeleteRequest del1 = new DeleteRequest(table, key1, family, qual);
     final DeleteRequest del2 = new DeleteRequest(table, key2, family, qual);
@@ -354,9 +506,9 @@ final public class TestIntegration {
   @Test
   public void incrementCoalescingWithAmountsTooBig() throws Exception {
     client.setFlushInterval(SLOW_FLUSH);
-    final byte[] table = this.table.getBytes();
+    final byte[] table = TestIntegration.table.getBytes();
     final byte[] key = "cnt".getBytes();
-    final byte[] family = this.family.getBytes();
+    final byte[] family = TestIntegration.family.getBytes();
     final byte[] qual = { 'q' };
     final DeleteRequest del = new DeleteRequest(table, key, family, qual);
     del.setBufferable(false);
@@ -366,8 +518,8 @@ final public class TestIntegration {
       bufferIncrement(table, key, family, qual, big),
       bufferIncrement(table, key, family, qual, big)
     ).addCallbackDeferring(new Callback<Deferred<ArrayList<KeyValue>>,
-                                        ArrayList<Object>>() {
-      public Deferred<ArrayList<KeyValue>> call(final ArrayList<Object> incs) {
+                                        ArrayList<Long>>() {
+      public Deferred<ArrayList<KeyValue>> call(final ArrayList<Long> incs) {
         final GetRequest get = new GetRequest(table, key)
           .family(family).qualifier(qual);
         return client.get(get);
@@ -383,9 +535,9 @@ final public class TestIntegration {
   @Test
   public void incrementCoalescingWithOverflowingAmounts() throws Exception {
     client.setFlushInterval(SLOW_FLUSH);
-    final byte[] table = this.table.getBytes();
+    final byte[] table = TestIntegration.table.getBytes();
     final byte[] key = "cnt".getBytes();
-    final byte[] family = this.family.getBytes();
+    final byte[] family = TestIntegration.family.getBytes();
     final byte[] qual = { 'q' };
     final DeleteRequest del = new DeleteRequest(table, key, family, qual);
     del.setBufferable(false);
@@ -411,9 +563,9 @@ final public class TestIntegration {
   @Test
   public void incrementCoalescingWithUnderflowingAmounts() throws Exception {
     client.setFlushInterval(SLOW_FLUSH);
-    final byte[] table = this.table.getBytes();
+    final byte[] table = TestIntegration.table.getBytes();
     final byte[] key = "cnt".getBytes();
-    final byte[] family = this.family.getBytes();
+    final byte[] family = TestIntegration.family.getBytes();
     final byte[] qual = { 'q' };
     final DeleteRequest del = new DeleteRequest(table, key, family, qual);
     del.setBufferable(false);
@@ -439,13 +591,20 @@ final public class TestIntegration {
   @Test
   public void incrementCoalescingWithZeroSumAmount() throws Exception {
     client.setFlushInterval(SLOW_FLUSH);
-    final byte[] table = this.table.getBytes();
+    final byte[] table = TestIntegration.table.getBytes();
     final byte[] key = "cnt".getBytes();
-    final byte[] family = this.family.getBytes();
+    final byte[] family = TestIntegration.family.getBytes();
     final byte[] qual = { 'q' };
     final DeleteRequest del = new DeleteRequest(table, key, family, qual);
     del.setBufferable(false);
     client.delete(del).join();
+    // HBase 0.98 and up do not create a KV on atomic increment when the
+    // increment amount is 0.  So let's first send an increment of some
+    // arbitrary value, and then ensure that this value hasn't changed.
+    long n = client.atomicIncrement(new AtomicIncrementRequest(table, key,
+                                                               family, qual,
+                                                               42)).join();
+    assertEquals(42, n);
     bufferIncrement(table, key, family, qual, 1);
     bufferIncrement(table, key, family, qual, 2);
     bufferIncrement(table, key, family, qual, -3);
@@ -454,9 +613,11 @@ final public class TestIntegration {
       .family(family).qualifier(qual);
     final ArrayList<KeyValue> kvs = client.get(get).join();
     assertSizeIs(1, kvs);
-    assertEquals(0, Bytes.getLong(kvs.get(0).value()));
+    assertEquals(42, Bytes.getLong(kvs.get(0).value()));
     // The sum was 0, but must have sent the increment anyway.
-    assertEquals(1, client.stats().atomicIncrements());
+    // So in total we should have sent two increments, the initial one,
+    // that sets the value to 42, and the one incrementing by zero.
+    assertEquals(2, client.stats().atomicIncrements());
   }
 
   /** Helper method to create an atomic increment request.  */
@@ -556,6 +717,174 @@ final public class TestIntegration {
     assertEq("v3", kvs.get(0).value());
   }
 
+  @Test
+  public void filterComparators() throws Exception {
+    client.setFlushInterval(FAST_FLUSH);
+    final PutRequest put1 = new PutRequest(table, "fc1", family, "a", "v1");
+    final PutRequest put2 = new PutRequest(table, "fc2", family, "a", "v2");
+    final PutRequest put3 = new PutRequest(table, "fc3", family, "a", "v3");
+    Deferred.group(client.put(put1), client.put(put2), client.put(put3)).join();
+
+    final Scanner binary_scanner = client.newScanner(table);
+    binary_scanner.setStartKey("fc1");
+    binary_scanner.setStopKey("fc4");
+    binary_scanner.setFilter(
+        new RowFilter(CompareOp.LESS, new BinaryComparator(Bytes.UTF8("fc2"))));
+    final ArrayList<ArrayList<KeyValue>> binary_rows =
+        binary_scanner.nextRows().join();
+    assertSizeIs(1, binary_rows);
+    assertSizeIs(1, binary_rows.get(0));
+    assertEq("v1", binary_rows.get(0).get(0).value());
+
+    final Scanner prefix_scanner = client.newScanner(table);
+    prefix_scanner.setStartKey("fc1");
+    prefix_scanner.setStopKey("fc4");
+    prefix_scanner.setFilter(
+        new RowFilter(CompareOp.GREATER_OR_EQUAL,
+            new BinaryPrefixComparator(Bytes.UTF8("fc2"))));
+    final ArrayList<ArrayList<KeyValue>> prefix_rows =
+        prefix_scanner.nextRows().join();
+    assertSizeIs(2, prefix_rows);
+    assertSizeIs(1, prefix_rows.get(0));
+    assertEq("v2", prefix_rows.get(0).get(0).value());
+    assertSizeIs(1, prefix_rows.get(1));
+    assertEq("v3", prefix_rows.get(1).get(0).value());
+
+    final Scanner bit_scanner = client.newScanner(table);
+    bit_scanner.setStartKey("fc1");
+    bit_scanner.setStopKey("fc4");
+    bit_scanner.setFilter(
+        new RowFilter(CompareOp.EQUAL,
+            new BitComparator(Bytes.UTF8("fc2"), BitComparator.BitwiseOp.XOR)));
+    final ArrayList<ArrayList<KeyValue>> bit_rows =
+        bit_scanner.nextRows().join();
+    assertSizeIs(2, bit_rows);
+    assertSizeIs(1, bit_rows.get(0));
+    assertEq("v1", bit_rows.get(0).get(0).value());
+    assertSizeIs(1, bit_rows.get(1));
+    assertEq("v3", bit_rows.get(1).get(0).value());
+
+    final Scanner regex_scanner = client.newScanner(table);
+    regex_scanner.setStartKey("fc1");
+    regex_scanner.setStopKey("fc4");
+    regex_scanner.setFilter(
+        new RowFilter(CompareOp.EQUAL, new RegexStringComparator("fc2")));
+    final ArrayList<ArrayList<KeyValue>> regex_rows =
+        regex_scanner.nextRows().join();
+    assertSizeIs(1, regex_rows);
+    assertSizeIs(1, regex_rows.get(0));
+    assertEq("v2", regex_rows.get(0).get(0).value());
+
+    final Scanner substring_scanner = client.newScanner(table);
+    substring_scanner.setStartKey("fc1");
+    substring_scanner.setStopKey("fc4");
+    substring_scanner.setFilter(
+        new RowFilter(CompareOp.EQUAL, new SubstringComparator("2")));
+    final ArrayList<ArrayList<KeyValue>> substring_rows =
+        substring_scanner.nextRows().join();
+    assertSizeIs(1, substring_rows);
+    assertSizeIs(1, substring_rows.get(0));
+    assertEq("v2", substring_rows.get(0).get(0).value());
+  }
+
+  @Test
+  public void compareFilters() throws Exception {
+    client.setFlushInterval(FAST_FLUSH);
+    final PutRequest put1 = new PutRequest(table, "cf1", family, "a", "v1");
+    final PutRequest put2 = new PutRequest(table, "cf2", family, "b", "v2");
+    final PutRequest put3 = new PutRequest(
+        Bytes.UTF8(table),
+        Bytes.UTF8("cf3"),
+        Bytes.UTF8(family),
+        Bytes.UTF8("c"),
+        Bytes.UTF8("v3"),
+        42);
+    final PutRequest put4 = new PutRequest(
+        Bytes.UTF8(table),
+        Bytes.UTF8("cf3"),
+        Bytes.UTF8(family),
+        Bytes.UTF8("dep"),
+        Bytes.UTF8("v4"),
+        42);
+    Deferred.group(
+        Deferred.group(client.put(put1), client.put(put2)),
+        Deferred.group(client.put(put3), client.put(put4))).join();
+
+    final Scanner row_scanner = client.newScanner(table);
+    row_scanner.setStartKey("cf1");
+    row_scanner.setStopKey("cf4");
+    row_scanner.setFilter(
+        new RowFilter(CompareOp.NOT_EQUAL, new BinaryComparator(Bytes.UTF8("cf2"))));
+    final ArrayList<ArrayList<KeyValue>> row_rows =
+        row_scanner.nextRows().join();
+    assertSizeIs(2, row_rows);
+    assertSizeIs(1, row_rows.get(0));
+    assertEq("v1", row_rows.get(0).get(0).value());
+    assertSizeIs(2, row_rows.get(1));
+    assertEq("v3", row_rows.get(1).get(0).value());
+    assertEq("v4", row_rows.get(1).get(1).value());
+
+    final Scanner family_scanner = client.newScanner(table);
+    family_scanner.setFilter(
+        new FamilyFilter(CompareOp.LESS_OR_EQUAL,
+            new BinaryComparator(Bytes.UTF8("aSomeOtherFamily"))));
+    final ArrayList<ArrayList<KeyValue>> family_rows =
+        family_scanner.nextRows().join();
+    assertNull(family_rows);
+
+    final Scanner qualifier_scanner = client.newScanner(table);
+    qualifier_scanner.setStartKey("cf1");
+    qualifier_scanner.setStopKey("cf4");
+    qualifier_scanner.setFilter(
+        new QualifierFilter(CompareOp.GREATER,
+            new BinaryComparator(Bytes.UTF8("b"))));
+    final ArrayList<ArrayList<KeyValue>> qualifier_rows =
+        qualifier_scanner.nextRows().join();
+    assertSizeIs(1, qualifier_rows);
+    assertSizeIs(2, qualifier_rows.get(0));
+    assertEq("v3", qualifier_rows.get(0).get(0).value());
+    assertEq("v4", qualifier_rows.get(0).get(1).value());
+
+    final Scanner value_scanner = client.newScanner(table);
+    value_scanner.setStartKey("cf1");
+    value_scanner.setStopKey("cf4");
+    value_scanner.setFilter(
+        new ValueFilter(CompareOp.GREATER_OR_EQUAL,
+            new BinaryComparator(Bytes.UTF8("v3"))));
+    final ArrayList<ArrayList<KeyValue>> value_rows =
+        value_scanner.nextRows().join();
+    assertSizeIs(1, value_rows);
+    assertSizeIs(2, value_rows.get(0));
+    assertEq("v3", value_rows.get(0).get(0).value());
+    assertEq("v4", value_rows.get(0).get(1).value());
+
+    final Scanner dependent_scanner = client.newScanner(table);
+    dependent_scanner.setMaxNumKeyValues(-1);
+    dependent_scanner.setFilter(
+        new DependentColumnFilter(Bytes.UTF8(family), Bytes.UTF8("dep")));
+    final ArrayList<ArrayList<KeyValue>> dependent_rows =
+        dependent_scanner.nextRows().join();
+    assertSizeIs(1, dependent_rows);
+    assertSizeIs(2, dependent_rows.get(0));
+    assertEq("v3", dependent_rows.get(0).get(0).value());
+    assertEq("v4", dependent_rows.get(0).get(1).value());
+
+    final Scanner dependent_value_scanner = client.newScanner(table);
+    dependent_value_scanner.setMaxNumKeyValues(-1);
+    dependent_value_scanner.setFilter(
+        new DependentColumnFilter(
+            Bytes.UTF8(family),
+            Bytes.UTF8("dep"),
+            true,
+            CompareOp.EQUAL,
+            new BinaryComparator(Bytes.UTF8("v4"))));
+    final ArrayList<ArrayList<KeyValue>> dependent_value_rows =
+        dependent_value_scanner.nextRows().join();
+    assertSizeIs(1, dependent_value_rows);
+    assertSizeIs(1, dependent_value_rows.get(0));
+    assertEq("v3", dependent_value_rows.get(0).get(0).value());
+  }
+
   /** Simple column filter list tests.  */
   @Test
   public void filterList() throws Exception {
@@ -595,6 +924,45 @@ final public class TestIntegration {
     kvs = rows.get(1);
     assertSizeIs(1, kvs);   // KV from "fl2":
     assertEq("v4", kvs.get(0).value());
+  }
+
+  /** Simple timestamps filter list tests.  */
+  @Test
+  public void timestampsFilter() throws Exception {
+    client.setFlushInterval(FAST_FLUSH);
+    final byte[] tableBytes = Bytes.UTF8(table);
+    final byte[] familyBytes = Bytes.UTF8(family);
+    final byte[] qualifier = Bytes.UTF8("q");
+    final PutRequest put1 =
+      new PutRequest(tableBytes, Bytes.UTF8("tf1"), familyBytes, qualifier, Bytes.UTF8("v1"), 1L);
+    final PutRequest put2 =
+      new PutRequest(tableBytes, Bytes.UTF8("tf2"), familyBytes, qualifier, Bytes.UTF8("v2"), 2L);
+    final PutRequest put3 =
+      new PutRequest(tableBytes, Bytes.UTF8("tf3"), familyBytes, qualifier, Bytes.UTF8("v3"), 3L);
+    Deferred.group(client.put(put1), client.put(put2), client.put(put3)).join();
+    final Scanner scanner = client.newScanner(table);
+    scanner.setFamily(family);
+    scanner.setStartKey(Bytes.UTF8("tf"));
+    scanner.setStopKey(Bytes.UTF8("tf4"));
+    scanner.setFilter(new TimestampsFilter(1L, 3L));
+    final ArrayList<ArrayList<KeyValue>> rows = scanner.nextRows().join();
+    assertSizeIs(2, rows);
+    assertSizeIs(1, rows.get(0));
+    assertEq("v1", rows.get(0).get(0).value());
+    assertSizeIs(1, rows.get(1));
+    assertEq("v3", rows.get(1).get(0).value());
+  }
+
+  @Test
+  public void prefetchMeta() throws Exception {
+    // Prefetch the metadata for a given table, then invasively probe the
+    // region cache to demonstrate it is filled.
+    client.prefetchMeta(table).join();
+
+    Object region_info = Whitebox.invokeMethod(client, "getRegion",
+                                               table.getBytes(),
+                                               HBaseClient.EMPTY_ARRAY);
+    assertNotNull(region_info);
   }
 
   /** Regression test for issue #2. */
@@ -649,7 +1017,7 @@ final public class TestIntegration {
     // long key below.
     client.ensureTableFamilyExists(table, family).join();
     client.setFlushInterval(FAST_FLUSH);
-    final byte[] table = this.table.getBytes();
+    final byte[] table = TestIntegration.table.getBytes();
     // 980 was empirically found to be the minimum size with which
     // Netty bug #474 gets triggered.  Bug got fixed in Netty 3.5.8.
     final byte[] key = new byte[980];
@@ -657,7 +1025,7 @@ final public class TestIntegration {
     key[1] = '4';
     key[2] = '0';
     key[key.length - 1] = '*';
-    final byte[] family = this.family.getBytes();
+    final byte[] family = TestIntegration.family.getBytes();
     final byte[] qual = { 'q' };
     final PutRequest put = new PutRequest(table, key, family, qual,
                                           new byte[0] /* empty */);
@@ -674,9 +1042,9 @@ final public class TestIntegration {
   @Test
   public void regression41() throws Exception {
     client.setFlushInterval(SLOW_FLUSH);
-    final byte[] table = this.table.getBytes();
+    final byte[] table = TestIntegration.table.getBytes();
     final byte[] key = "cnt".getBytes();
-    final byte[] family = this.family.getBytes();
+    final byte[] family = TestIntegration.family.getBytes();
     final byte[] qual = { 'q' };
     final DeleteRequest del = new DeleteRequest(table, key, family, qual);
     del.setBufferable(false);

@@ -26,6 +26,7 @@
  */
 package org.hbase.async;
 
+import java.io.IOException;
 import java.net.SocketAddress;
 import java.util.ArrayList;
 import java.util.Collection;
@@ -35,6 +36,8 @@ import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.atomic.AtomicInteger;
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
+
+import com.google.protobuf.CodedOutputStream;
 
 import org.jboss.netty.buffer.ChannelBuffer;
 import org.jboss.netty.buffer.ChannelBuffers;
@@ -56,6 +59,10 @@ import org.slf4j.LoggerFactory;
 
 import com.stumbleupon.async.Callback;
 import com.stumbleupon.async.Deferred;
+
+import org.hbase.async.generated.ClientPB;
+import org.hbase.async.generated.HBasePB;
+import org.hbase.async.generated.RPCPB;
 
 /**
  * Stateful handler that manages a connection to a specific RegionServer.
@@ -91,6 +98,8 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
                                new NoSuchColumnFamilyException(null, null));
     REMOTE_EXCEPTION_TYPES.put(NotServingRegionException.REMOTE_CLASS,
                                new NotServingRegionException(null, null));
+    REMOTE_EXCEPTION_TYPES.put(RegionMovedException.REMOTE_CLASS,
+                               new RegionMovedException(null, null));
     REMOTE_EXCEPTION_TYPES.put(UnknownScannerException.REMOTE_CLASS,
                                new UnknownScannerException(null, null));
     REMOTE_EXCEPTION_TYPES.put(UnknownRowLockException.REMOTE_CLASS,
@@ -105,8 +114,16 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
   /** Protocol version we pretend to use for HBase 0.90 and before.  */
   static final byte SERVER_VERSION_090_AND_BEFORE = 24;
 
-  /** We know at least that the server uses 0.92 or above.  */
+  /** We know at that the server runs 0.92 to 0.94.  */
   static final byte SERVER_VERSION_092_OR_ABOVE = 29;
+
+  /**
+   * This is a made-up value for HBase 0.95 and above.
+   * As of 0.95 there is no longer a protocol version, because everything
+   * switched to Protocol Buffers.  Internally we use this made-up value
+   * to refer to the post-protobuf era.
+   */
+  static final byte SERVER_VERSION_095_OR_ABOVE = 95;
 
   /** The HBase client we belong to.  */
   private final HBaseClient hbase_client;
@@ -261,7 +278,11 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
         adj >>>= 2;  // Reduce the adjustment to not be too far off `interval'.
       }
       if ((adj & 0x10) == 0x10) {  // if some arbitrary bit is set...
-        adj = (short) -adj;        // ... use a negative adjustment instead.
+        if (adj < interval) {
+          adj = (short) -adj;      // ... use a negative adjustment instead.
+        } else {
+          adj = (short) (interval / -2);
+        }
       }
       hbase_client.newTimeout(flush_timer, interval + adj);
     }
@@ -458,10 +479,16 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
     'V', 'e', 'r', 's', 'i', 'o', 'n'
   };
 
+  /**
+   * RPC used to discover the exact protocol version spoken by the server.
+   * Not exposed as part of the public API, and only used when talking to
+   * HBase 0.94.x and earlier.
+   */
   private final static class GetProtocolVersionRequest extends HBaseRpc {
 
-    GetProtocolVersionRequest() {
-      super(GET_PROTOCOL_VERSION);
+    @Override
+    byte[] method(final byte unused_server_version) {
+      return GET_PROTOCOL_VERSION;
     }
 
     ChannelBuffer serialize(final byte server_version) {
@@ -479,6 +506,12 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
                      ?  SERVER_VERSION_090_AND_BEFORE : server_version);
       return buf;
     }
+
+    @Override
+    Object deserialize(final ChannelBuffer buf, final int cell_size) {
+      throw new AssertionError("Should never be here.");
+    }
+
   };
 
   /** Callback to handle responses of getProtocolVersion RPCs.  */
@@ -518,11 +551,7 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
         throw new InvalidResponseException("getProtocolVersion returned a "
           + (v <= 0 ? "negative" : "too large") + " value", version);
       }
-      server_version = (byte) v;
-      // The following line will make this client no longer queue incoming
-      // RPCs, as we're now ready to communicate with the server.
-      RegionClient.this.chan = this.chan;  // Volatile write.
-      sendQueuedRpcs();
+      becomeReady(chan, (byte) v);
       return version;
     }
 
@@ -532,12 +561,25 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
 
   }
 
+  private void becomeReady(final Channel chan, final byte server_version) {
+    this.server_version = server_version;
+    // The following line will make this client no longer queue incoming
+    // RPCs, as we're now ready to communicate with the server.
+    this.chan = chan;  // Volatile write.
+    sendQueuedRpcs();
+  }
+
   private static final byte[] GET_CLOSEST_ROW_BEFORE = new byte[] {
     'g', 'e', 't',
     'C', 'l', 'o', 's', 'e', 's', 't',
     'R', 'o', 'w',
     'B', 'e', 'f', 'o', 'r', 'e'
   };
+
+  /** Piece of protobuf to specify the family during META lookups.  */
+  private static final ClientPB.Column FAM_INFO = ClientPB.Column.newBuilder()
+          .setFamily(Bytes.wrap(HBaseClient.INFO))
+          .build();
 
   /**
    * Attempts to acquire a permit before performing a META lookup.
@@ -594,11 +636,41 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
                                                       final byte[] family) {
     final class GetClosestRowBefore extends HBaseRpc {
       GetClosestRowBefore() {
-        super(GET_CLOSEST_ROW_BEFORE, tabl, row);
+        super(tabl, row);
+      }
+
+      @Override
+      byte[] method(final byte server_version) {
+        return server_version >= SERVER_VERSION_095_OR_ABOVE
+          ? GetRequest.GGET : GET_CLOSEST_ROW_BEFORE;
+      }
+
+      @Override
+      Object deserialize(final ChannelBuffer buf, final int cell_size) {
+        assert cell_size == 0 : "cell_size=" + cell_size;
+        final ClientPB.GetResponse resp =
+          readProtobuf(buf, ClientPB.GetResponse.PARSER);
+        return GetRequest.extractResponse(resp, buf, cell_size);
       }
 
       @Override
       ChannelBuffer serialize(final byte server_version) {
+        if (server_version < SERVER_VERSION_095_OR_ABOVE) {
+          return serializeOld(server_version);
+        }
+        final ClientPB.Get getpb = ClientPB.Get.newBuilder()
+          .setRow(Bytes.wrap(row))
+          .addColumn(FAM_INFO)  // Fetch from one family only.
+          .setClosestRowBefore(true)
+          .build();
+        final ClientPB.GetRequest get = ClientPB.GetRequest.newBuilder()
+          .setRegion(region.toProtobuf())
+          .setGet(getpb)
+          .build();
+        return toChannelBuffer(GetRequest.GGET, get);
+      }
+
+      private ChannelBuffer serializeOld(final byte server_version) {
         // region.length and row.length will use at most a 3-byte VLong.
         // This is because VLong wastes 1 byte of meta-data + 2 bytes of
         // payload.  HBase's own KeyValue code uses a short to store the row
@@ -661,7 +733,7 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
 
     synchronized (this) {
       if (batched_rpcs == null) {
-        batched_rpcs = new MultiAction(server_version);
+        batched_rpcs = new MultiAction();
         addMultiActionCallbacks(batched_rpcs);
         schedule_flush = true;
       }
@@ -674,7 +746,7 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
       } else {
         // Execute the edits buffered so far.  But first we must clear
         // the reference to the buffer we're about to send to HBase.
-        batched_rpcs = new MultiAction(server_version);
+        batched_rpcs = new MultiAction();
         addMultiActionCallbacks(batched_rpcs);
       }
     }
@@ -897,7 +969,12 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
                                final ChannelStateEvent e) {
     final Channel chan = e.getChannel();
     final ChannelBuffer header;
-    if (System.getProperty("org.hbase.async.cdh3b3") != null) {
+    if (!hbase_client.has_root) {
+      header = header095();
+      Channels.write(chan, header);
+      becomeReady(chan, SERVER_VERSION_095_OR_ABOVE);
+      return;
+    } else if (System.getProperty("org.hbase.async.cdh3b3") != null) {
       header = headerCDH3b3();
     } else {
       header = header090();
@@ -919,13 +996,8 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
     }
     if (rpcs != null) {
       for (final HBaseRpc rpc : rpcs) {
-        if (chan != null) {
-          LOG.debug("Executing RPC queued: {}", rpc);
-          final ChannelBuffer serialized = encode(rpc);
-          if (serialized != null) {
-            Channels.write(chan, serialized);
-          }
-        }
+        LOG.debug("Executing RPC queued: {}", rpc);
+        sendRpc(rpc);
       }
     }
   }
@@ -1023,7 +1095,9 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
       LOG.error("Unexpected exception from downstream on " + c, e);
     }
     if (c.isOpen()) {
-      Channels.close(c);
+      Channels.close(c);  // Will trigger channelClosed(), which will cleanup()
+    } else {              // else: presumably a connection timeout.
+      cleanup(c);         // => need to cleanup() from here directly.
     }
   }
 
@@ -1075,8 +1149,41 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
       // automatically by HBaseRpc#newBuffer.  If someone creates their own
       // buffer without this extra space at the beginning, we're going to
       // corrupt the RPC at this point.
-      final byte[] method = rpc.method();
-      if (server_version >= SERVER_VERSION_092_OR_ABOVE) {
+      final byte[] method = rpc.method(server_version);
+      if (server_version >= SERVER_VERSION_095_OR_ABOVE) {
+        final RPCPB.RequestHeader header = RPCPB.RequestHeader.newBuilder()
+          .setCallId(rpcid)                        // 1 + 1-to-5 bytes (vint)
+          .setMethodNameBytes(Bytes.wrap(method))  // 1 + 1 + N bytes
+          .setRequestParam(true)                   // 1 + 1 bytes
+          .build();
+        final int pblen = header.getSerializedSize();
+        // In HBaseRpc.newBuffer() we reserved 19 bytes for the RPC header
+        // (without counting the leading 4 bytes for the overall size).
+        // Here the size is variable due to the nature of the protobuf
+        // encoding, but the expected absolute maximum size is 17 bytes
+        // if we ignore the method name.  So we have to offset the header
+        // by 2 to 13 bytes typically.  Note that the "-1" is for the varint
+        // that's at the beginning of the header that indicates how long the
+        // header itself is.
+        final int offset = 19 + method.length - pblen - 1;
+        assert offset >= 0 : ("RPC header too big (" + pblen + " bytes): "
+                              + header);
+        // Skip the few extraneous bytes we over-allocated for the header.
+        payload.readerIndex(offset);
+        // The first int is the size of the message, excluding the 4 bytes
+        // needed for the size itself, hence the `-4'.
+        payload.setInt(offset, payload.readableBytes() - 4); // 4 bytes
+        try {
+          final CodedOutputStream output =
+            CodedOutputStream.newInstance(payload.array(), 4 + offset,
+                                          1 + pblen);
+          output.writeRawByte(pblen);  // varint but always on 1 byte here.
+          header.writeTo(output);
+          output.checkNoSpaceLeft();
+        } catch (IOException e) {
+          throw new RuntimeException("Should never happen", e);
+        }
+      } else if (server_version >= SERVER_VERSION_092_OR_ABOVE) {
         // The first int is the size of the message, excluding the 4 bytes
         // needed for the size itself, hence the `-4'.
         payload.setInt(0, payload.readableBytes() - 4); // 4 bytes
@@ -1113,7 +1220,7 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
     // fewer, bigger TCP packets, and make better use of the network.
 
     if (LOG.isDebugEnabled()) {
-      LOG.debug("Sending RPC #" + rpcid + ", payload=" + payload + ' '
+      LOG.debug(chan + " Sending RPC #" + rpcid + ", payload=" + payload + ' '
                 + Bytes.pretty(payload));
     }
     {
@@ -1148,18 +1255,28 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
                           final Channel chan,
                           final ChannelBuffer buf,
                           final VoidEnum unused) {
-    final int rdx = buf.readerIndex();
     final long start = System.nanoTime();
+    final int rdx = buf.readerIndex();
     LOG.debug("------------------>> ENTERING DECODE >>------------------");
-    final int rpcid = buf.readInt();
-    final Object decoded = deserialize(buf, rpcid);
-    final HBaseRpc rpc = rpcs_inflight.remove(rpcid);
-    if (LOG.isDebugEnabled()) {
-      LOG.debug("rpcid=" + rpcid
-                + ", response size=" + (buf.readerIndex() - rdx) + " bytes"
-                + ", " + actualReadableBytes() + " readable bytes left"
-                + ", rpc=" + rpc);
+    final int rpcid;
+    final RPCPB.ResponseHeader header;
+    if (server_version >= SERVER_VERSION_095_OR_ABOVE) {
+      final int size = buf.readInt();
+      ensureReadable(buf, size);
+      HBaseRpc.checkArrayLength(buf, size);
+      header = HBaseRpc.readProtobuf(buf, RPCPB.ResponseHeader.PARSER);
+      if (!header.hasCallId()) {
+        final String msg = "RPC response (size: " + size + ") doesn't"
+          + " have a call ID: " + header + ", buf=" + Bytes.pretty(buf);
+        throw new NonRecoverableException(msg);
+      }
+      rpcid = header.getCallId();
+    } else {  // HBase 0.94 and before.
+      header = null;  // No protobuf back then.
+      rpcid = buf.readInt();
     }
+
+    final HBaseRpc rpc = rpcs_inflight.get(rpcid);
 
     if (rpc == null) {
       final String msg = "Invalid rpcid: " + rpcid + " found in "
@@ -1173,13 +1290,60 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
       // exception handler where we'll close this channel, which will cause
       // all RPCs in flight to be failed.
       throw new NonRecoverableException(msg);
-    } else if (decoded instanceof NotServingRegionException
-               && rpc.getRegion() != null) {
+    }
+
+    final Object decoded;
+    try {
+      if (server_version >= SERVER_VERSION_095_OR_ABOVE) {
+        if (header.hasException()) {
+          decoded = decodeException(rpc, header.getException());
+        } else {
+          final int cell_size;
+          {
+            final RPCPB.CellBlockMeta cellblock = header.getCellBlockMeta();
+            if (cellblock == null) {
+              cell_size = 0;
+            } else {
+              cell_size = cellblock.getLength();
+              HBaseRpc.checkArrayLength(buf, cell_size);
+            }
+          }
+          decoded = rpc.deserialize(buf, cell_size);
+        }
+      } else {  // HBase 0.94 and before.
+        decoded = deserialize(buf, rpc);
+      }
+    } catch (RuntimeException e) {
+      final String msg = "Uncaught error during de-serialization of " + rpc
+        + ", rpcid=" + rpcid;
+      LOG.error(msg);
+      if (!(e instanceof HBaseException)) {
+        e = new NonRecoverableException(msg, e);
+      }
+      rpc.callback(e);
+      throw e;
+    }
+
+    if (LOG.isDebugEnabled()) {
+      LOG.debug("rpcid=" + rpcid
+                + ", response size=" + (buf.readerIndex() - rdx) + " bytes"
+                + ", " + actualReadableBytes() + " readable bytes left"
+                + ", rpc=" + rpc);
+    }
+
+    {
+      final HBaseRpc removed = rpcs_inflight.remove(rpcid);
+      assert rpc == removed;
+    }
+
+    if ((decoded instanceof NotServingRegionException ||
+         decoded instanceof RegionMovedException)
+        && rpc.getRegion() != null) {
       // We only handle NSREs for RPCs targeted at a specific region, because
       // if we don't know which region caused the NSRE (e.g. during multiPut)
       // we can't do anything about it.
       hbase_client.handleNSRE(rpc, rpc.getRegion().name(),
-                              (NotServingRegionException) decoded);
+                              (RecoverableException) decoded);
       return null;
     }
 
@@ -1197,14 +1361,27 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
   }
 
   /**
+   * Ensures that at least a {@code nbytes} are readable from the given buffer.
+   * If there aren't enough bytes in the buffer this will raise an exception
+   * and cause the {@link ReplayingDecoder} to undo whatever we did thus far
+   * so we can wait until we read more from the socket.
+   * @param buf Buffer to check.
+   * @param nbytes Number of bytes desired.
+   */
+  private static void ensureReadable(final ChannelBuffer buf, final int nbytes) {
+    buf.markReaderIndex();
+    buf.skipBytes(nbytes);
+    buf.resetReaderIndex();
+  }
+
+  /**
    * De-serializes an RPC response.
    * @param buf The buffer from which to de-serialize the response.
-   * @param rpcid The ID of the RPC for which we're de-serializing the
-   * response.
+   * @param rpc The RPC for which we're de-serializing the response.
    * @return The de-serialized RPC response (which can be {@code null}
    * or an exception).
    */
-  private Object deserialize(final ChannelBuffer buf, final int rpcid) {
+  private Object deserialize(final ChannelBuffer buf, final HBaseRpc rpc) {
     // The 1st byte of the payload contains flags:
     //   0x00  Old style success (prior 0.92).
     //   0x01  RPC failed with an exception.
@@ -1221,15 +1398,12 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
         // Make sure we have that many bytes readable.
         // This will have to change to be able to do streaming RPCs where we
         // deserialize parts of the response as it comes off the wire.
-        buf.markReaderIndex();
-        buf.skipBytes(length);
-        buf.resetReaderIndex();
+        ensureReadable(buf, length);
       } catch (IllegalArgumentException e) {
         LOG.error("WTF?  RPC #" + rpcid + ": ", e);
       }
     }
 
-    final HBaseRpc rpc = rpcs_inflight.get(rpcid);
     if ((flags & HBaseRpc.RPC_ERROR) != 0) {
       return deserializeException(buf, rpc);
     }
@@ -1241,7 +1415,7 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
   }
 
   /**
-   * De-serializes an exception.
+   * De-serializes an exception from HBase 0.94 and before.
    * @param buf The buffer to read from.
    * @param request The RPC that caused this exception.
    */
@@ -1252,12 +1426,62 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
     // exception, the 2nd is the message and stack trace.
     final String type = HBaseRpc.readHadoopString(buf);
     final String msg = HBaseRpc.readHadoopString(buf);
+    return makeException(request, type, msg);
+  }
+
+  /**
+   * Creates an appropriate {@link HBaseException} for the given type.
+   * When we de-serialize an exception from the wire, we're given a string as
+   * a class name, which we use here to map to an appropriate subclass of
+   * {@link HBaseException}, for which we create an instance that we return.
+   * @param request The RPC in response of which the exception was received.
+   * @param type The fully qualified class name of the exception type from
+   * HBase's own code.
+   * @param msg Some arbitrary additional string that accompanies the
+   * exception, typically carrying a stringified stack trace.
+   */
+  private static final HBaseException makeException(final HBaseRpc request,
+                                                    final String type,
+                                                    final String msg) {
     final HBaseException exc = REMOTE_EXCEPTION_TYPES.get(type);
     if (exc != null) {
       return exc.make(msg, request);
     } else {
       return new RemoteException(type, msg);
     }
+  }
+
+  /**
+   * Decodes an exception from HBase 0.95 and up.
+   * @param e the exception protobuf obtained from the RPC response header
+   * containing the exception.
+   */
+  private
+    static HBaseException decodeException(final HBaseRpc request,
+                                          final RPCPB.ExceptionResponse e) {
+    final String type;
+    if (e.hasExceptionClassName()) {
+      type = e.getExceptionClassName();
+    } else {
+      type = "(missing exception type)";  // Shouldn't happen.
+    }
+    return makeException(request, type, e.getStackTrace());
+  }
+
+  /**
+   * Decodes an exception from HBase 0.95 and up {@link HBasePB.NameBytesPair}.
+   * @param pair A pair whose name is the exception type, and whose value is
+   * the stringified stack trace.
+   */
+  static HBaseException decodeExceptionPair(final HBaseRpc request,
+                                            final HBasePB.NameBytesPair pair) {
+    final String stacktrace;
+    if (pair.hasValue()) {
+      stacktrace = pair.getValue().toStringUtf8();
+    } else {
+      stacktrace = "(missing server-side stack trace)";  // Shouldn't happen.
+    }
+    return makeException(request, pair.getName(), stacktrace);
   }
 
   /**
@@ -1294,6 +1518,34 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
   }
 
   /**
+   * Pre-computes how many KVs we have so we can rightsized arrays.
+   * This assumes that what's coming next in the buffer is a sequence of
+   * KeyValues, each of which is prefixed by its length on 32 bits.
+   * @param buf The buffer to peek into.
+   * @param length The total size of all the KeyValues that follow.
+   */
+  static int numberOfKeyValuesAhead(final ChannelBuffer buf, int length) {
+    // Immediately try to "fault" if `length' bytes aren't available.
+    ensureReadable(buf, length);
+    int num_kv = 0;
+    int offset = buf.readerIndex();
+    length += offset;
+    while (offset < length) {
+      final int kv_length = buf.getInt(offset);
+      HBaseRpc.checkArrayLength(buf, kv_length);
+      num_kv++;
+      offset += kv_length + 4;
+    }
+    if (offset != length) {
+      final int index = buf.readerIndex();
+      badResponse("We wanted read " + (length - index)
+                  + " bytes but we read " + (offset - index)
+                  + " from " + buf + '=' + Bytes.pretty(buf));
+    }
+    return num_kv;
+  }
+
+  /**
    * De-serializes an {@code hbase.client.Result} object.
    * @param buf The buffer that contains a serialized {@code Result}.
    * @return The result parsed into a list of {@link KeyValue} objects.
@@ -1301,25 +1553,9 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
   private static ArrayList<KeyValue> parseResult(final ChannelBuffer buf) {
     final int length = buf.readInt();
     HBaseRpc.checkArrayLength(buf, length);
-    // Immediately try to "fault" if `length' bytes aren't available.
-    buf.markReaderIndex();
-    buf.skipBytes(length);
-    buf.resetReaderIndex();
     //LOG.debug("total Result response length={}", length);
 
-    // Pre-compute how many KVs we have so the array below will be rightsized.
-    int num_kv = 0;
-    {
-      int bytes_read = 0;
-      while (bytes_read < length) {
-        final int kv_length = buf.readInt();
-        HBaseRpc.checkArrayLength(buf, kv_length);
-        num_kv++;
-        bytes_read += kv_length + 4;
-        buf.skipBytes(kv_length);
-      }
-      buf.resetReaderIndex();
-    }
+    final int num_kv = numberOfKeyValuesAhead(buf, length);
 
     final ArrayList<KeyValue> results = new ArrayList<KeyValue>(num_kv);
     KeyValue kv = null;
@@ -1364,9 +1600,7 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
     final int length = buf.readInt();  // Guaranteed > 0 as we have > 0 Result.
     HBaseRpc.checkNonEmptyArrayLength(buf, length);
     // Immediately try to "fault" if `length' bytes aren't available.
-    buf.markReaderIndex();
-    buf.skipBytes(length);
-    buf.resetReaderIndex();
+    ensureReadable(buf, length);
     //LOG.debug("total Result[] response length={}", length);
     //LOG.debug("Result[] "+nresults+" buf="+buf+'='+Bytes.pretty(buf));
 
@@ -1473,8 +1707,17 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
   // Dealing with the handshake at the beginning. //
   // -------------------------------------------- //
 
-  /** Initial part of the header.  */
+  /** Initial part of the header until 0.94.  */
   private final static byte[] HRPC3 = new byte[] { 'h', 'r', 'p', 'c', 3 };
+
+  /** Authentication method (for HBase 0.95 and up). */
+  private final static byte SIMPLE_AUTH = (byte) 0x50;
+
+  /** Initial part of the header for 0.95 and up.  */
+  private final static byte[] HBASE = new byte[] { 'H', 'B', 'a', 's',
+                                                   0,     // RPC version.
+                                                   SIMPLE_AUTH,
+                                                   };
 
   /** Common part of the hello header: magic + version.  */
   private ChannelBuffer commonHeader(final byte[] buf, final byte[] hrpc) {
@@ -1484,11 +1727,39 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
     // Magic header.  See HBaseClient#writeHeader
     // "hrpc" followed by the version.
     // See HBaseServer#HEADER and HBaseServer#CURRENT_VERSION.
-    header.writeBytes(hrpc);  // 4 + 1
+    header.writeBytes(hrpc);  // for 0.94 and earlier: 4 + 1. For 0.95+: 4 + 2
     return header;
   }
 
-  /** Hello header for HBase 0.92 and later.  */
+  /** Hello header for HBase 0.95 and later.  */
+  private ChannelBuffer header095() {
+    final RPCPB.UserInformation user = RPCPB.UserInformation.newBuilder()
+      .setEffectiveUser(System.getProperty("user.name", "asynchbase"))
+      .build();
+    final RPCPB.ConnectionHeader pb = RPCPB.ConnectionHeader.newBuilder()
+      .setUserInfo(user)
+      .setServiceName("ClientService")
+      .setCellBlockCodecClass("org.apache.hadoop.hbase.codec.KeyValueCodec")
+      .build();
+    final int pblen = pb.getSerializedSize();
+    final byte[] buf = new byte[HBASE.length + 4 + pblen];
+    final ChannelBuffer header = commonHeader(buf, HBASE);
+    header.writeInt(pblen);  // 4 bytes
+    try {
+      final CodedOutputStream output =
+        CodedOutputStream.newInstance(buf, HBASE.length + 4, pblen);
+      pb.writeTo(output);
+      output.checkNoSpaceLeft();
+    } catch (IOException e) {
+      throw new RuntimeException("Should never happen", e);
+    }
+    // We wrote to the underlying buffer but Netty didn't see the writes,
+    // so move the write index forward.
+    header.writerIndex(buf.length);
+    return header;
+  }
+
+  /** Hello header for HBase 0.92 to 0.94.  */
   private ChannelBuffer header092() {
     final byte[] buf = new byte[4 + 1 + 4 + 1 + 44];
     final ChannelBuffer header = commonHeader(buf, HRPC3);

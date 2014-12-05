@@ -33,6 +33,8 @@ import org.jboss.netty.buffer.ChannelBuffer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import org.hbase.async.generated.CellPB;
+
 /**
  * A "cell" in an HBase table.
  * <p>
@@ -68,7 +70,8 @@ public final class KeyValue implements Comparable<KeyValue> {
   // Note: type can be one of:
   //   -  4  0b00000100  Put
   static final byte PUT = 4;
-  //   -  8  0b00001000  Delete        (delete only the last version of a cell)
+  //   -  8  0b00001000  Delete        (delete the specified version of a cell)
+  static final byte DELETE = 8;
   //   - 12  0b00001100  DeleteColumn  (delete all previous versions of a cell)
   static final byte DELETE_COLUMN = 12;
   //   - 14  0b01110010  DeleteFamily  (delete all cells within a family)
@@ -215,7 +218,7 @@ public final class KeyValue implements Comparable<KeyValue> {
   }
 
   /**
-   * De-serializes {@link KeyValue} from a buffer.
+   * De-serializes {@link KeyValue} from a buffer (HBase 0.94 and before).
    * @param buf The buffer to de-serialize from.
    * @param prev Another {@link KeyValue} previously de-serialized from the
    * same buffer.  Can be {@code null}.  The idea here is that KeyValues
@@ -289,6 +292,36 @@ public final class KeyValue implements Comparable<KeyValue> {
 
   private static void invalid(final String errmsg) {
     throw new IllegalArgumentException(errmsg);
+  }
+
+  /**
+   * Transforms a protobuf Cell message into a KeyValue (HBase 0.95+).
+   * @param buf The buffer to de-serialize from.
+   * @param prev Another {@link KeyValue} previously de-serialized from the
+   * same buffer.  Can be {@code null}.  The idea here is that KeyValues
+   * often come in a sorted batch, and often share a number of byte arrays
+   * (e.g.  they all have the same row key and/or same family...).  When
+   * you specify another KeyValue, its byte arrays will be re-used in order
+   * to avoid having too much duplicate data in memory.  This costs a little
+   * bit of CPU time to compare the arrays but saves memory (which in turns
+   * saves CPU time later).
+   * @return a new instance (guaranteed non-{@code null}).
+   */
+  static KeyValue fromCell(final CellPB.Cell cell, final KeyValue prev) {
+    final byte[] key = Bytes.get(cell.getRow());
+    final byte[] family = Bytes.get(cell.getFamily());
+    final byte[] qualifier = Bytes.get(cell.getQualifier());
+    final long timestamp = cell.getTimestamp();
+    final byte[] value = Bytes.get(cell.getValue());
+    if (prev == null) {
+      return new KeyValue(key, family, qualifier, timestamp, /*key_type,*/
+                          value);
+    } else {
+      return new KeyValue(Bytes.deDup(prev.key, key),
+                          Bytes.deDup(prev.family, family),
+                          Bytes.deDup(prev.qualifier, qualifier),
+                          timestamp, /*key_type,*/ value);
+    }
   }
 
   // ------------------------------------------------------------ //

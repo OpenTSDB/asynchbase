@@ -55,6 +55,10 @@ implements HasFailedRpcException {
 
   @Override
   VersionMismatchException make(final Object msg, final HBaseRpc rpc) {
+    if (msg == this || msg instanceof VersionMismatchException) {
+      final VersionMismatchException e = (VersionMismatchException) msg;
+      return new VersionMismatchException(e.getMessage(), rpc);
+    }
     return new VersionMismatchException(msg.toString(), rpc);
   }
 

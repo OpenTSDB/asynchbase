@@ -1,6 +1,6 @@
 # Copyright (C) 2013  The Async HBase Authors.  All rights reserved.
 # This file is part of Async HBase.
-# 
+#
 # Redistribution and use in source and binary forms, with or without
 # modification, are permitted provided that the following conditions are met:
 #   - Redistributions of source code must retain the above copyright notice,
@@ -23,9 +23,9 @@
 # ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 # POSSIBILITY OF SUCH DAMAGE.
 
-OBJENESIS_VERSION := 1.3
+OBJENESIS_VERSION := 2.1
 OBJENESIS := third_party/objenesis/objenesis-$(OBJENESIS_VERSION).jar
-OBJENESIS_BASE_URL := http://search.maven.org/remotecontent?filepath=org/objenesis/objenesis/$(OBJENESIS_VERSION)
+OBJENESIS_BASE_URL := http://central.maven.org/maven2/org/objenesis/objenesis/$(OBJENESIS_VERSION)
 
 $(OBJENESIS): $(OBJENESIS).md5
 	set dummy "$(OBJENESIS_BASE_URL)" "$(OBJENESIS)"; shift; $(FETCH_DEPENDENCY)

@@ -26,7 +26,18 @@
  */
 package org.hbase.async;
 
+import com.google.protobuf.ByteString;
+
 import org.jboss.netty.buffer.ChannelBuffer;
+
+import org.hbase.async.generated.ClientPB.Condition;
+import org.hbase.async.generated.ClientPB.MutateRequest;
+import org.hbase.async.generated.ClientPB.MutateResponse;
+import org.hbase.async.generated.ClientPB.MutationProto;
+import org.hbase.async.generated.ComparatorPB.BinaryComparator;
+import org.hbase.async.generated.ComparatorPB.ByteArrayComparable;
+import org.hbase.async.generated.ComparatorPB.Comparator;
+import org.hbase.async.generated.HBasePB.CompareType;
 
 /**
  * Atomically executes a Compare-And-Set (CAS) on an HBase cell.
@@ -40,10 +51,14 @@ final class CompareAndSetRequest extends HBaseRpc
              HBaseRpc.HasFamily, HBaseRpc.HasQualifier, HBaseRpc.HasValue,
              HBaseRpc.IsEdit {
 
-  // Awesome RPC method name...
-  private static final byte[] CHECKANDPUT = new byte[] {
+  /** Awesome RPC method name...  For HBase 0.94 and earlier only.  */
+  private static final byte[] CHECKANDPUT = {
       'c', 'h', 'e', 'c', 'k', 'A', 'n', 'd', 'P', 'u', 't'
   };
+
+  /** Comparator named used for HBase 0.95+.  */
+  private static final ByteString BINARYCOMPARATOR =
+    ByteString.copyFromUtf8("org.apache.hadoop.hbase.filter.BinaryComparator");
 
   /** New value.  */
   private final PutRequest put;
@@ -59,10 +74,17 @@ final class CompareAndSetRequest extends HBaseRpc
    */
   public CompareAndSetRequest(final PutRequest put,
                               final byte[] expected) {
-    super(CHECKANDPUT, put.table(), put.key());
+    super(put.table(), put.key());
     KeyValue.checkValue(expected);
     this.put = put;
     this.expected = expected;
+  }
+
+  @Override
+  byte[] method(final byte server_version) {
+    return (server_version >= RegionClient.SERVER_VERSION_095_OR_ABOVE
+            ? MUTATE
+            : CHECKANDPUT);
   }
 
   @Override
@@ -138,6 +160,60 @@ final class CompareAndSetRequest extends HBaseRpc
 
   @Override
   ChannelBuffer serialize(byte server_version) {
+    if (server_version < RegionClient.SERVER_VERSION_095_OR_ABOVE) {
+      return serializeOld(server_version);
+    }
+
+    final ByteString key = Bytes.wrap(put.key());
+    final ByteString family = Bytes.wrap(put.family());
+    final ByteString qualifier = Bytes.wrap(put.qualifier());
+    final ByteString value = Bytes.wrap(put.value());
+
+    // The edit.
+    final MutationProto.ColumnValue.QualifierValue qual =
+      MutationProto.ColumnValue.QualifierValue.newBuilder()
+      .setQualifier(qualifier)
+      .setValue(value)
+      .build();
+    final MutationProto.ColumnValue column =
+      MutationProto.ColumnValue.newBuilder()
+      .setFamily(family)
+      .addQualifierValue(qual)
+      .build();
+    final MutationProto.Builder put = MutationProto.newBuilder()
+      .setRow(key)
+      .setMutateType(MutationProto.MutationType.PUT)
+      .addColumnValue(column);
+
+    // The condition that needs to match for the edit to be applied.
+    final ByteArrayComparable expected = ByteArrayComparable.newBuilder()
+      .setValue(Bytes.wrap(this.expected))
+      .build();
+    final BinaryComparator cmp = BinaryComparator.newBuilder()
+      .setComparable(expected)
+      .build();
+    final Comparator comparator = Comparator.newBuilder()
+      .setNameBytes(BINARYCOMPARATOR)
+      .setSerializedComparator(Bytes.wrap(cmp.toByteArray()))
+      .build();
+    final Condition cond = Condition.newBuilder()
+      .setRow(key)
+      .setFamily(family)
+      .setQualifier(qualifier)
+      .setCompareType(CompareType.EQUAL)
+      .setComparator(comparator)
+      .build();
+
+    final MutateRequest req = MutateRequest.newBuilder()
+      .setRegion(region.toProtobuf())
+      .setMutation(put.build())
+      .setCondition(cond)
+      .build();
+    return toChannelBuffer(MUTATE, req);
+  }
+
+  /** Serializes this request for HBase 0.94 and before.  */
+  private ChannelBuffer serializeOld(final byte server_version) {
     final ChannelBuffer buf = newBuffer(server_version, predictSerializedSize());
     buf.writeInt(6);  // Number of parameters.
 
@@ -160,6 +236,19 @@ final class CompareAndSetRequest extends HBaseRpc
     put.serializeInto(buf);
 
     return buf;
+  }
+
+  @Override
+  Boolean deserialize(final ChannelBuffer buf, final int cell_size) {
+    HBaseRpc.ensureNoCell(cell_size);
+    final MutateResponse resp = readProtobuf(buf, MutateResponse.PARSER);
+    if (!resp.hasProcessed()) {
+      throw new InvalidResponseException(
+        "After a CAS on " + put + ", the protobuf in the response didn't "
+        + "contain the field indicating whether the CAS was successful or not",
+        resp);
+    }
+    return resp.getProcessed();
   }
 
 }

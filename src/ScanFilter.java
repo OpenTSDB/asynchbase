@@ -51,17 +51,34 @@ public abstract class ScanFilter {
   }
 
   /**
-   * Serializes the byte representation to the RPC channel buffer.
-   * @param buf The RPC channel buffer to which the byte array is serialized
-   * @since 1.5
+   * Returns the name of this scanner on the wire.
+   * <p>
+   * This method is only used with HBase 0.95 and newer.
+   * The contents of the array returned MUST NOT be modified.
    */
-  abstract void serialize(ChannelBuffer buf);
+  abstract byte[] name();
+
+  /**
+   * Serializes the byte representation to a protobuf in a byte array.
+   * <p>
+   * This method is only used with HBase 0.95 and newer.
+   */
+  abstract byte[] serialize();
+
+  /**
+   * Serializes the byte representation to the RPC channel buffer.
+   * <p>
+   * This method is only used with HBase 0.94 and before.
+   * @param buf The RPC channel buffer to which the byte array is serialized
+   */
+  abstract void serializeOld(ChannelBuffer buf);
 
   /**
    * returns the number of bytes that it will write to the RPC channel buffer when {@code serialize}
    * is called. This method helps predict the initial size of the byte array
+   * <p>
+   * This method is only used with HBase 0.94 and before.
    * @return A strictly positive integer
-   * @since 1.5
    */
   abstract int predictSerializedSize();
 

@@ -31,6 +31,10 @@ import org.jboss.netty.util.CharsetUtil;
 
 import java.nio.charset.Charset;
 
+import org.hbase.async.generated.ComparatorPB;
+import org.hbase.async.generated.FilterPB;
+import org.hbase.async.generated.HBasePB;
+
 /**
  * Filters rows based on an expression applied to the row key.
  * <p>
@@ -114,7 +118,34 @@ public final class KeyRegexpFilter extends ScanFilter {
   }
 
   @Override
-  void serialize(ChannelBuffer buf) {
+  byte[] serialize() {
+    final ComparatorPB.Comparator.Builder comparator =
+      ComparatorPB.Comparator.newBuilder();
+    comparator.setNameBytes(Bytes.wrap(REGEXSTRINGCOMPARATOR));
+    final byte[] regex_cmp = ComparatorPB.RegexStringComparator.newBuilder()
+      .setPatternBytes(Bytes.wrap(regexp))
+      .setPatternFlags(0)
+      .setCharsetBytes(Bytes.wrap(charset))
+      .build()
+      .toByteArray();
+    comparator.setSerializedComparator(Bytes.wrap(regex_cmp));
+    final FilterPB.CompareFilter cmp = FilterPB.CompareFilter.newBuilder()
+      .setCompareOp(HBasePB.CompareType.EQUAL)
+      .setComparator(comparator.build())
+      .build();
+    return FilterPB.RowFilter.newBuilder()
+      .setCompareFilter(cmp)
+      .build()
+      .toByteArray();
+  }
+
+  @Override
+  byte[] name() {
+    return ROWFILTER;
+  }
+
+  @Override
+  void serializeOld(final ChannelBuffer buf) {
     buf.writeByte((byte) ROWFILTER.length);                     // 1
     buf.writeBytes(ROWFILTER);                                  // 40
     // writeUTF of the comparison operator

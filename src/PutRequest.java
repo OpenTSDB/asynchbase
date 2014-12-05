@@ -28,6 +28,10 @@ package org.hbase.async;
 
 import org.jboss.netty.buffer.ChannelBuffer;
 
+import org.hbase.async.generated.ClientPB.MutateRequest;
+import org.hbase.async.generated.ClientPB.MutateResponse;
+import org.hbase.async.generated.ClientPB.MutationProto;
+
 /**
  * Puts some data into HBase.
  *
@@ -62,7 +66,8 @@ public final class PutRequest extends BatchableRpc
              HBaseRpc.HasQualifiers, HBaseRpc.HasValues, HBaseRpc.IsEdit,
              /* legacy: */ HBaseRpc.HasQualifier, HBaseRpc.HasValue {
 
-  private static final byte[] PUT = new byte[] { 'p', 'u', 't' };
+  /** RPC Method name for HBase 0.94 and earlier.  */
+  private static final byte[] PUT = { 'p', 'u', 't' };
 
   /** Code type used for serialized `Put' objects.  */
   static final byte CODE = 35;
@@ -330,7 +335,7 @@ public final class PutRequest extends BatchableRpc
   private PutRequest(final byte[] table,
                      final KeyValue kv,
                      final long lockid) {
-    super(PUT, table, kv.key(), kv.family(), kv.timestamp(), lockid);
+    super(table, kv.key(), kv.family(), kv.timestamp(), lockid);
     this.qualifiers = new byte[][] { kv.qualifier() };
     this.values = new byte[][] { kv.value() };
   }
@@ -355,7 +360,7 @@ public final class PutRequest extends BatchableRpc
                      final byte[][] values,
                      final long timestamp,
                      final long lockid) {
-    super(PUT, table, key, family, timestamp, lockid);
+    super(table, key, family, timestamp, lockid);
     KeyValue.checkFamily(family);
     if (qualifiers.length != values.length) {
       throw new IllegalArgumentException("Have " + qualifiers.length
@@ -369,6 +374,14 @@ public final class PutRequest extends BatchableRpc
     }
     this.qualifiers = qualifiers;
     this.values = values;
+  }
+
+  @Override
+  byte[] method(final byte server_version) {
+    if (server_version >= RegionClient.SERVER_VERSION_095_OR_ABOVE) {
+      return MUTATE;
+    }
+    return PUT;
   }
 
   @Override
@@ -511,9 +524,49 @@ public final class PutRequest extends BatchableRpc
     return size;
   }
 
+  @Override
+  MutationProto toMutationProto() {
+    final MutationProto.ColumnValue.Builder columns =  // All columns ...
+      MutationProto.ColumnValue.newBuilder()
+      .setFamily(Bytes.wrap(family));                  // ... for this family.
+
+    // Now add all the qualifier-value pairs.
+    for (int i = 0; i < qualifiers.length; i++) {
+      final MutationProto.ColumnValue.QualifierValue column =
+        MutationProto.ColumnValue.QualifierValue.newBuilder()
+        .setQualifier(Bytes.wrap(qualifiers[i]))
+        .setValue(Bytes.wrap(values[i]))
+        .setTimestamp(timestamp)
+        .build();
+      columns.addQualifierValue(column);
+    }
+
+    final MutationProto.Builder put = MutationProto.newBuilder()
+      .setRow(Bytes.wrap(key))
+      .setMutateType(MutationProto.MutationType.PUT)
+      .addColumnValue(columns);
+    if (!durable) {
+      put.setDurability(MutationProto.Durability.SKIP_WAL);
+    }
+    return put.build();
+  }
+
   /** Serializes this request.  */
   @Override
   ChannelBuffer serialize(final byte server_version) {
+    if (server_version < RegionClient.SERVER_VERSION_095_OR_ABOVE) {
+      return serializeOld(server_version);
+    }
+
+    final MutateRequest req = MutateRequest.newBuilder()
+      .setRegion(region.toProtobuf())
+      .setMutation(toMutationProto())
+      .build();
+    return toChannelBuffer(MUTATE, req);
+  }
+
+  /** Serializes this request for HBase 0.94 and before.  */
+  private ChannelBuffer serializeOld(final byte server_version) {
     final ChannelBuffer buf = newBuffer(server_version,
                                         predictSerializedSize());
     buf.writeInt(2);  // Number of parameters.
@@ -525,6 +578,13 @@ public final class PutRequest extends BatchableRpc
     serializeInto(buf);
 
     return buf;
+  }
+
+  @Override
+  Object deserialize(final ChannelBuffer buf, int cell_size) {
+    HBaseRpc.ensureNoCell(cell_size);
+    final MutateResponse resp = readProtobuf(buf, MutateResponse.PARSER);
+    return null;
   }
 
   /** Serialize the raw underlying `Put' into the given buffer.  */

@@ -29,12 +29,16 @@ package org.hbase.async;
 import java.util.Comparator;
 import java.util.Arrays;
 
+import com.google.protobuf.InvalidProtocolBufferException;
+import com.google.protobuf.ByteString;
+
 import org.jboss.netty.buffer.ChannelBuffer;
 import org.jboss.netty.buffer.ChannelBuffers;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import org.hbase.async.generated.HBasePB;
 import static org.hbase.async.HBaseClient.EMPTY_ARRAY;
 
 /**
@@ -82,6 +86,16 @@ final class RegionInfo implements Comparable<RegionInfo> {
   }
 
   /**
+   * Returns the protobuf representation of this region.
+   */
+  HBasePB.RegionSpecifier toProtobuf() {
+    return HBasePB.RegionSpecifier.newBuilder()
+      .setType(HBasePB.RegionSpecifier.RegionSpecifierType.REGION_NAME)
+      .setValue(ByteString.copyFrom(region_name))
+      .build();
+  }
+
+  /**
    * Creates a new {@link RegionInfo} from a META {@link KeyValue}.
    * @param kv The {@link KeyValue} to use, which is assumed to be from
    * the cell {@code info:regioninfo} of a {@code .META.} region.
@@ -98,18 +112,30 @@ final class RegionInfo implements Comparable<RegionInfo> {
    */
   static RegionInfo fromKeyValue(final KeyValue kv,
                                  final byte[][] out_start_key) {
+    switch (kv.value()[0]) {
+      case 0:  // pre 0.92 -- fall through.
+      case 1:  // 0.92 to 0.94
+        return deserializeOldRegionInfo(kv, out_start_key);
+      case 80: // 0.95+
+        return deserializeProtobufRegionInfo(kv, out_start_key);
+      default:
+        throw new IllegalStateException("Unsupported region info version: "
+                                        + kv.value()[0] + " in .META.  entry: "
+                                        + kv);
+    }
+  }
+
+  /**
+   * Creates a new {@link RegionInfo} from a pre-0.95 META {@link KeyValue}.
+   */
+  private static RegionInfo
+  deserializeOldRegionInfo(final KeyValue kv, final byte[][] out_start_key) {
     final ChannelBuffer buf = ChannelBuffers.wrappedBuffer(kv.value());
-    final byte version = buf.readByte();
+    buf.readByte(); // Skip the version.
     // version 1 was introduced in HBase 0.92 (see HBASE-451).
     // The differences between v0 and v1 are irrelevant to us,
     // as we only look at the first few fields, and they didn't
     // change across these 2 versions.
-    if (version != 1 && version != 0) {
-      LOG.warn("Unsupported region info version: " + version
-               + " in .META.  entry: " + kv);
-      // Keep going anyway, just in case the new version is backwards
-      // compatible somehow.  If it's not, we'll just fail later.
-    }
     final byte[] stop_key = HBaseRpc.readByteArray(buf);
     final boolean offline = buf.readByte() != 0;
     final long region_id = buf.readLong();
@@ -146,6 +172,39 @@ final class RegionInfo implements Comparable<RegionInfo> {
                                              region_name, stop_key);
     out_start_key[0] = start_key;
     return region;
+  }
+
+  /**
+   * Creates a new {@link RegionInfo} from a 0.95+ META {@link KeyValue}.
+   */
+  private static RegionInfo
+  deserializeProtobufRegionInfo(final KeyValue kv, final byte[][] out_start_key) {
+    final byte[] value = kv.value();
+    final int magic = Bytes.getInt(value);
+    if (magic != HBaseClient.PBUF_MAGIC) {
+      throw BrokenMetaException.badKV(null, "the magic number is invalid", kv);
+    }
+    final HBasePB.RegionInfo pb;
+    try {
+      pb = HBasePB.RegionInfo.PARSER.parseFrom(value, 4, value.length - 4);
+    } catch (InvalidProtocolBufferException e) {
+      throw new BrokenMetaException("Failed to decode " + Bytes.pretty(value),
+                                    e);
+    }
+    final byte[] region_id = Long.toString(pb.getRegionId()).getBytes();
+    final byte[] table = Bytes.get(pb.getTableName().getQualifier());
+    final byte[] start_key = Bytes.get(pb.getStartKey());
+    final byte[] stop_key = Bytes.get(pb.getEndKey());
+    final byte[] region_name = kv.key();
+
+    final boolean offline = pb.getOffline();
+    final boolean split = pb.getSplit();
+    // XXX what to do with the `recovering' field?
+    if (offline && !split) {
+      throw new RegionOfflineException(region_name);
+    }
+    out_start_key[0] = start_key;
+    return new RegionInfo(split ? EMPTY_ARRAY : table, region_name, stop_key);
   }
 
   /**

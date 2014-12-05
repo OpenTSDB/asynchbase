@@ -1,6 +1,6 @@
 # Copyright (C) 2011-2012  The Async HBase Authors.  All rights reserved.
 # This file is part of Async HBase.
-# 
+#
 # Redistribution and use in source and binary forms, with or without
 # modification, are permitted provided that the following conditions are met:
 #   - Redistributions of source code must retain the above copyright notice,
@@ -23,9 +23,9 @@
 # ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 # POSSIBILITY OF SUCH DAMAGE.
 
-POWERMOCK_MOCKITO_VERSION := 1.5
-POWERMOCK_MOCKITO := third_party/powermock/powermock-mockito-$(POWERMOCK_MOCKITO_VERSION).jar
-POWERMOCK_MOCKITO_BASE_URL := $(ASYNCHBASE_THIRD_PARTY_BASE_URL)
+POWERMOCK_MOCKITO_VERSION := 1.5.4
+POWERMOCK_MOCKITO := third_party/powermock/powermock-mockito-release-full-$(POWERMOCK_MOCKITO_VERSION)-full.jar
+POWERMOCK_MOCKITO_BASE_URL := http://central.maven.org/maven2/org/powermock/powermock-mockito-release-full/$(POWERMOCK_MOCKITO_VERSION)
 
 $(POWERMOCK_MOCKITO): $(POWERMOCK_MOCKITO).md5
 	set dummy "$(POWERMOCK_MOCKITO_BASE_URL)" "$(POWERMOCK_MOCKITO)"; shift; $(FETCH_DEPENDENCY)

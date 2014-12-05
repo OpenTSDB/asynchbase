@@ -1,6 +1,6 @@
 # Copyright (C) 2011-2012  The Async HBase Authors.  All rights reserved.
 # This file is part of Async HBase.
-# 
+#
 # Redistribution and use in source and binary forms, with or without
 # modification, are permitted provided that the following conditions are met:
 #   - Redistributions of source code must retain the above copyright notice,
@@ -23,9 +23,9 @@
 # ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 # POSSIBILITY OF SUCH DAMAGE.
 
-JAVASSIST_VERSION := 3.17.1-GA
+JAVASSIST_VERSION := 3.18.1-GA
 JAVASSIST := third_party/javassist/javassist-$(JAVASSIST_VERSION).jar
-JAVASSIST_BASE_URL := http://search.maven.org/remotecontent?filepath=org/javassist/javassist/$(JAVASSIST_VERSION)
+JAVASSIST_BASE_URL := http://central.maven.org/maven2/org/javassist/javassist/$(JAVASSIST_VERSION)
 
 $(JAVASSIST): $(JAVASSIST).md5
 	set dummy "$(JAVASSIST_BASE_URL)" "$(JAVASSIST)"; shift; $(FETCH_DEPENDENCY)
