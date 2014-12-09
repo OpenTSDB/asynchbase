@@ -135,7 +135,8 @@ test_SOURCES := \
 
 unittest_SRC := \
 	test/TestMETALookup.java	\
-	test/TestNSREs.java
+	test/TestNSREs.java	\
+	test/TestZKClient.java
 
 test_LIBADD := \
 	$(asynchbase_LIBADD)	\
