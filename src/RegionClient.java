@@ -240,6 +240,14 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
     return !dead;
   }
 
+  /**
+   * @return The remote address this client is connected to
+   * @since 1.7
+   */
+  public String getRemoteAddress() {
+    return chan != null ? chan.getRemoteAddress().toString() : null;
+  }
+  
   /** Periodically flushes buffered RPCs.  */
   private void periodicFlush() {
     if (chan != null || dead) {
