@@ -2888,7 +2888,7 @@ public final class HBaseClient {
    * cumbersome so I don't expect anyone to do this, which is why we manage
    * our own instance.
    */
-  private final class ZKClient implements Watcher {
+  protected final class ZKClient implements Watcher {
 
     /** The specification of the quorum, e.g. "host1,host2,host3"  */
     private final String quorum_spec;
@@ -3094,7 +3094,7 @@ public final class HBaseClient {
        * HBASE-3065 (r1151751) prepends meta-data in ZooKeeper files.
        * The meta-data always starts with this magic byte.
        */
-      private static final byte MAGIC = (byte) 0xFF;
+      protected static final byte MAGIC = (byte) 0xFF;
 
       private static final byte UNKNOWN = 0;  // Callback still pending.
       private static final byte FOUND = 1;    // We found the znode.
@@ -3186,7 +3186,7 @@ public final class HBaseClient {
 
       /** Returns a new client for the RS found in the root-region-server.  */
       @SuppressWarnings("fallthrough")
-      private RegionClient handleRootZnode(final byte[] data) {
+      protected RegionClient handleRootZnode(final byte[] data) {
         // There are 3 cases.  Older versions of HBase encode the location
         // of the root region as "host:port", 0.91 uses "host,port,startcode"
         // and newer versions of 0.91 use "<metadata>host,port,startcode"
@@ -3260,7 +3260,7 @@ public final class HBaseClient {
        * Returns a new client for the RS found in the meta-region-server.
        * This is used in HBase 0.95 and up.
        */
-      private RegionClient handleMetaZnode(final byte[] data) {
+      protected RegionClient handleMetaZnode(final byte[] data) {
         if (data[0] != MAGIC) {
           LOG.error("Malformed META region meta-data in " + Bytes.pretty(data)
                     + ", invalid leading magic number: " + data[0]);
