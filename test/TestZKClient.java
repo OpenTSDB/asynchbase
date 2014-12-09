@@ -1067,7 +1067,7 @@ public class TestZKClient {
     final ServerName server = ServerName.newBuilder()
         .setHostName("127.0.0.1").setPort(50511).build();
     final MetaRegionServer meta_server = MetaRegionServer.newBuilder()
-          .setServer(server).setIsRoot(true).build();
+          .setServer(server).build();
     final byte[] data = new byte[meta_server.getSerializedSize() + 10];
     data[0] = ZKCallback.MAGIC;
     Bytes.setInt(data, 1, 1);
