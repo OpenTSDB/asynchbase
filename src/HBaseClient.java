@@ -207,20 +207,20 @@ public final class HBaseClient {
   /** A byte array containing a single zero byte.  */
   private static final byte[] ZERO_ARRAY = new byte[] { 0 };
 
-  private static final byte[] ROOT = new byte[] { '-', 'R', 'O', 'O', 'T', '-' };
-  private static final byte[] ROOT_REGION = new byte[] { '-', 'R', 'O', 'O', 'T', '-', ',', ',', '0' };
-  private static final byte[] META = new byte[] { '.', 'M', 'E', 'T', 'A', '.' };
-  static final byte[] INFO = new byte[] { 'i', 'n', 'f', 'o' };
-  private static final byte[] REGIONINFO = new byte[] { 'r', 'e', 'g', 'i', 'o', 'n', 'i', 'n', 'f', 'o' };
-  private static final byte[] SERVER = new byte[] { 's', 'e', 'r', 'v', 'e', 'r' };
+  protected static final byte[] ROOT = new byte[] { '-', 'R', 'O', 'O', 'T', '-' };
+  protected static final byte[] ROOT_REGION = new byte[] { '-', 'R', 'O', 'O', 'T', '-', ',', ',', '0' };
+  protected static final byte[] META = new byte[] { '.', 'M', 'E', 'T', 'A', '.' };
+  protected static final byte[] INFO = new byte[] { 'i', 'n', 'f', 'o' };
+  protected static final byte[] REGIONINFO = new byte[] { 'r', 'e', 'g', 'i', 'o', 'n', 'i', 'n', 'f', 'o' };
+  protected static final byte[] SERVER = new byte[] { 's', 'e', 'r', 'v', 'e', 'r' };
   /** HBase 0.95 and up: .META. is now hbase:meta */
-  private static final byte[] HBASE96_META =
+  protected static final byte[] HBASE96_META =
     new byte[] { 'h', 'b', 'a', 's', 'e', ':', 'm', 'e', 't', 'a' };
   /** New for HBase 0.95 and up: the name of META is fixed.  */
-  private static final byte[] META_REGION_NAME =
+  protected static final byte[] META_REGION_NAME =
     new byte[] { 'h', 'b', 'a', 's', 'e', ':', 'm', 'e', 't', 'a', ',', ',', '1' };
   /** New for HBase 0.95 and up: the region info for META is fixed.  */
-  private static final RegionInfo META_REGION =
+  protected static final RegionInfo META_REGION =
     new RegionInfo(HBASE96_META, META_REGION_NAME, EMPTY_ARRAY);
 
   /**
