@@ -28,19 +28,11 @@ package org.hbase.async;
 
 import java.lang.reflect.Method;
 import java.util.ArrayList;
-import java.util.Set;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentSkipListMap;
-import java.util.concurrent.TimeUnit;
 
-import com.stumbleupon.async.Callback;
 import org.jboss.netty.util.HashedWheelTimer;
-import org.jboss.netty.util.Timeout;
-import org.jboss.netty.util.TimerTask;
 
 import com.stumbleupon.async.Deferred;
 
-import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 
@@ -50,16 +42,14 @@ import static org.junit.Assert.assertSame;
 import org.mockito.ArgumentMatcher;
 import org.mockito.invocation.InvocationOnMock;
 import org.mockito.stubbing.Answer;
+
 import static org.mockito.Matchers.argThat;
 import static org.mockito.Matchers.eq;
 import static org.mockito.Mockito.any;
 import static org.mockito.Mockito.doAnswer;
-import static org.mockito.Mockito.eq;
-import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
-
 import static org.junit.Assert.assertTrue;
 
 import org.powermock.api.support.membermodification.MemberMatcher;
@@ -68,8 +58,8 @@ import org.powermock.core.classloader.annotations.PowerMockIgnore;
 import org.powermock.core.classloader.annotations.PrepareForTest;
 import org.powermock.modules.junit4.PowerMockRunner;
 import org.powermock.reflect.Whitebox;
+
 import static org.powermock.api.mockito.PowerMockito.mock;
-import static org.powermock.api.mockito.PowerMockito.verifyNew;
 
 @RunWith(PowerMockRunner.class)
 // "Classloader hell"...  It's real.  Tell PowerMock to ignore these classes
@@ -78,55 +68,7 @@ import static org.powermock.api.mockito.PowerMockito.verifyNew;
                   "ch.qos.*", "org.slf4j.*",
                   "com.sum.*", "org.xml.*"})
 @PrepareForTest({ HBaseClient.class, RegionClient.class })
-final class TestNSREs {
-
-  private static final byte[] COMMA = { ',' };
-  private static final byte[] TIMESTAMP = "1234567890".getBytes();
-  private static final byte[] INFO = getStatic("INFO");
-  private static final byte[] REGIONINFO = getStatic("REGIONINFO");
-  private static final byte[] SERVER = getStatic("SERVER");
-  private static final byte[] TABLE = { 't', 'a', 'b', 'l', 'e' };
-  private static final byte[] KEY = { 'k', 'e', 'y' };
-  private static final byte[] KEY2 = { 'b', 'r', 'o' };
-  private static final byte[] FAMILY = { 'f' };
-  private static final byte[] QUALIFIER = { 'q', 'u', 'a', 'l' };
-  private static final byte[] VALUE = { 'v', 'a', 'l', 'u', 'e' };
-  private static final KeyValue KV = new KeyValue(KEY, FAMILY, QUALIFIER, VALUE);
-  private static final RegionInfo meta = mkregion(".META.", ".META.,,1234567890");
-  private static final RegionInfo region = mkregion("table", "table,,1234567890");
-  private HBaseClient client = new HBaseClient("test-quorum-spec");
-  /** Extracted from {@link #client}.  */
-  private ConcurrentSkipListMap<byte[], RegionInfo> regions_cache;
-  /** Extracted from {@link #client}.  */
-  private ConcurrentHashMap<RegionInfo, RegionClient> region2client;
-  /** Fake client supposedly connected to -ROOT-.  */
-  private RegionClient rootclient = mock(RegionClient.class);
-  /** Fake client supposedly connected to .META..  */
-  private RegionClient metaclient = mock(RegionClient.class);
-  /** Fake client supposedly connected to our fake test table.  */
-  private RegionClient regionclient = mock(RegionClient.class);
-
-  @Before
-  public void before() throws Exception {
-    Whitebox.setInternalState(client, "rootregion", rootclient);
-    // Inject a timer that always fires away immediately.
-    Whitebox.setInternalState(client, "timer", new FakeTimer());
-    regions_cache = Whitebox.getInternalState(client, "regions_cache");
-    region2client = Whitebox.getInternalState(client, "region2client");
-    injectRegionInCache(meta, metaclient);
-    injectRegionInCache(region, regionclient);
-  }
-
-  /**
-   * Injects an entry in the local META cache of the client.
-   */
-  private void injectRegionInCache(final RegionInfo region,
-                                   final RegionClient client) {
-    regions_cache.put(region.name(), region);
-    region2client.put(region, client);
-    // We don't care about client2regions in these tests.
-  }
-
+final class TestNSREs extends BaseTestHBaseClient {
   @Test
   public void simpleGet() throws Exception {
     // Just a simple test, no tricks, no problems, to verify we can
@@ -136,7 +78,7 @@ final class TestNSREs {
     row.add(KV);
 
     when(regionclient.isAlive()).thenReturn(true);
-    doAnswer(new Answer() {
+    doAnswer(new Answer<Object>() {
       public Object answer(final InvocationOnMock invocation) {
         get.getDeferred().callback(row);
         return null;
@@ -156,7 +98,7 @@ final class TestNSREs {
 
     when(regionclient.isAlive()).thenReturn(true);
     // First access triggers an NSRE.
-    doAnswer(new Answer() {
+    doAnswer(new Answer<Object>() {
       public Object answer(final InvocationOnMock invocation) {
         // We completely stub out the RegionClient, which normally does this.
         client.handleNSRE(get, get.getRegion().name(),
@@ -174,7 +116,7 @@ final class TestNSREs {
     MemberModifier.stub(newClient).toReturn(newregionclient);
     when(newregionclient.isAlive()).thenReturn(true);
     // Answer the "exists" probe we use to check if the NSRE is still there.
-    doAnswer(new Answer() {
+    doAnswer(new Answer<Object>() {
       public Object answer(final InvocationOnMock invocation) {
         Object[] args = invocation.getArguments();
         final GetRequest exist = (GetRequest) args[0];
@@ -183,7 +125,7 @@ final class TestNSREs {
       }
     }).when(newregionclient).sendRpc(any(GetRequest.class));
     // Answer our actual get request.
-    doAnswer(new Answer() {
+    doAnswer(new Answer<Object>() {
       public Object answer(final InvocationOnMock invocation) {
         get.getDeferred().callback(row);
         return null;
@@ -204,7 +146,7 @@ final class TestNSREs {
 
     when(regionclient.isAlive()).thenReturn(true);
     // First access triggers an NSRE.
-    doAnswer(new Answer() {
+    doAnswer(new Answer<Object>() {
       public Object answer(final InvocationOnMock invocation) {
         // We completely stub out the RegionClient, which normally does this.
         client.handleNSRE(get, get.getRegion().name(),
@@ -223,7 +165,7 @@ final class TestNSREs {
     MemberModifier.stub(newClient).toReturn(newregionclient);
     when(newregionclient.isAlive()).thenReturn(true);
     // Make the exist probe fail with another NSRE.
-    doAnswer(new Answer() {
+    doAnswer(new Answer<Object>() {
       private byte attempt = 0;
       @SuppressWarnings("fallthrough")
       public Object answer(final InvocationOnMock invocation) {
@@ -248,7 +190,7 @@ final class TestNSREs {
     // The second lookup returns the same daughter region (re-use [2]).
 
     // Answer our actual get request.
-    doAnswer(new Answer() {
+    doAnswer(new Answer<Object>() {
       public Object answer(final InvocationOnMock invocation) {
         get.getDeferred().callback(row);
         return null;
@@ -257,7 +199,6 @@ final class TestNSREs {
 
     assertSame(row, client.get(get).joinUninterruptibly());
   }
-
 
   @Test
   public void alreadyNSREdRegion() throws Exception {
@@ -287,7 +228,7 @@ final class TestNSREs {
     // The region client's behaviour for the triggerRpc, as mentioned above
     // this RPC is mainly used to invalidate the region cache of the client
     // so this will make the knownToBeNSREd to return true for the region
-    doAnswer(new Answer() {
+    doAnswer(new Answer<Object>() {
       private int attempt = 0;
       @Override
       public Object answer(InvocationOnMock invocation) throws Throwable {
@@ -328,7 +269,7 @@ final class TestNSREs {
     // Now we write the NSRE logic for the probe and hence we defined the
     // argument matcher for things other than the original get Request and
     // trigger get Request
-    doAnswer(new Answer() {
+    doAnswer(new Answer<Object>() {
       private int attempt = 0;
       @Override
       public Object answer(InvocationOnMock invocation) throws Throwable {
@@ -364,7 +305,7 @@ final class TestNSREs {
 
     // Now the class stubbing for the mainGet RPC, whenever the call
     // is made for this RPC we just start the callback chain of the RPC.
-    doAnswer(new Answer() {
+    doAnswer(new Answer<Object>() {
       @Override
       public Object answer(InvocationOnMock invocation) throws Throwable {
         Object[] args = invocation.getArguments();
@@ -408,7 +349,6 @@ final class TestNSREs {
     // Number of times this RPC is sent to regionServer
     verify(regionclient, times(1)).sendRpc(mainGet);
   }
-
 
   @Test
   public void probeRpcTooManyRetriesCallBack() throws Exception {
@@ -466,7 +406,7 @@ final class TestNSREs {
     MemberModifier.stub(newClient).toReturn(regionclient);
 
     // behaviour for the triggerGet
-    doAnswer(new Answer() {
+    doAnswer(new Answer<Object>() {
       private int attempt = 0;
       @Override
       public Object answer(InvocationOnMock invocation) throws Throwable {
@@ -496,7 +436,7 @@ final class TestNSREs {
     // Now we write the NSRE logic for the probe and hence we defined the
     // argument matcher for things other than the original GetRequest and
     // trigger GetRequest.
-    doAnswer(new Answer() {
+    doAnswer(new Answer<Object>() {
       private int attempt = 0;
       @Override
       public Object answer(InvocationOnMock invocation) throws Throwable {
@@ -528,7 +468,7 @@ final class TestNSREs {
 
     // Now the class stubbing for the dummyGet RPC, whenever the call
     // is made for this RPC we just start the callback chain of the RPC.
-    doAnswer(new Answer() {
+    doAnswer(new Answer<Object>() {
       @Override
       public Object answer(InvocationOnMock invocation) throws Throwable {
         Object[] args = invocation.getArguments();
@@ -553,6 +493,7 @@ final class TestNSREs {
     Deferred<ArrayList<KeyValue>> triggerRpcDeferred = client.get(triggerGet);
 
     // execute the dummyRpcs now
+    @SuppressWarnings("unchecked")
     final Deferred<ArrayList<KeyValue>>[] dummyRpcDeferred = new Deferred[]{
         client.get(dummyGet[0]),
         client.get(dummyGet[1]),
@@ -581,170 +522,6 @@ final class TestNSREs {
       // equals to probe_expire_count for each RetryRpc during failure
       //  + 1 after the NSRE is cleared
       verify(regionclient, times(1)).sendRpc(dummyGet[i]);
-    }
-  }
-
-
-  // ----------------- //
-  // Helper functions. //
-  // ----------------- //
-
-  private static <T> T getStatic(final String fieldname) {
-    return Whitebox.getInternalState(HBaseClient.class, fieldname);
-  }
-
-  /**
-   * Creates a fake {@code .META.} row.
-   * The row contains a single entry for all keys of {@link #TABLE}.
-   */
-  private static ArrayList<KeyValue> metaRow() {
-    return metaRow(HBaseClient.EMPTY_ARRAY, HBaseClient.EMPTY_ARRAY);
-  }
-
-
-  /**
-   * Creates a fake {@code .META.} row.
-   * The row contains a single entry for {@link #TABLE}.
-   * @param start_key The start key of the region in this entry.
-   * @param stop_key The stop key of the region in this entry.
-   */
-  private static ArrayList<KeyValue> metaRow(final byte[] start_key,
-                                             final byte[] stop_key) {
-    final ArrayList<KeyValue> row = new ArrayList<KeyValue>(2);
-    final byte[] name = concat(TABLE, COMMA, start_key, COMMA, TIMESTAMP);
-    final byte[] regioninfo = concat(
-      new byte[] {
-        0,                        // version
-        (byte) stop_key.length,   // vint: stop key length
-      },
-      stop_key,
-      new byte[] { 0 },           // boolean: not offline
-      Bytes.fromLong(name.hashCode()),     // long: region ID (make it random)
-      new byte[] { (byte) name.length },  // vint: region name length
-      name,                       // region name
-      new byte[] {
-        0,                        // boolean: not splitting
-        (byte) start_key.length,  // vint: start key length
-      },
-      start_key
-    );
-    row.add(new KeyValue(region.name(), INFO, REGIONINFO, regioninfo));
-    row.add(new KeyValue(region.name(), INFO, SERVER, "localhost:54321".getBytes()));
-    return row;
-  }
-
-  private static RegionInfo mkregion(final String table, final String name) {
-    return new RegionInfo(table.getBytes(), name.getBytes(),
-                          HBaseClient.EMPTY_ARRAY);
-  }
-
-  private static byte[] anyBytes() {
-    return any(byte[].class);
-  }
-
-  /** Concatenates byte arrays together.  */
-  private static byte[] concat(final byte[]... arrays) {
-    int len = 0;
-    for (final byte[] array : arrays) {
-      len += array.length;
-    }
-    final byte[] result = new byte[len];
-    len = 0;
-    for (final byte[] array : arrays) {
-      System.arraycopy(array, 0, result, len, array.length);
-      len += array.length;
-    }
-    return result;
-  }
-
-  /** Creates a new Deferred that's already called back.  */
-  private static <T> Answer<Deferred<T>> newDeferred(final T result) {
-    return new Answer<Deferred<T>>() {
-      public Deferred<T> answer(final InvocationOnMock invocation) {
-        return Deferred.fromResult(result);
-      }
-    };
-  }
-
-  /**
-   * A fake {@link Timer} implementation that fires up tasks immediately.
-   * Tasks are called immediately from the current thread.
-   */
-  static final class FakeTimer extends HashedWheelTimer {
-    @Override
-    public Timeout newTimeout(final TimerTask task,
-                              final long delay,
-                              final TimeUnit unit) {
-      try {
-        task.run(null);  // Argument never used in this code base.
-        return null;     // Return value never used in this code base.
-      } catch (RuntimeException e) {
-        throw e;
-      } catch (Exception e) {
-        throw new RuntimeException("Timer task failed: " + task, e);
-      }
-    }
-
-    @Override
-    public Set<Timeout> stop() {
-      return null;  // Never called during tests.
-    }
-  }
-
-  /**
-   * A fake {@link org.jboss.netty.util.Timer} implementation.
-   * Instead of executing the task it will store that task in a internal state
-   * and provides a function to start the execution of the stored task.
-   * This implementation thus allows the flexibility of simulating the
-   * things that will be going on during the time out period of a TimerTask.
-   * This was mainly return to simulate the timeout period for
-   * alreadyNSREdRegion test, where the region will be in the NSREd mode only
-   * during this timeout period, which was difficult to simulate using the
-   * above {@link FakeTimer} implementation, as we don't get back the control
-   * during the timeout period
-   *
-   * Here it will hold at most two Tasks. We have two tasks here because when
-   * one is being executed, it may call for newTimeOut for another task.
-   */
-  static final class FakeTaskTimer extends HashedWheelTimer {
-
-    private TimerTask newPausedTask = null;
-    private TimerTask pausedTask = null;
-
-    @Override
-    public synchronized Timeout newTimeout(final TimerTask task,
-                                           final long delay,
-                                           final TimeUnit unit) {
-      if (pausedTask == null) {
-        pausedTask = task;
-      }  else if (newPausedTask == null) {
-        newPausedTask = task;
-      } else {
-        throw new IllegalStateException("Cannot Pause Two Timer Tasks");
-      }
-      return null;
-    }
-
-    @Override
-    public Set<Timeout> stop() {
-      return null;
-    }
-
-    public boolean continuePausedTask() {
-      if (pausedTask == null) {
-        return false;
-      }
-      try {
-        if (newPausedTask != null) {
-          throw new IllegalStateException("Cannot be in this state");
-        }
-        pausedTask.run(null);  // Argument never used in this code base
-        pausedTask = newPausedTask;
-        newPausedTask = null;
-        return true;
-      } catch (Exception e) {
-        throw new RuntimeException("Timer task failed: " + pausedTask, e);
-      }
     }
   }
 
