@@ -1,7 +1,9 @@
 package org.hbase.async;
 
 import org.jboss.netty.buffer.ChannelBuffer;
+import org.junit.Ignore;
 
+@Ignore // ignore for test runners
 class GenericRequest extends HBaseRpc implements 
   HBaseRpc.HasTable, HBaseRpc.HasKey,
   HBaseRpc.HasFamily, HBaseRpc.HasQualifiers {

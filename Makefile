@@ -134,6 +134,9 @@ test_SOURCES := \
 	test/TestIntegration.java	\
 
 unittest_SRC := \
+	test/BaseTestHBaseClient.java	\
+	test/GenericRequest.java	\
+	test/TestHBaseClient.java	\
 	test/TestMETALookup.java	\
 	test/TestNSREs.java	\
 	test/TestZKClient.java
