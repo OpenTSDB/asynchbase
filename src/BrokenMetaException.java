@@ -60,6 +60,16 @@ public final class BrokenMetaException extends NonRecoverableException {
   }
 
   /**
+   * Constructor.
+   * @param msg A message describing as precisely as possible what's wrong
+   * with the META table.
+   */
+  BrokenMetaException(final String msg) {
+    super("Your .META. table seems broken.  " + msg, null);
+    this.table = null;
+  }
+  
+  /**
    * Returns the name of the table for which we were trying to lookup a region.
    * @return A possibly {@code null} byte array.
    */
