@@ -2101,7 +2101,7 @@ public final class HBaseClient {
       // regions_cache with the daughter regions of the split.
     }
     if (start_key == null) {
-      throw new BrokenMetaException(null, "It didn't contain any"
+      throw new BrokenMetaException("It didn't contain any"
         + " `info:regioninfo' cell:  " + meta_row);
     }
 
