@@ -207,22 +207,25 @@ public final class HBaseClient {
   /** A byte array containing a single zero byte.  */
   private static final byte[] ZERO_ARRAY = new byte[] { 0 };
 
-  private static final byte[] ROOT = new byte[] { '-', 'R', 'O', 'O', 'T', '-' };
-  private static final byte[] ROOT_REGION = new byte[] { '-', 'R', 'O', 'O', 'T', '-', ',', ',', '0' };
-  private static final byte[] META = new byte[] { '.', 'M', 'E', 'T', 'A', '.' };
-  static final byte[] INFO = new byte[] { 'i', 'n', 'f', 'o' };
-  private static final byte[] REGIONINFO = new byte[] { 'r', 'e', 'g', 'i', 'o', 'n', 'i', 'n', 'f', 'o' };
-  private static final byte[] SERVER = new byte[] { 's', 'e', 'r', 'v', 'e', 'r' };
+  protected static final byte[] ROOT = new byte[] { '-', 'R', 'O', 'O', 'T', '-' };
+  protected static final byte[] ROOT_REGION = new byte[] { '-', 'R', 'O', 'O', 'T', '-', ',', ',', '0' };
+  protected static final byte[] META = new byte[] { '.', 'M', 'E', 'T', 'A', '.' };
+  protected static final byte[] INFO = new byte[] { 'i', 'n', 'f', 'o' };
+  protected static final byte[] REGIONINFO = new byte[] { 'r', 'e', 'g', 'i', 'o', 'n', 'i', 'n', 'f', 'o' };
+  protected static final byte[] SERVER = new byte[] { 's', 'e', 'r', 'v', 'e', 'r' };
   /** HBase 0.95 and up: .META. is now hbase:meta */
-  private static final byte[] HBASE96_META =
+  protected static final byte[] HBASE96_META =
     new byte[] { 'h', 'b', 'a', 's', 'e', ':', 'm', 'e', 't', 'a' };
   /** New for HBase 0.95 and up: the name of META is fixed.  */
-  private static final byte[] META_REGION_NAME =
+  protected static final byte[] META_REGION_NAME =
     new byte[] { 'h', 'b', 'a', 's', 'e', ':', 'm', 'e', 't', 'a', ',', ',', '1' };
   /** New for HBase 0.95 and up: the region info for META is fixed.  */
-  private static final RegionInfo META_REGION =
+  protected static final RegionInfo META_REGION =
     new RegionInfo(HBASE96_META, META_REGION_NAME, EMPTY_ARRAY);
 
+  /** How many times to retry an RPC before giving up */
+  protected static int MAX_RETRY_ATTEMPTS = 10;
+  
   /**
    * In HBase 0.95 and up, this magic number is found in a couple places.
    * It's used in the znode that points to the .META. region, to
@@ -1770,7 +1773,7 @@ public final class HBaseClient {
    * already.
    */
   static boolean cannotRetryRequest(final HBaseRpc rpc) {
-    return rpc.attempt > 10;  // XXX Don't hardcode.
+    return rpc.attempt > MAX_RETRY_ATTEMPTS;
   }
 
   /**
@@ -2101,7 +2104,7 @@ public final class HBaseClient {
       // regions_cache with the daughter regions of the split.
     }
     if (start_key == null) {
-      throw new BrokenMetaException(null, "It didn't contain any"
+      throw new BrokenMetaException("It didn't contain any"
         + " `info:regioninfo' cell:  " + meta_row);
     }
 
@@ -2241,8 +2244,8 @@ public final class HBaseClient {
    * @see #handleNSRE
    * XXX TODO(tsuna): Don't hardcode.
    */
-  private static final short NSRE_LOW_WATERMARK  =  1000;
-  private static final short NSRE_HIGH_WATERMARK = 10000;
+  private static short NSRE_LOW_WATERMARK  =  1000;
+  private static short NSRE_HIGH_WATERMARK = 10000;
 
   /** Log a message for every N RPCs we buffer due to an NSRE.  */
   private static final short NSRE_LOG_EVERY      =   500;
@@ -2475,8 +2478,13 @@ public final class HBaseClient {
 
         synchronized (rpcs) {
           if (LOG.isDebugEnabled()) {
-            LOG.debug("Retrying " + rpcs.size() + " RPCs now that the NSRE on "
-                      + Bytes.pretty(region_name) + " seems to have cleared");
+            if (arg instanceof Exception) {
+              LOG.debug("Retrying " + rpcs.size() + " RPCs on NSREd region "
+                  + Bytes.pretty(region_name));
+            } else {
+              LOG.debug("Retrying " + rpcs.size() + " RPCs now that the NSRE on "
+                  + Bytes.pretty(region_name) + " seems to have cleared");
+            }
           }
           final Iterator<HBaseRpc> i = rpcs.iterator();
           if (i.hasNext()) {
@@ -2541,7 +2549,7 @@ public final class HBaseClient {
    * Some arbitrary junk that is unlikely to appear in a real row key.
    * @see probeKey
    */
-  private static byte[] PROBE_SUFFIX = {
+  protected static byte[] PROBE_SUFFIX = {
     ':', 'A', 's', 'y', 'n', 'c', 'H', 'B', 'a', 's', 'e',
     '~', 'p', 'r', 'o', 'b', 'e', '~', '<', ';', '_', '<',
   };
@@ -2888,7 +2896,7 @@ public final class HBaseClient {
    * cumbersome so I don't expect anyone to do this, which is why we manage
    * our own instance.
    */
-  private final class ZKClient implements Watcher {
+  protected final class ZKClient implements Watcher {
 
     /** The specification of the quorum, e.g. "host1,host2,host3"  */
     private final String quorum_spec;
@@ -3094,7 +3102,7 @@ public final class HBaseClient {
        * HBASE-3065 (r1151751) prepends meta-data in ZooKeeper files.
        * The meta-data always starts with this magic byte.
        */
-      private static final byte MAGIC = (byte) 0xFF;
+      protected static final byte MAGIC = (byte) 0xFF;
 
       private static final byte UNKNOWN = 0;  // Callback still pending.
       private static final byte FOUND = 1;    // We found the znode.
@@ -3186,7 +3194,7 @@ public final class HBaseClient {
 
       /** Returns a new client for the RS found in the root-region-server.  */
       @SuppressWarnings("fallthrough")
-      private RegionClient handleRootZnode(final byte[] data) {
+      protected RegionClient handleRootZnode(final byte[] data) {
         // There are 3 cases.  Older versions of HBase encode the location
         // of the root region as "host:port", 0.91 uses "host,port,startcode"
         // and newer versions of 0.91 use "<metadata>host,port,startcode"
@@ -3260,7 +3268,7 @@ public final class HBaseClient {
        * Returns a new client for the RS found in the meta-region-server.
        * This is used in HBase 0.95 and up.
        */
-      private RegionClient handleMetaZnode(final byte[] data) {
+      protected RegionClient handleMetaZnode(final byte[] data) {
         if (data[0] != MAGIC) {
           LOG.error("Malformed META region meta-data in " + Bytes.pretty(data)
                     + ", invalid leading magic number: " + data[0]);
