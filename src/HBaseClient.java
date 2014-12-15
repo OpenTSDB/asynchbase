@@ -223,6 +223,9 @@ public final class HBaseClient {
   protected static final RegionInfo META_REGION =
     new RegionInfo(HBASE96_META, META_REGION_NAME, EMPTY_ARRAY);
 
+  /** How many times to retry an RPC before giving up */
+  protected static int MAX_RETRY_ATTEMPTS = 10;
+  
   /**
    * In HBase 0.95 and up, this magic number is found in a couple places.
    * It's used in the znode that points to the .META. region, to
@@ -1770,7 +1773,7 @@ public final class HBaseClient {
    * already.
    */
   static boolean cannotRetryRequest(final HBaseRpc rpc) {
-    return rpc.attempt > 10;  // XXX Don't hardcode.
+    return rpc.attempt > MAX_RETRY_ATTEMPTS;
   }
 
   /**
@@ -2241,8 +2244,8 @@ public final class HBaseClient {
    * @see #handleNSRE
    * XXX TODO(tsuna): Don't hardcode.
    */
-  private static final short NSRE_LOW_WATERMARK  =  1000;
-  private static final short NSRE_HIGH_WATERMARK = 10000;
+  private static short NSRE_LOW_WATERMARK  =  1000;
+  private static short NSRE_HIGH_WATERMARK = 10000;
 
   /** Log a message for every N RPCs we buffer due to an NSRE.  */
   private static final short NSRE_LOG_EVERY      =   500;
@@ -2475,8 +2478,13 @@ public final class HBaseClient {
 
         synchronized (rpcs) {
           if (LOG.isDebugEnabled()) {
-            LOG.debug("Retrying " + rpcs.size() + " RPCs now that the NSRE on "
-                      + Bytes.pretty(region_name) + " seems to have cleared");
+            if (arg instanceof Exception) {
+              LOG.debug("Retrying " + rpcs.size() + " RPCs on NSREd region "
+                  + Bytes.pretty(region_name));
+            } else {
+              LOG.debug("Retrying " + rpcs.size() + " RPCs now that the NSRE on "
+                  + Bytes.pretty(region_name) + " seems to have cleared");
+            }
           }
           final Iterator<HBaseRpc> i = rpcs.iterator();
           if (i.hasNext()) {
@@ -2541,7 +2549,7 @@ public final class HBaseClient {
    * Some arbitrary junk that is unlikely to appear in a real row key.
    * @see probeKey
    */
-  private static byte[] PROBE_SUFFIX = {
+  protected static byte[] PROBE_SUFFIX = {
     ':', 'A', 's', 'y', 'n', 'c', 'H', 'B', 'a', 's', 'e',
     '~', 'p', 'r', 'o', 'b', 'e', '~', '<', ';', '_', '<',
   };
