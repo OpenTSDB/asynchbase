@@ -7,7 +7,9 @@ import static org.mockito.Mockito.when;
 import static org.powermock.api.mockito.PowerMockito.mock;
 
 import java.nio.charset.Charset;
+import java.util.AbstractMap;
 import java.util.ArrayList;
+import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentSkipListMap;
@@ -47,6 +49,7 @@ public class BaseTestHBaseClient {
   protected static final KeyValue KV = new KeyValue(KEY, FAMILY, QUALIFIER, VALUE);
   protected static final RegionInfo meta = mkregion(".META.", ".META.,,1234567890");
   protected static final RegionInfo region = mkregion("table", "table,,1234567890");
+  
   protected HBaseClient client = null;
   /** Extracted from {@link #client}.  */
   protected ConcurrentSkipListMap<byte[], RegionInfo> regions_cache;
@@ -81,6 +84,8 @@ public class BaseTestHBaseClient {
     client2regions = Whitebox.getInternalState(client, "client2regions");
     injectRegionInCache(meta, metaclient);
     injectRegionInCache(region, regionclient);
+    
+    when(rootclient.toString()).thenReturn("Mock RootClient");
     
     PowerMockito.doAnswer(new Answer<RegionClient>(){
       @Override
@@ -216,14 +221,19 @@ public class BaseTestHBaseClient {
   
   /**
    * A fake {@link Timer} implementation that fires up tasks immediately.
-   * Tasks are called immediately from the current thread.
+   * Tasks are called immediately from the current thread and a history of the
+   * various tasks is logged.
    */
   static final class FakeTimer extends HashedWheelTimer {
+    final ArrayList<Map.Entry<TimerTask, Long>> tasks = 
+        new ArrayList<Map.Entry<TimerTask, Long>>();
+    
     @Override
     public Timeout newTimeout(final TimerTask task,
                               final long delay,
                               final TimeUnit unit) {
       try {
+        tasks.add(new AbstractMap.SimpleEntry<TimerTask, Long>(task, delay));
         task.run(null);  // Argument never used in this code base.
         return null;     // Return value never used in this code base.
       } catch (RuntimeException e) {
