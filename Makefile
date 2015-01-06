@@ -72,6 +72,7 @@ asynchbase_SOURCES := \
 	src/ColumnRangeFilter.java	\
 	src/CompareAndSetRequest.java	\
 	src/CompareFilter.java	\
+	src/Config.java	\
 	src/ConnectionResetException.java	\
 	src/Counter.java	\
 	src/DeleteRequest.java	\
@@ -135,6 +136,7 @@ test_SOURCES := \
 
 unittest_SRC := \
 	test/BaseTestHBaseClient.java	\
+	test/TestConfig.java	\
 	test/TestHBaseClient.java	\
 	test/TestMETALookup.java	\
 	test/TestNSREs.java	\
