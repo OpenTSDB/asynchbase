@@ -32,7 +32,6 @@ import java.net.InetAddress;
 import java.net.UnknownHostException;
 import java.nio.charset.Charset;
 import java.util.ArrayList;
-import java.util.concurrent.TimeUnit;
 
 import org.apache.zookeeper.WatchedEvent;
 import org.apache.zookeeper.KeeperException.Code;
@@ -43,7 +42,6 @@ import org.hbase.async.HBaseClient.ZKClient;
 import org.hbase.async.HBaseClient.ZKClient.ZKCallback;
 import org.hbase.async.generated.HBasePB.ServerName;
 import org.hbase.async.generated.ZooKeeperPB.MetaRegionServer;
-import org.jboss.netty.util.HashedWheelTimer;
 import org.jboss.netty.util.TimerTask;
 import org.junit.Before;
 import org.junit.Test;
@@ -91,16 +89,15 @@ public class TestZKClient {
   private final static String base_path = "/hbase";
   private final static Charset CHARSET = Charset.forName("ASCII");
   private final static Stat stat = mock(Stat.class);
-  private HBaseClient client = PowerMockito.spy(new HBaseClient("test-quorum-spec"));
+  private HBaseClient client = //PowerMockito.spy(new HBaseClient("test-quorum-spec"));
+          mock(HBaseClient.class);
   private ZKClient zk_client;
   private ZooKeeper zk = mock(ZooKeeper.class);
   private ArrayList<Deferred<Object>> deferred_rootregion;
-  private HashedWheelTimer timer = mock(HashedWheelTimer.class);
   
   @Before
   public void before() throws Exception {
     zk_client = PowerMockito.spy(client.new ZKClient(quorum, base_path));
-    Whitebox.setInternalState(client, "timer", timer);
     whenNew(ZooKeeper.class).withAnyArguments().thenReturn(zk);
 
     PowerMockito.doAnswer(new Answer<RegionClient>(){
@@ -395,7 +392,7 @@ public class TestZKClient {
     verifyPrivate(zk_client, never()).invoke("connectZK");
     verifyPrivate(zk_client, never()).invoke("disconnectZK");
     verifyPrivate(zk_client).invoke("retryGetRootRegionLater");
-    verify(timer).newTimeout((TimerTask)any(), anyLong(), (TimeUnit)any());
+    verify(client).newTimeout((TimerTask)any(), anyLong());
     assertEquals(Byte.valueOf("0"), 
         (Byte)Whitebox.getInternalState(cb, "found_root"));
     assertEquals(Byte.valueOf("1"), 
@@ -420,7 +417,7 @@ public class TestZKClient {
     verifyPrivate(zk_client, never()).invoke("connectZK");
     verifyPrivate(zk_client, never()).invoke("disconnectZK");
     verifyPrivate(zk_client).invoke("retryGetRootRegionLater");
-    verify(timer).newTimeout((TimerTask)any(), anyLong(), (TimeUnit)any());
+    verify(client).newTimeout((TimerTask)any(), anyLong());
     assertEquals(Byte.valueOf("0"), 
         (Byte)Whitebox.getInternalState(cb, "found_root"));
     assertEquals(Byte.valueOf("0"), 
@@ -437,7 +434,7 @@ public class TestZKClient {
     verifyPrivate(zk_client, never()).invoke("connectZK");
     verifyPrivate(zk_client, never()).invoke("disconnectZK");
     verifyPrivate(zk_client).invoke("retryGetRootRegionLater");
-    verify(timer).newTimeout((TimerTask)any(), anyLong(), (TimeUnit)any());
+    verify(client).newTimeout((TimerTask)any(), anyLong());
     assertEquals(Byte.valueOf("0"), 
         (Byte)Whitebox.getInternalState(cb, "found_root"));
     assertEquals(Byte.valueOf("0"), 
@@ -488,7 +485,7 @@ public class TestZKClient {
     verifyPrivate(zk_client, never()).invoke("connectZK");
     verifyPrivate(zk_client, never()).invoke("disconnectZK");
     verifyPrivate(zk_client).invoke("retryGetRootRegionLater");
-    verify(timer).newTimeout((TimerTask)any(), anyLong(), (TimeUnit)any());
+    verify(client).newTimeout((TimerTask)any(), anyLong());
     assertEquals(Byte.valueOf("2"), 
         (Byte)Whitebox.getInternalState(cb, "found_root"));
     assertEquals(Byte.valueOf("2"), 
@@ -539,7 +536,7 @@ public class TestZKClient {
     verifyPrivate(zk_client, never()).invoke("connectZK");
     verifyPrivate(zk_client, never()).invoke("disconnectZK");
     verifyPrivate(zk_client).invoke("retryGetRootRegionLater");
-    verify(timer).newTimeout((TimerTask)any(), anyLong(), (TimeUnit)any());
+    verify(client).newTimeout((TimerTask)any(), anyLong());
     assertEquals(Byte.valueOf("2"), 
         (Byte)Whitebox.getInternalState(cb, "found_root"));
     assertEquals(Byte.valueOf("2"), 
@@ -587,7 +584,7 @@ public class TestZKClient {
     verifyPrivate(zk_client, never()).invoke("connectZK");
     verifyPrivate(zk_client, never()).invoke("disconnectZK");
     verifyPrivate(zk_client).invoke("retryGetRootRegionLater");
-    verify(timer).newTimeout((TimerTask)any(), anyLong(), (TimeUnit)any());
+    verify(client).newTimeout((TimerTask)any(), anyLong());
     assertEquals(Byte.valueOf("0"), 
         (Byte)Whitebox.getInternalState(cb, "found_root"));
     assertEquals(Byte.valueOf("0"), 
@@ -603,7 +600,7 @@ public class TestZKClient {
     verifyPrivate(zk_client, never()).invoke("connectZK");
     verifyPrivate(zk_client, never()).invoke("disconnectZK");
     verifyPrivate(zk_client).invoke("retryGetRootRegionLater");
-    verify(timer).newTimeout((TimerTask)any(), anyLong(), (TimeUnit)any());
+    verify(client).newTimeout((TimerTask)any(), anyLong());
     assertEquals(Byte.valueOf("0"), 
         (Byte)Whitebox.getInternalState(cb, "found_root"));
     assertEquals(Byte.valueOf("0"), 
@@ -619,7 +616,7 @@ public class TestZKClient {
     verifyPrivate(zk_client, never()).invoke("connectZK");
     verifyPrivate(zk_client, never()).invoke("disconnectZK");
     verifyPrivate(zk_client).invoke("retryGetRootRegionLater");
-    verify(timer).newTimeout((TimerTask)any(), anyLong(), (TimeUnit)any());
+    verify(client).newTimeout((TimerTask)any(), anyLong());
     assertEquals(Byte.valueOf("0"), 
         (Byte)Whitebox.getInternalState(cb, "found_root"));
     assertEquals(Byte.valueOf("0"), 
@@ -636,7 +633,7 @@ public class TestZKClient {
     verifyPrivate(zk_client, never()).invoke("connectZK");
     verifyPrivate(zk_client, never()).invoke("disconnectZK");
     verifyPrivate(zk_client).invoke("retryGetRootRegionLater");
-    verify(timer).newTimeout((TimerTask)any(), anyLong(), (TimeUnit)any());
+    verify(client).newTimeout((TimerTask)any(), anyLong());
     assertEquals(Byte.valueOf("1"), 
         (Byte)Whitebox.getInternalState(cb, "found_root"));
     assertEquals(Byte.valueOf("0"), 
