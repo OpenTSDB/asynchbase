@@ -34,6 +34,7 @@ import java.nio.charset.Charset;
 import java.util.ArrayList;
 
 import org.apache.zookeeper.WatchedEvent;
+import org.apache.zookeeper.Watcher;
 import org.apache.zookeeper.KeeperException.Code;
 import org.apache.zookeeper.Watcher.Event.KeeperState;
 import org.apache.zookeeper.ZooKeeper;
@@ -183,7 +184,8 @@ public class TestZKClient {
   
   @Test (expected = NonRecoverableException.class)
   public void connectZKUnknownHostExcetion() throws Exception {
-    whenNew(ZooKeeper.class).withAnyArguments().thenThrow(
+    whenNew(ZooKeeper.class).withArguments(
+        anyString(), anyInt(), (Watcher)any()).thenThrow(
         new UnknownHostException("Bad Quorum"));
     zk_client.getDeferredRoot().joinUninterruptibly();
   }
