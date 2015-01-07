@@ -1406,8 +1406,7 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
       assert rpc == removed;
     }
 
-    if ((decoded instanceof NotServingRegionException ||
-         decoded instanceof RegionMovedException)
+    if (decoded instanceof NotServingRegionException
         && rpc.getRegion() != null) {
       // We only handle NSREs for RPCs targeted at a specific region, because
       // if we don't know which region caused the NSRE (e.g. during multiPut)
