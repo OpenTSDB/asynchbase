@@ -39,9 +39,12 @@ import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentSkipListMap;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 
 import org.hbase.async.HBaseClient.ZKClient;
+import org.jboss.netty.channel.socket.nio.NioClientSocketChannelFactory;
 import org.jboss.netty.util.HashedWheelTimer;
 import org.jboss.netty.util.Timeout;
 import org.jboss.netty.util.TimerTask;
@@ -56,7 +59,8 @@ import org.powermock.reflect.Whitebox;
 import com.stumbleupon.async.Deferred;
 
 @PrepareForTest({ HBaseClient.class, RegionClient.class, HBaseRpc.class, 
-  GetRequest.class, RegionInfo.class })
+  GetRequest.class, RegionInfo.class, NioClientSocketChannelFactory.class, 
+  Executors.class })
 @Ignore // ignore for test runners
 public class BaseTestHBaseClient {
   protected static final Charset CHARSET = Charset.forName("ASCII");
@@ -99,6 +103,11 @@ public class BaseTestHBaseClient {
   @Before
   public void before() throws Exception {
     when(zkclient.getDeferredRoot()).thenReturn(new Deferred<Object>());
+    PowerMockito.mockStatic(Executors.class);
+    PowerMockito.when(Executors.newCachedThreadPool())
+      .thenReturn(mock(ExecutorService.class));
+    PowerMockito.whenNew(NioClientSocketChannelFactory.class).withAnyArguments()
+      .thenReturn(mock(NioClientSocketChannelFactory.class));
     
     client = PowerMockito.spy(new HBaseClient("test-quorum-spec"));
     Whitebox.setInternalState(client, "zkclient", zkclient);
