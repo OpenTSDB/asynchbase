@@ -1,0 +1,14 @@
+language: java
+before_install:
+  - wget https://protobuf.googlecode.com/files/protobuf-2.5.0.tar.gz -O /tmp/protobuf-2.5.0.tar.gz
+  - tar -C /tmp -xvf /tmp/protobuf-2.5.0.tar.gz
+  - cd /tmp/protobuf-2.5.0 && ./configure --prefix=/usr && make --quiet && sudo make install
+before_script:
+  - cd ~/build/*/asynchbase
+  - make pom.xml
+script: export MAVEN_OPTS="-Xmx1024m" && mvn test --quiet
+jdk:
+  - oraclejdk7
+  - openjdk6
+notifications:
+    email: false
