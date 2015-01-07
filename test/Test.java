@@ -39,12 +39,13 @@ import org.hbase.async.RowLock;
 import org.hbase.async.RowLockRequest;
 import org.hbase.async.Scanner;
 import org.slf4j.Logger;
-
 import org.hbase.async.Common;
+import org.junit.Ignore;
 
 /**
  * Simple command-line interface to quickly test async HBase.
  */
+@Ignore // ignore for test runners
 final class Test {
 
   private static final Logger LOG = Common.logger(Test.class);
