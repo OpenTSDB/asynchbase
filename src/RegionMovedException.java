@@ -31,7 +31,7 @@ package org.hbase.async;
  * that particular RegionServer to a new one.
  * @since 1.6
  */
-public final class RegionMovedException extends RecoverableException
+public final class RegionMovedException extends NotServingRegionException
 implements HasFailedRpcException {
 
   static final String REMOTE_CLASS =
@@ -45,7 +45,7 @@ implements HasFailedRpcException {
    * @param failed_rpc The RPC that caused this exception, if known, or null.
    */
   RegionMovedException(final String msg, final HBaseRpc failed_rpc) {
-    super(msg);
+    super(msg, failed_rpc);
     this.failed_rpc = failed_rpc;
   }
 
@@ -69,5 +69,5 @@ implements HasFailedRpcException {
     return new RegionMovedException(msg.toString(), rpc);
   }
 
-  private static final long serialVersionUID = 1411866342;
+  private static final long serialVersionUID = -5340447708638974493L;
 }
