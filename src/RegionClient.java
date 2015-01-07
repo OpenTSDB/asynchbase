@@ -840,7 +840,7 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
    */
   private Deferred<Object> retryEdit(final BatchableRpc rpc,
                                      final RecoverableException e) {
-    if (HBaseClient.cannotRetryRequest(rpc)) {
+    if (hbase_client.cannotRetryRequest(rpc)) {
       return HBaseClient.tooManyAttempts(rpc, e);
     }
     // This RPC has already been delayed because of a failure,

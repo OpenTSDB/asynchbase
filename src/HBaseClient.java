@@ -53,7 +53,6 @@ import org.apache.zookeeper.ZooKeeper;
 import org.apache.zookeeper.data.Stat;
 
 import org.jboss.netty.channel.ChannelEvent;
-import org.jboss.netty.channel.ChannelPipeline;
 import org.jboss.netty.channel.ChannelStateEvent;
 import org.jboss.netty.channel.DefaultChannelPipeline;
 import org.jboss.netty.channel.socket.ClientSocketChannelFactory;
@@ -223,9 +222,6 @@ public final class HBaseClient {
   protected static final RegionInfo META_REGION =
     new RegionInfo(HBASE96_META, META_REGION_NAME, EMPTY_ARRAY);
 
-  /** How many times to retry an RPC before giving up */
-  protected static int MAX_RETRY_ATTEMPTS = 10;
-  
   /**
    * In HBase 0.95 and up, this magic number is found in a couple places.
    * It's used in the znode that points to the .META. region, to
@@ -239,26 +235,8 @@ public final class HBaseClient {
   /**
    * Timer we use to handle all our timeouts.
    * TODO(tsuna): Get it through the ctor to share it with others.
-   * TODO(tsuna): Make the tick duration configurable?
    */
-  private final HashedWheelTimer timer = new HashedWheelTimer(20, MILLISECONDS);
-
-  /** Up to how many milliseconds can we buffer an edit on the client side.  */
-  private volatile short flush_interval = 1000;  // ms
-
-  /**
-   * How many different counters do we want to keep in memory for buffering.
-   * Each entry requires storing the table name, row key, family name and
-   * column qualifier, plus 4 small objects.
-   *
-   * Assuming an average table name of 10 bytes, average key of 20 bytes,
-   * average family name of 10 bytes and average qualifier of 8 bytes, this
-   * would require 65535 * (10 + 20 + 10 + 8 + 4 * 32) / 1024 / 1024 = 11MB
-   * of RAM, which isn't too excessive for a default value.  Of course this
-   * might bite people with large keys or qualifiers, but then it's normal
-   * to expect they'd tune this value to cater to their unusual requirements.
-   */
-  private volatile int increment_buffer_size = 65535;
+  private final HashedWheelTimer timer;
 
   /**
    * Factory through which we will create all its channels / sockets.
@@ -398,6 +376,9 @@ public final class HBaseClient {
    */
   private volatile LoadingCache<BufferedIncrement, BufferedIncrement.Amount> increment_buffer;
 
+  /** The configuration for this client */
+  private final Config config;
+  
   // ------------------------ //
   // Client usage statistics. //
   // ------------------------ //
@@ -467,12 +448,6 @@ public final class HBaseClient {
     this(quorum_spec, base_path, defaultChannelFactory());
   }
 
-  /** Creates a default channel factory in case we haven't been given one.  */
-  private static NioClientSocketChannelFactory defaultChannelFactory() {
-    final Executor executor = Executors.newCachedThreadPool();
-    return new NioClientSocketChannelFactory(executor, executor);
-  }
-
   /**
    * Constructor for advanced users with special needs.
    * <p>
@@ -500,18 +475,6 @@ public final class HBaseClient {
     this(quorum_spec, base_path, new CustomChannelFactory(executor));
   }
 
-  /** A custom channel factory that doesn't shutdown its executor.  */
-  private static final class CustomChannelFactory
-    extends NioClientSocketChannelFactory {
-      CustomChannelFactory(final Executor executor) {
-        super(executor, executor);
-      }
-      @Override
-      public void releaseExternalResources() {
-        // Do nothing, we don't want to shut down the executor.
-      }
-  }
-
   /**
    * Constructor for advanced users with special needs.
    * <p>
@@ -530,6 +493,84 @@ public final class HBaseClient {
                      final ClientSocketChannelFactory channel_factory) {
     this.channel_factory = channel_factory;
     zkclient = new ZKClient(quorum_spec, base_path);
+    config = new Config();
+    timer = new HashedWheelTimer(config.getShort("asynchbase.timer.tick"), 
+        MILLISECONDS);
+  }
+  
+  /**
+   * Constructor accepting a configuration object with at least the 
+   * "asynchbase.zk.quorum" specified in the format {@code "host1,host2,host3"}.
+   * @param config A configuration object
+   * @since 1.7
+   */
+  public HBaseClient(final Config config) {
+    this(config, defaultChannelFactory());
+  }
+  
+  /**
+   * Constructor accepting a configuration object with at least the 
+   * "asynchbase.zk.quorum" specified in the format {@code "host1,host2,host3"}
+   * and an executor thread pool.
+   * @param config A configuration object
+   * @param The executor from which to obtain threads for NIO
+   * operations.  It is <strong>strongly</strong> encouraged to use a
+   * {@link Executors#newCachedThreadPool} or something equivalent unless
+   * you're sure to understand how Netty creates and uses threads.
+   * Using a fixed-size thread pool will not work the way you expect.
+   * <p>
+   * Note that calling {@link #shutdown} on this client will <b>NOT</b>
+   * shut down the executor.
+   * @see NioClientSocketChannelFactory
+   * @since 1.7
+   */
+  public HBaseClient(final Config config, final Executor executor) {
+    this(config, new CustomChannelFactory(executor));
+  }
+  
+  /**
+   * Constructor accepting a configuration object with at least the 
+   * "asynchbase.zk.quorum" specified in the format {@code "host1,host2,host3"}
+   * and a custom channel factory for advanced users.
+   * <p>
+   * Most users don't need to use this constructor.
+   * @param config A configuration object
+   * @param channel_factory A custom factory to use to create sockets.
+   * <p>
+   * Note that calling {@link #shutdown} on this client will also cause the
+   * shutdown and release of the factory and its underlying thread pool.
+   * @since 1.7
+   */
+  public HBaseClient(final Config config, 
+      final ClientSocketChannelFactory channel_factory) {
+    this.channel_factory = channel_factory;
+    if (!config.hasProperty("asynchbase.zk.quorum")) {
+      throw new IllegalArgumentException(
+          "Missing the 'asynchbase.zk.quorum' property");
+    }
+    zkclient = new ZKClient(config.getString("asynchbase.zk.quorum"), 
+        config.getString("asynchbase.zk.base_path"));
+    this.config = config;
+    timer = new HashedWheelTimer(config.getShort("asynchbase.timer.tick"), 
+        MILLISECONDS);
+  }
+  
+  /** Creates a default channel factory in case we haven't been given one.  */
+  private static NioClientSocketChannelFactory defaultChannelFactory() {
+    final Executor executor = Executors.newCachedThreadPool();
+    return new NioClientSocketChannelFactory(executor, executor);
+  }
+
+  /** A custom channel factory that doesn't shutdown its executor.  */
+  private static final class CustomChannelFactory
+    extends NioClientSocketChannelFactory {
+      CustomChannelFactory(final Executor executor) {
+        super(executor, executor);
+      }
+      @Override
+      public void releaseExternalResources() {
+        // Do nothing, we don't want to shut down the executor.
+      }
   }
 
   /**
@@ -654,8 +695,9 @@ public final class HBaseClient {
     if (flush_interval < 0) {
       throw new IllegalArgumentException("Negative: " + flush_interval);
     }
-    final short prev = this.flush_interval;
-    this.flush_interval = flush_interval;
+    final short prev = config.flushInterval();
+    config.overrideConfig("asynchbase.rpcs.buffered_flush_interval", 
+        Short.toString(flush_interval));
     return prev;
   }
 
@@ -686,11 +728,12 @@ public final class HBaseClient {
     if (increment_buffer_size < 0) {
       throw new IllegalArgumentException("Negative: " + increment_buffer_size);
     }
-    final int current = this.increment_buffer_size;
+    final int current = config.incrementBufferSize();
     if (current == increment_buffer_size) {
       return current;
     }
-    this.increment_buffer_size = increment_buffer_size;
+    config.overrideConfig("asynchbase.increments.buffer_size", 
+        Integer.toString(increment_buffer_size));
     final LoadingCache<BufferedIncrement, BufferedIncrement.Amount> prev =
       increment_buffer;  // Volatile-read.
     if (prev != null) {  // Need to resize.
@@ -717,6 +760,15 @@ public final class HBaseClient {
     return timer;
   }
 
+  /**
+   * Return the configuration object for this client
+   * @return The config object for this client
+   * @since 1.7
+   */
+  public Config getConfig() {
+    return config;
+  }
+  
   /**
    * Schedules a new timeout.
    * @param task The task to execute when the timer times out.
@@ -745,7 +797,7 @@ public final class HBaseClient {
    * @see #setFlushInterval
    */
   public short getFlushInterval() {
-    return flush_interval;
+    return config.flushInterval();
   }
 
   /**
@@ -757,7 +809,7 @@ public final class HBaseClient {
    * @since 1.3
    */
   public int getIncrementBufferSize() {
-    return increment_buffer_size;
+    return config.incrementBufferSize();
   }
 
   /**
@@ -1175,7 +1227,7 @@ public final class HBaseClient {
   public Deferred<Long> bufferAtomicIncrement(final AtomicIncrementRequest request) {
     final long value = request.getAmount();
     if (!BufferedIncrement.Amount.checkOverflow(value)  // Value too large.
-        || flush_interval == 0) {           // Client-side buffer disabled.
+        || config.flushInterval() == 0) {           // Client-side buffer disabled.
       return atomicIncrement(request);
     }
 
@@ -1226,7 +1278,7 @@ public final class HBaseClient {
         try {
           flushBufferedIncrements(increment_buffer);
         } finally {
-          final short interval = flush_interval; // Volatile-read.
+          final short interval = config.flushInterval(); // Volatile-read.
           // Even if we paused or disabled the client side buffer by calling
           // setFlushInterval(0), we will continue to schedule this timer
           // forever instead of pausing it.  Pausing it is troublesome because
@@ -1239,7 +1291,7 @@ public final class HBaseClient {
         }
       }
     }
-    final short interval = flush_interval; // Volatile-read.
+    final short interval = config.flushInterval(); // Volatile-read.
     // Handle the extremely unlikely yet possible racy case where:
     //   flush_interval was > 0
     //   A buffered increment came in
@@ -1291,7 +1343,7 @@ public final class HBaseClient {
    * Creates the increment buffer according to current configuration.
    */
   private void makeIncrementBuffer() {
-    final int size = increment_buffer_size;
+    final int size = config.incrementBufferSize();
     increment_buffer = BufferedIncrement.newCache(this, size);
     if (LOG.isDebugEnabled()) {
       LOG.debug("Created increment buffer of " + size + " entries");
@@ -1772,8 +1824,8 @@ public final class HBaseClient {
    * @throws NonRecoverableException if the request has had too many attempts
    * already.
    */
-  static boolean cannotRetryRequest(final HBaseRpc rpc) {
-    return rpc.attempt > MAX_RETRY_ATTEMPTS;
+  boolean cannotRetryRequest(final HBaseRpc rpc) {
+    return rpc.attempt > config.maxRetryAttempts();
   }
 
   /**
@@ -2239,14 +2291,6 @@ public final class HBaseClient {
     return region.table() == EMPTY_ARRAY;
   }
 
-  /**
-   * Low and high watermarks when buffering RPCs due to an NSRE.
-   * @see #handleNSRE
-   * XXX TODO(tsuna): Don't hardcode.
-   */
-  private static short NSRE_LOW_WATERMARK  =  1000;
-  private static short NSRE_HIGH_WATERMARK = 10000;
-
   /** Log a message for every N RPCs we buffer due to an NSRE.  */
   private static final short NSRE_LOG_EVERY      =   500;
 
@@ -2380,8 +2424,8 @@ public final class HBaseClient {
         // If `rpc' is the first element in nsred_rpcs, it's our "probe" RPC,
         // in which case we must not add it to the array again.
         else if ((exists_rpc = nsred_rpcs.get(0)) != rpc) {
-          if (size < NSRE_HIGH_WATERMARK) {
-            if (size == NSRE_LOW_WATERMARK) {
+          if (size < config.nsreHighWatermark()) {
+            if (size == config.nsreLowWatermark()) {
               nsred_rpcs.add(null);  // "Skip" one slot.
             } else if (can_retry_rpc) {
               reject = false;
@@ -2400,10 +2444,10 @@ public final class HBaseClient {
 
       // Stop here if this is a known NSRE and `rpc' is not our probe RPC.
       if (known_nsre && exists_rpc != rpc) {
-        if (size != NSRE_HIGH_WATERMARK && size % NSRE_LOG_EVERY == 0) {
+        if (size != config.nsreHighWatermark() && size % NSRE_LOG_EVERY == 0) {
           final String msg = "There are now " + size
             + " RPCs pending due to NSRE on " + Bytes.pretty(region_name);
-          if (size + NSRE_LOG_EVERY < NSRE_HIGH_WATERMARK) {
+          if (size + NSRE_LOG_EVERY < config.nsreHighWatermark()) {
             LOG.info(msg);  // First message logged at INFO level.
           } else {
             LOG.warn(msg);  // Last message logged with increased severity.

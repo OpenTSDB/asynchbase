@@ -28,7 +28,6 @@ package org.hbase.async;
 
 import java.lang.reflect.Method;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Map;
 import java.util.concurrent.ConcurrentSkipListMap;
 
@@ -557,7 +556,7 @@ final class TestNSREs extends BaseTestHBaseClient {
     final int trigger_retries = 5;
     // probes all fail but the trigger will succeed at one point
     final FakeTimer timer = setupMultiNSRE(trigger_retries, 
-        HBaseClient.MAX_RETRY_ATTEMPTS + 2, false);
+        client.getConfig().maxRetryAttempts() + 2, false);
     
     Deferred<ArrayList<KeyValue>> triggerRpcDeferred = client.get(trigger);
 
@@ -579,7 +578,7 @@ final class TestNSREs extends BaseTestHBaseClient {
 
     assertSame(row, triggerRpcDeferred.join());
     assertEquals(
-        (trigger_retries * HBaseClient.MAX_RETRY_ATTEMPTS) + trigger_retries, 
+        (trigger_retries * client.getConfig().maxRetryAttempts()) + trigger_retries, 
         timer.tasks.size());
     
     Long last = 400L;
@@ -653,11 +652,12 @@ final class TestNSREs extends BaseTestHBaseClient {
   @Test
   public void tooManyAttempts() throws Exception {
     // stack overflow if we don't set this due to mocking
-    Whitebox.setInternalState(HBaseClient.class, "MAX_RETRY_ATTEMPTS", 2);
+    client.getConfig().overrideConfig("asynchbase.rpcs.max_retry_attempts", "2");
     
     // probes all fail but the trigger will succeed at one point
-    final FakeTimer timer = setupMultiNSRE(HBaseClient.MAX_RETRY_ATTEMPTS + 2, 
-        HBaseClient.MAX_RETRY_ATTEMPTS + 2, true);
+    final FakeTimer timer = setupMultiNSRE(
+        client.getConfig().maxRetryAttempts() + 2, 
+        client.getConfig().maxRetryAttempts() + 2, true);
     
     Deferred<ArrayList<KeyValue>> triggerRpcDeferred = client.get(trigger);
 
@@ -800,7 +800,7 @@ final class TestNSREs extends BaseTestHBaseClient {
   // ?? What's the real purpose here?
   @Test
   public void handleNSRELowWatermark() throws Exception {
-    Whitebox.setInternalState(HBaseClient.class, "NSRE_LOW_WATERMARK", (short)1);
+    client.getConfig().overrideConfig("asynchbase.nsre.low_watermark", "1");
     final HBaseRpc probe = MockProbe();
     Whitebox.setInternalState(client, "timer", mock(HashedWheelTimer.class));
     final GetRequest get = new GetRequest(TABLE, KEY);
@@ -836,7 +836,7 @@ final class TestNSREs extends BaseTestHBaseClient {
   
   @Test
   public void handleNSREHighWatermark() throws Exception {
-    Whitebox.setInternalState(HBaseClient.class, "NSRE_HIGH_WATERMARK", (short)2);
+    client.getConfig().overrideConfig("asynchbase.nsre.high_watermark", "2");
     final HBaseRpc probe = MockProbe();
     Whitebox.setInternalState(client, "timer", mock(HashedWheelTimer.class));
     final GetRequest get = new GetRequest(TABLE, KEY);
@@ -894,8 +894,7 @@ final class TestNSREs extends BaseTestHBaseClient {
   
   @Test
   public void handleNSREReProbe() throws Exception {
-    Whitebox.setInternalState(HBaseClient.class, "NSRE_HIGH_WATERMARK", 
-        (short)10000);
+    client.getConfig().overrideConfig("asynchbase.nsre.high_watermark", "10000");
     final HBaseRpc probe = MockProbe();
     Whitebox.setInternalState(client, "timer", mock(HashedWheelTimer.class));
     final GetRequest get = new GetRequest(TABLE, KEY);
@@ -938,7 +937,7 @@ final class TestNSREs extends BaseTestHBaseClient {
     Whitebox.setInternalState(client, "timer", mock(HashedWheelTimer.class));
     final GetRequest get = new GetRequest(TABLE, KEY);
     final Deferred<Object> deferred = get.getDeferred();
-    get.attempt = (byte)(HBaseClient.MAX_RETRY_ATTEMPTS + 2);
+    get.attempt = (byte)(client.getConfig().maxRetryAttempts() + 2);
     
     assertEquals(0, got_nsre.size());
     assertEquals(0, num_nsres.get());
@@ -979,7 +978,7 @@ final class TestNSREs extends BaseTestHBaseClient {
     Whitebox.setInternalState(client, "timer", mock(HashedWheelTimer.class));
     final GetRequest get = new GetRequest(TABLE, KEY);
     final Deferred<Object> deferred = get.getDeferred();
-    get.attempt = (byte)(HBaseClient.MAX_RETRY_ATTEMPTS + 2);
+    get.attempt = (byte)(client.getConfig().maxRetryAttempts() + 2);
     
     assertEquals(1, got_nsre.size());
     assertEquals(0, num_nsres.get());
