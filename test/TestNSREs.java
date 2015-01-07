@@ -893,7 +893,6 @@ final class TestNSREs extends BaseTestHBaseClient {
   
   @Test
   public void handleNSREReProbe() throws Exception {
-    System.out.println("-----------------------");
     Whitebox.setInternalState(HBaseClient.class, "NSRE_HIGH_WATERMARK", 
         (short)10000);
     final HBaseRpc probe = MockProbe();
@@ -911,13 +910,6 @@ final class TestNSREs extends BaseTestHBaseClient {
     client.handleNSRE(probe, region.name(), 
         new NotServingRegionException("Fail", probe));
 
-    for (Map.Entry<byte[], ArrayList<HBaseRpc>> entry2 : got_nsre.entrySet()) {
-      System.out.println("Key: " + Arrays.toString(entry2.getKey()));
-      for (HBaseRpc rpc : entry2.getValue()) {
-        System.out.println(rpc);
-      }
-    }
-    System.out.println("-----------------------");
     verifyPrivate(client, times(1)).invoke("invalidateRegionCache", 
         region.name(), true, "seems to be splitting or closing it.");
     verifyPrivate(client, never()).invoke("sendRpcToRegion", (HBaseRpc)any());
