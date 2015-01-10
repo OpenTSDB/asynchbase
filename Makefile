@@ -137,6 +137,7 @@ test_SOURCES := \
 unittest_SRC := \
 	test/BaseTestHBaseClient.java	\
 	test/TestConfig.java	\
+	test/TestDeleteRequest.java	\
 	test/TestHBaseClient.java	\
 	test/TestMETALookup.java	\
 	test/TestNSREs.java	\
