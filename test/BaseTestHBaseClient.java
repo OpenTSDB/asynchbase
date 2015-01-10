@@ -92,16 +92,21 @@ public class BaseTestHBaseClient {
   /** Extracted from {@link #client}. */
   protected Counter num_nsre_rpcs;
   /** Fake client supposedly connected to -ROOT-.  */
-  protected RegionClient rootclient = mock(RegionClient.class);
+  protected RegionClient rootclient;
   /** Fake client supposedly connected to .META..  */
-  protected RegionClient metaclient = mock(RegionClient.class);
+  protected RegionClient metaclient;
   /** Fake client supposedly connected to our fake test table.  */
-  protected RegionClient regionclient = mock(RegionClient.class);
+  protected RegionClient regionclient;
   /** Fake Zookeeper client */
-  protected ZKClient zkclient = mock(ZKClient.class);
+  protected ZKClient zkclient;
   
   @Before
   public void before() throws Exception {
+    rootclient = mock(RegionClient.class);
+    metaclient = mock(RegionClient.class);
+    regionclient = mock(RegionClient.class);
+    zkclient = mock(ZKClient.class);
+    
     when(zkclient.getDeferredRoot()).thenReturn(new Deferred<Object>());
     PowerMockito.mockStatic(Executors.class);
     PowerMockito.when(Executors.newCachedThreadPool())

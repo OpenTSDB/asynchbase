@@ -85,10 +85,11 @@ final class TestNSREs extends BaseTestHBaseClient {
   private GetRequest trigger;
   private Counter num_nsres;
   private ConcurrentSkipListMap<byte[], ArrayList<HBaseRpc>> got_nsre;
-  private final static ArrayList<KeyValue> row = new ArrayList<KeyValue>(1);
+  private ArrayList<KeyValue> row;
   
   @Before
   public void beforeNSRE() throws Exception {
+    row = new ArrayList<KeyValue>(1);
     row.add(KV);
     num_nsres = Whitebox.getInternalState(client, "num_nsres");
     num_nsre_rpcs = Whitebox.getInternalState(client, "num_nsre_rpcs");
