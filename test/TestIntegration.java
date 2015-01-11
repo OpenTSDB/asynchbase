@@ -26,11 +26,6 @@
  */
 package org.hbase.async;
 
-import java.lang.annotation.ElementType;
-import java.lang.annotation.Retention;
-import java.lang.annotation.RetentionPolicy;
-import java.lang.annotation.Target;
-import java.lang.reflect.Method;
 import java.io.BufferedReader;
 import java.io.File;
 import java.io.InputStream;
@@ -39,12 +34,9 @@ import java.io.OutputStream;
 import java.util.ArrayList;
 import java.util.Collection;
 
-import org.jboss.netty.logging.InternalLoggerFactory;
-import org.jboss.netty.logging.Slf4JLoggerFactory;
 import org.slf4j.Logger;
 import org.junit.After;
 import org.junit.Before;
-import org.junit.Ignore;
 import org.junit.Test;
 import org.junit.runner.Description;
 import org.junit.runner.JUnitCore;
@@ -97,7 +89,7 @@ import org.hbase.async.Common;
  *
  * Requires a locally running HBase cluster.
  */
-@Ignore // ignore for test runners
+
 final public class TestIntegration {
 
   private static final Logger LOG = Common.logger(TestIntegration.class);
@@ -166,7 +158,7 @@ final public class TestIntegration {
 
   /** Ensures the table/family we use for our test exists. */
   private static void preFlightTest(final String[] args) throws Exception {
-    final HBaseClient client = Common.getOpt(TestIncrementCoalescing.class,
+    final HBaseClient client = Common.getOpt(TestIntegration.class,
                                              args);
     try {
       createOrTruncateTable(client, args[0], args[1]);
@@ -254,6 +246,52 @@ final public class TestIntegration {
     final ArrayList<KeyValue> kvs2 = client.get(get).join();
     assertSizeIs(1, kvs2);
     assertEq("val1", kvs2.get(0).value());
+  }
+
+  /** 
+   * Call Append on a column for the first time and validate that it was
+   * created.
+   */
+  @Test
+  public void appendOnceNoReturnRead() throws Exception {
+    client.setFlushInterval(FAST_FLUSH);
+    final double write_time = System.currentTimeMillis();
+    final AppendRequest append = new AppendRequest(table, "a", family, "q", "val");
+    final GetRequest get = new GetRequest(table, "a", family, "q");
+    assertNull(client.append(append).join());
+    final ArrayList<KeyValue> kvs = client.get(get).join();
+    assertSizeIs(1, kvs);
+    final KeyValue kv = kvs.get(0);
+    assertEq("a", kv.key());
+    assertEq(family, kv.family());
+    assertEq("q", kv.qualifier());
+    assertEq("val", kv.value());
+    final double kvts = kv.timestamp();
+    assertEquals(write_time, kvts, 5000.0);  // Within five seconds.
+  }
+ 
+  /**
+   * Call append on a column twice, the first time to create it, the second to
+   * append the new value.
+   */
+  @Test
+  public void appendTwiceNoReturnRead() throws Exception {
+    client.setFlushInterval(FAST_FLUSH);
+    final double write_time = System.currentTimeMillis();
+    final AppendRequest append = new AppendRequest(table, "a2", family, "q", "val");
+    final AppendRequest append2 = new AppendRequest(table, "a2", family, "q", "2ndv");
+    final GetRequest get = new GetRequest(table, "a2", family, "q");
+    assertNull(client.append(append).join());
+    assertNull(client.append(append2).join());
+    final ArrayList<KeyValue> kvs = client.get(get).join();
+    assertSizeIs(1, kvs);
+    final KeyValue kv = kvs.get(0);
+    assertEq("a2", kv.key());
+    assertEq(family, kv.family());
+    assertEq("q", kv.qualifier());
+    assertEq("val2ndv", kv.value());
+    final double kvts = kv.timestamp();
+    assertEquals(write_time, kvts, 5000.0);  // Within five seconds.
   }
 
   /** Basic scan test. */
