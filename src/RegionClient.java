@@ -35,6 +35,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.atomic.AtomicInteger;
+
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
 
 import com.google.protobuf.CodedOutputStream;
@@ -53,7 +54,6 @@ import org.jboss.netty.handler.codec.replay.ReplayingDecoder;
 import org.jboss.netty.handler.codec.replay.VoidEnum;
 import org.jboss.netty.util.Timeout;
 import org.jboss.netty.util.TimerTask;
-
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -192,6 +192,10 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
    */
   private final AtomicInteger rpcid = new AtomicInteger(-1);
 
+  /** A counter of how many RPCs were actually sent over the TCP socket though
+   * they may not have made it all the way */
+  private final AtomicInteger rpcs_sent = new AtomicInteger();
+  
   private final TimerTask flush_timer = new TimerTask() {
     public void run(final Timeout timeout) {
       periodicFlush();
@@ -246,6 +250,25 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
    */
   public String getRemoteAddress() {
     return chan != null ? chan.getRemoteAddress().toString() : null;
+  }
+  
+  /**
+   * Return statistics about this particular region client
+   * @return A RegionClientStats object with an immutable copy of the stats
+   * @since 1.7
+   */
+  public RegionClientStats stats() {
+    synchronized (this) {
+      return new RegionClientStats(
+        rpcs_sent.get(),
+        rpcs_inflight.size(),
+        pending_rpcs != null ? pending_rpcs.size() : 0,
+        rpcid.get(),
+        dead,
+        chan.getRemoteAddress().toString(),
+        batched_rpcs != null ? batched_rpcs.size() : 0
+      );
+    }
   }
   
   /** Periodically flushes buffered RPCs.  */
@@ -906,6 +929,7 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
       final Channel chan = this.chan;  // Volatile read.
       if (chan != null) {  // Double check if we disconnected during encode().
         Channels.write(chan, serialized);
+        rpcs_sent.incrementAndGet();
         return;
       }  // else: continue to the "we're disconnected" code path below.
     }

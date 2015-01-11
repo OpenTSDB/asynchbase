@@ -99,6 +99,7 @@ asynchbase_SOURCES := \
 	src/RecoverableException.java	\
 	src/RegexStringComparator.java	\
 	src/RegionClient.java	\
+	src/RegionClientStats.java	\
 	src/RegionInfo.java	\
 	src/RegionOfflineException.java	\
 	src/RegionMovedException.java	\

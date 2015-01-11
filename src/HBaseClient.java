@@ -33,13 +33,16 @@ import java.net.SocketAddress;
 import java.net.UnknownHostException;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collection;
 import java.util.HashMap;
 import java.util.Iterator;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentSkipListMap;
 import java.util.concurrent.Executor;
 import java.util.concurrent.Executors;
+
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
 
 import com.google.common.cache.LoadingCache;
@@ -51,7 +54,6 @@ import org.apache.zookeeper.WatchedEvent;
 import org.apache.zookeeper.Watcher;
 import org.apache.zookeeper.ZooKeeper;
 import org.apache.zookeeper.data.Stat;
-
 import org.jboss.netty.channel.ChannelEvent;
 import org.jboss.netty.channel.ChannelStateEvent;
 import org.jboss.netty.channel.DefaultChannelPipeline;
@@ -63,7 +65,6 @@ import org.jboss.netty.util.HashedWheelTimer;
 import org.jboss.netty.util.Timeout;
 import org.jboss.netty.util.Timer;
 import org.jboss.netty.util.TimerTask;
-
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -583,6 +584,24 @@ public final class HBaseClient {
   public ClientStats stats() {
     final LoadingCache<BufferedIncrement, BufferedIncrement.Amount> cache =
       increment_buffer;
+    
+    long inflight_rpcs = 0;
+    long pending_rpcs = 0;
+    long pending_batched_rpcs = 0;
+    int dead_region_clients = 0;
+    
+    final Collection<RegionClient> region_clients = client2regions.keySet();
+    
+    for (final RegionClient rc : region_clients) {
+      final RegionClientStats stats = rc.stats();
+      inflight_rpcs += stats.inflightRPCs();
+      pending_rpcs += stats.pendingRPCs();
+      pending_batched_rpcs += stats.pendingBatchedRPCs();
+      if (stats.isDead()) {
+        dead_region_clients++;
+      }
+    }
+    
     return new ClientStats(
       num_connections_created.get(),
       root_lookups.get(),
@@ -600,10 +619,30 @@ public final class HBaseClient {
       num_row_locks.get(),
       num_deletes.get(),
       num_atomic_increments.get(),
-      cache != null ? cache.stats() : BufferedIncrement.ZERO_STATS
+      cache != null ? cache.stats() : BufferedIncrement.ZERO_STATS,
+      inflight_rpcs,
+      pending_rpcs,
+      pending_batched_rpcs,
+      dead_region_clients,
+      region_clients.size()
     );
   }
 
+  /**
+   * Returns a list of region client stats objects for debugging.
+   * @return A list of region client statistics
+   * @since 1.7
+   */
+  public List<RegionClientStats> regionStats() {
+    final Collection<RegionClient> region_clients = client2regions.keySet();
+    final List<RegionClientStats> stats = 
+        new ArrayList<RegionClientStats>(region_clients.size());
+    for (final RegionClient rc : region_clients) {
+      stats.add(rc.stats());
+    }
+    return stats;
+  }
+  
   /**
    * Flushes to HBase any buffered client-side write operation.
    * <p>
