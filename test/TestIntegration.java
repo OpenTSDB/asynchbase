@@ -75,6 +75,7 @@ import org.hbase.async.DeleteRequest;
 import org.hbase.async.DependentColumnFilter;
 import org.hbase.async.FamilyFilter;
 import org.hbase.async.FilterList;
+import org.hbase.async.FuzzyRowFilter;
 import org.hbase.async.GetRequest;
 import org.hbase.async.HBaseClient;
 import org.hbase.async.KeyRegexpFilter;
@@ -661,6 +662,46 @@ final public class TestIntegration {
     kvs = rows.get(1);
     assertSizeIs(1, kvs);
     assertEq("krfv3", kvs.get(0).value());
+  }
+
+  /** Test fuzzy row filters.  */
+  @Test
+  public void fuzzyRowFilter() throws Exception {
+    client.setFlushInterval(FAST_FLUSH);
+    final PutRequest put1 = new PutRequest(table, "1 accept this",
+        family, "q", "frfv1");
+    final PutRequest put2 = new PutRequest(table, "2 filter this",
+        family, "q", "frfv2");
+    final PutRequest put3 = new PutRequest(table, "3 accept this",
+        family, "q", "frfv3");
+    final PutRequest put4 = new PutRequest(table, "4 keep   that",
+        family, "q", "frfv4");
+    Deferred.group(Deferred.group(client.put(put1), client.put(put2)),
+        Deferred.group(client.put(put3), client.put(put4))).join();
+    final Scanner scanner = client.newScanner(table);
+    scanner.setFamily(family);
+    scanner.setStartKey("1");
+    scanner.setStopKey("5");
+    ArrayList<FuzzyRowFilter.FuzzyFilterPair> filters = new
+        ArrayList<FuzzyRowFilter.FuzzyFilterPair>();
+    filters.add(new FuzzyRowFilter.FuzzyFilterPair(
+        new byte[]{'?',' ','a','c','c','e','p','t',' ','t','h','i','s'},
+        new byte[]{ 1 , 0 , 0 , 0 , 0 , 0 , 0 , 0 , 0 , 1 , 1 , 1 , 1 }));
+    filters.add(new FuzzyRowFilter.FuzzyFilterPair(
+        new byte[]{'?','?','?','?','?','?','?','?','?','t','h','a','t'},
+        new byte[]{ 1 , 1 , 1 , 1 , 1 , 1 , 1 , 1 , 1 , 0 , 0 , 0 , 0 }));
+    scanner.setFilter(new FuzzyRowFilter(filters));
+    final ArrayList<ArrayList<KeyValue>> rows = scanner.nextRows().join();
+    assertSizeIs(3, rows);
+    ArrayList<KeyValue> kvs = rows.get(0);
+    assertSizeIs(1, kvs);
+    assertEq("frfv1", kvs.get(0).value());
+    kvs = rows.get(1);
+    assertSizeIs(1, kvs);
+    assertEq("frfv3", kvs.get(0).value());
+    kvs = rows.get(2);
+    assertSizeIs(1, kvs);
+    assertEq("frfv4", kvs.get(0).value());
   }
 
   /** Simple column prefix filter tests.  */
