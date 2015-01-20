@@ -261,11 +261,11 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
     synchronized (this) {
       return new RegionClientStats(
         rpcs_sent.get(),
-        rpcs_inflight.size(),
+        rpcs_inflight != null ? rpcs_inflight.size() : 0,
         pending_rpcs != null ? pending_rpcs.size() : 0,
         rpcid.get(),
         dead,
-        chan.getRemoteAddress().toString(),
+        chan != null ? chan.getRemoteAddress().toString() : "",
         batched_rpcs != null ? batched_rpcs.size() : 0
       );
     }
