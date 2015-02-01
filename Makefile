@@ -145,6 +145,7 @@ unittest_SRC := \
 	test/TestMETALookup.java	\
 	test/TestNSREs.java	\
 	test/TestPutRequest.java	\
+	test/TestRegionClient.java	\
 	test/TestZKClient.java
 
 test_LIBADD := \

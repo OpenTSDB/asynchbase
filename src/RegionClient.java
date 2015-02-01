@@ -592,7 +592,7 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
 
   }
 
-  private void becomeReady(final Channel chan, final byte server_version) {
+  void becomeReady(final Channel chan, final byte server_version) {
     this.server_version = server_version;
     // The following line will make this client no longer queue incoming
     // RPCs, as we're now ready to communicate with the server.
