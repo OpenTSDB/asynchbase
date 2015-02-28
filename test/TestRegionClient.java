@@ -34,7 +34,6 @@ import org.hbase.async.HBaseRpc;
 import org.hbase.async.generated.RPCPB;
 import org.jboss.netty.buffer.ChannelBuffer;
 import org.jboss.netty.channel.Channel;
-import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 
@@ -42,11 +41,9 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNull;
 
 import org.mockito.Mockito;
-import org.mockito.invocation.InvocationOnMock;
-import org.mockito.stubbing.Answer;
 
-import static org.mockito.Mockito.anyInt;
-import static org.mockito.Mockito.anyString;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.when;
 import static org.powermock.api.mockito.PowerMockito.mock;
 import static org.powermock.api.mockito.PowerMockito.verifyPrivate;
@@ -58,7 +55,9 @@ import org.powermock.core.classloader.annotations.PrepareForTest;
 import org.powermock.modules.junit4.PowerMockRunner;
 import org.powermock.reflect.Whitebox;
 import org.jboss.netty.channel.ChannelHandlerContext;
-import org.jboss.netty.channel.ChannelStateEvent;
+import org.jboss.netty.channel.Channels;
+import org.jboss.netty.channel.DefaultExceptionEvent;
+import org.jboss.netty.channel.ExceptionEvent;
 import org.jboss.netty.handler.codec.replay.ReplayingDecoder;
 import org.jboss.netty.handler.codec.replay.VoidEnum;
 
@@ -68,41 +67,11 @@ import org.jboss.netty.handler.codec.replay.VoidEnum;
 @PowerMockIgnore({"javax.management.*", "javax.xml.*",
              "ch.qos.*", "org.slf4j.*",
              "com.sum.*", "org.xml.*"})
-@PrepareForTest({ HBaseClient.class, RegionClient.class,
+@PrepareForTest({ HBaseClient.class, RegionClient.class, Channels.class,
     RPCPB.ResponseHeader.class, NotServingRegionException.class, 
     RegionInfo.class, RPCPB.ExceptionResponse.class, HBaseRpc.class })
-public class TestRegionClient {
-  private static final byte[] TABLE = { 't', 'a', 'b', 'l', 'e' };
-  private static final byte[] KEY = { 'k', 'e', 'y' };
-  private static final byte[] FAMILY = { 'f' };
-  private static final byte[] HRPC3 = new byte[] { 'h', 'r', 'p', 'c', 3 };
-  
-  private final static RegionInfo region = mkregion("table", "table,,1234567890");
-  
-  private HBaseRpc rpc = mock(HBaseRpc.class);
-  private Channel chan = mock(Channel.class, Mockito.RETURNS_DEEP_STUBS);
-  private ChannelHandlerContext ctx = mock(ChannelHandlerContext.class);
-  private ChannelStateEvent cse = mock(ChannelStateEvent.class);
-  private HBaseClient hbase_client;
+public class TestRegionClient extends BaseTestRegionClient {
 
-  private static final byte SERVER_VERSION_UNKNWON = 0;
-
-  @Before
-  public void before() throws Exception {
-    hbase_client = mock(HBaseClient.class);
-    
-    PowerMockito.doAnswer(new Answer<RegionClient>(){
-      @Override
-      public RegionClient answer(InvocationOnMock invocation) throws Throwable {
-        final Object[] args = invocation.getArguments();
-        final String endpoint = (String)args[0] + ":" + (Integer)args[1];
-        final RegionClient rc = mock(RegionClient.class);
-        when(rc.getRemoteAddress()).thenReturn(endpoint);
-        return rc;
-      }
-    }).when(hbase_client, "newClient", anyString(), anyInt());
-  }
-  
   @Test
   public void ctor() throws Exception {
     assertNotNull(new RegionClient(hbase_client));
@@ -139,6 +108,94 @@ public class TestRegionClient {
     String addy = rclient.getRemoteAddress();
     assertNotNull(addy);
     assertEquals(addy, "127.0.0.1");
+  }
+  
+  @Test
+  public void exceptionCaught() throws Exception {
+    PowerMockito.mockStatic(Channels.class);
+    when(chan.isOpen()).thenReturn(true);
+    final RegionClient rclient = PowerMockito.spy(new RegionClient(hbase_client));
+    PowerMockito.field(RegionClient.class, "chan").set(rclient, chan);
+    final ExceptionEvent event = new DefaultExceptionEvent(chan, 
+        new RuntimeException("Boo!"));
+    
+    rclient.exceptionCaught(null, event);
+    
+    verifyPrivate(rclient, never()).invoke("cleanup", chan);
+    PowerMockito.verifyStatic();
+    Channels.close(chan);
+  }
+  
+  @Test
+  public void exceptionCaughtChNotOpen() throws Exception {
+    PowerMockito.mockStatic(Channels.class);
+    final RegionClient rclient = PowerMockito.spy(new RegionClient(hbase_client));
+    PowerMockito.field(RegionClient.class, "chan").set(rclient, chan);
+    final ExceptionEvent event = new DefaultExceptionEvent(chan, 
+        new RuntimeException("Boo!"));
+    
+    rclient.exceptionCaught(null, event);
+    
+    verifyPrivate(rclient, times(1)).invoke("cleanup", chan);
+    PowerMockito.verifyStatic(never());
+    Channels.close(chan);
+  }
+  
+  @Test (expected = NullPointerException.class)
+  public void exceptionCaughtNullEvent() throws Exception {
+    final RegionClient rclient = new RegionClient(hbase_client);
+    rclient.exceptionCaught(null, null);
+  }
+  
+  @Test (expected = NullPointerException.class)
+  public void exceptionCaughtNullChannel() throws Exception {
+    final RegionClient rclient = new RegionClient(hbase_client);
+    final ExceptionEvent event = new DefaultExceptionEvent(null, 
+        new RuntimeException("Boo!"));
+    rclient.exceptionCaught(null, event);
+  }
+  
+  @Test (expected = NullPointerException.class)
+  public void exceptionCaughtNullException() throws Exception {
+    final RegionClient rclient = new RegionClient(hbase_client);
+    final ExceptionEvent event = new DefaultExceptionEvent(chan, null);
+    rclient.exceptionCaught(null, event);
+  }
+  
+  @Test
+  public void exceptionCaughtDifferentChannel() throws Exception {
+    PowerMockito.mockStatic(Channels.class);
+    when(chan.isOpen()).thenReturn(true);
+    // honey badger don't care; apparently we can call this with any old channel.
+    final Channel ch = mock(Channel.class, Mockito.RETURNS_DEEP_STUBS);
+    when(ch.isOpen()).thenReturn(true);
+    final RegionClient rclient = PowerMockito.spy(new RegionClient(hbase_client));
+    PowerMockito.field(RegionClient.class, "chan").set(rclient, chan);
+    final ExceptionEvent event = new DefaultExceptionEvent(ch, 
+        new RuntimeException("Boo!"));
+    
+    rclient.exceptionCaught(null, event);
+    
+    verifyPrivate(rclient, never()).invoke("cleanup", ch);
+    PowerMockito.verifyStatic();
+    Channels.close(ch);
+  }
+  
+  @Test
+  public void exceptionCaughtDifferentChannelNotOpen() throws Exception {
+    PowerMockito.mockStatic(Channels.class);
+    // honey badger don't care; apparently we can call this with any old channel.
+    final Channel ch = mock(Channel.class, Mockito.RETURNS_DEEP_STUBS);
+    final RegionClient rclient = PowerMockito.spy(new RegionClient(hbase_client));
+    PowerMockito.field(RegionClient.class, "chan").set(rclient, chan);
+    final ExceptionEvent event = new DefaultExceptionEvent(ch, 
+        new RuntimeException("Boo!"));
+    
+    rclient.exceptionCaught(null, event);
+    
+    verifyPrivate(rclient, times(1)).invoke("cleanup", ch);
+    PowerMockito.verifyStatic(never());
+    Channels.close(ch);
   }
   
   @SuppressWarnings("rawtypes")
@@ -392,12 +449,6 @@ public class TestRegionClient {
     verifyPrivate(header, Mockito.atMost(1)).invoke("writeBytes", user);
       
     assertNotNull(headerCDH3b3);
-  }
-  
-  // Helpers //
-  private static RegionInfo mkregion(final String table, final String name) {
-    return new RegionInfo(table.getBytes(), name.getBytes(), 
-        HBaseClient.EMPTY_ARRAY);
   }
 
 }

@@ -138,6 +138,7 @@ test_SOURCES := \
 
 unittest_SRC := \
 	test/BaseTestHBaseClient.java	\
+	test/BaseTestRegionClient.java	\
 	test/TestConfig.java	\
 	test/TestDeleteRequest.java	\
 	test/TestGetRequest.java	\
@@ -146,6 +147,7 @@ unittest_SRC := \
 	test/TestNSREs.java	\
 	test/TestPutRequest.java	\
 	test/TestRegionClient.java	\
+	test/TestRegionClientSendRpc.java	\
 	test/TestZKClient.java
 
 test_LIBADD := \
