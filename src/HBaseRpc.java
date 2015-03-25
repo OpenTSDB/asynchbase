@@ -901,6 +901,7 @@ public abstract class HBaseRpc {
     if (buf.hasArray()) {  // Zero copy.
       payload = buf.array();
       offset = buf.arrayOffset() + buf.readerIndex();
+      buf.readerIndex(buf.readerIndex() + length);
     } else {  // We have to copy the entire payload out of the buffer :(
       payload = new byte[length];
       buf.readBytes(payload);
