@@ -1353,6 +1353,10 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
         e = new NonRecoverableException(msg, e);
       }
       rpc.callback(e);
+      {
+        final HBaseRpc removed = rpcs_inflight.remove(rpcid);
+        assert rpc == removed;
+      }
       throw e;
     }
 
