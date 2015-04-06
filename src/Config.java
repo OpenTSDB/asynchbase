@@ -334,6 +334,8 @@ public class Config {
     default_map.put("asynchbase.zk.base_path", "/hbase");
     default_map.put("asynchbase.timer.tick", "20");
     
+    default_map.put("asynchbase.security.auth.enable", "false");
+    
     for (Map.Entry<String, String> entry : default_map.entrySet()) {
       if (!properties.containsKey(entry.getKey()))
         properties.put(entry.getKey(), entry.getValue());
