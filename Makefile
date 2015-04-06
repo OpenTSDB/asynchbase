@@ -118,9 +118,10 @@ asynchbase_SOURCES := \
 	src/ValueFilter.java	\
 	src/VersionMismatchException.java	\
 	src/auth/ClientAuthProvider.java	\
+	src/auth/Login.java	\
 	src/auth/SimpleClientAuthProvider.java	\
 	src/jsr166e/LongAdder.java	\
-	src/jsr166e/Striped64.java	\
+	src/jsr166e/Striped64.java
 
 protobuf_SOURCES := src/protobuf/ZeroCopyLiteralByteString.java
 
@@ -152,6 +153,7 @@ unittest_SRC := \
 	test/TestRegionClientSendRpc.java	\
 	test/TestZKClient.java \
 	test/auth/MockProvider.java	\
+	test/auth/TestLogin.java	\
 	test/auth/TestSimpleClientAuthProvider.java
 
 test_LIBADD := \
