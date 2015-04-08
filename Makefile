@@ -143,6 +143,7 @@ test_SOURCES := \
 unittest_SRC := \
 	test/BaseTestHBaseClient.java	\
 	test/BaseTestRegionClient.java	\
+	test/BaseTestSecureRpcHelper.java	\
 	test/TestConfig.java	\
 	test/TestDeleteRequest.java	\
 	test/TestGetRequest.java	\
