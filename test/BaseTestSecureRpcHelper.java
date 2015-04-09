@@ -149,20 +149,6 @@ public class BaseTestSecureRpcHelper {
   }
   
   /**
-   * Creates a buffer with the sasl state at the top
-   * @param state The state to encode
-   * @param payload The pyalod to wrap
-   * @return A channel buffer for testing
-   */
-  protected ChannelBuffer getSaslBuffer(final int state, final byte[] payload) {
-    final byte[] buf = new byte[payload.length + 4 + 4];
-    System.arraycopy(payload, 0, buf, 8, payload.length);
-    System.arraycopy(Bytes.fromInt(payload.length), 0, buf, 4, 4);
-    Bytes.setInt(buf, state);
-    return ChannelBuffers.wrappedBuffer(buf);
-  }
-  
-  /**
    * Helper to unwrap a wrapped buffer, pretending the sasl client simply 
    * prepends the length.
    * @throws Exception Exception it really shouldn't. Really.
