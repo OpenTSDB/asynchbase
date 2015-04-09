@@ -110,6 +110,7 @@ asynchbase_SOURCES := \
 	src/ScanFilter.java	\
 	src/Scanner.java	\
 	src/SecureRpcHelper.java	\
+	src/SecureRpcHelper94.java	\
 	src/SecureRpcHelper96.java	\
 	src/SingletonList.java	\
 	src/SubstringComparator.java	\
@@ -157,6 +158,7 @@ unittest_SRC := \
 	test/TestRegionClientSendRpc.java	\
 	test/TestSecureRpcHelper.java	\
 	test/TestSecureRpcHelper96.java	\
+	test/TestSecureRpcHelper94.java	\
 	test/TestZKClient.java \
 	test/auth/MockProvider.java	\
 	test/auth/TestKerberosClientAuthProvider.java \
