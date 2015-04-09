@@ -149,7 +149,8 @@ unittest_SRC := \
 	test/TestPutRequest.java	\
 	test/TestRegionClient.java	\
 	test/TestRegionClientSendRpc.java	\
-	test/TestZKClient.java
+	test/TestZKClient.java \
+	test/auth/MockProvider.java
 
 test_LIBADD := \
 	$(asynchbase_LIBADD)	\
