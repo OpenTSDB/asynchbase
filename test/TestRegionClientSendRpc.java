@@ -1,19 +1,50 @@
+/*
+ * Copyright (C) 2015  The Async HBase Authors.  All rights reserved.
+ * This file is part of Async HBase.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions are met:
+ *   - Redistributions of source code must retain the above copyright notice,
+ *     this list of conditions and the following disclaimer.
+ *   - Redistributions in binary form must reproduce the above copyright notice,
+ *     this list of conditions and the following disclaimer in the documentation
+ *     and/or other materials provided with the distribution.
+ *   - Neither the name of the StumbleUpon nor the names of its contributors
+ *     may be used to endorse or promote products derived from this software
+ *     without specific prior written permission.
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+ * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+ * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ * ARE DISCLAIMED.  IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
+ * LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+ * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+ * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+ * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+ * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+ * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+ * POSSIBILITY OF SUCH DAMAGE.
+ */
 package org.hbase.async;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
 import static org.mockito.Matchers.any;
+import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.when;
 import static org.mockito.Mockito.verify;
 
 import org.jboss.netty.buffer.ChannelBuffer;
+import org.jboss.netty.buffer.ChannelBuffers;
 import org.jboss.netty.channel.Channel;
 import org.jboss.netty.channel.Channels;
 import org.junit.Before;
 import org.junit.Test;
+import org.mockito.invocation.InvocationOnMock;
+import org.mockito.stubbing.Answer;
 import org.powermock.api.mockito.PowerMockito;
 import org.powermock.core.classloader.annotations.PrepareForTest;
 import org.powermock.reflect.Whitebox;
@@ -21,7 +52,7 @@ import org.powermock.reflect.Whitebox;
 import com.stumbleupon.async.Deferred;
 import com.stumbleupon.async.TimeoutException;
 
-@PrepareForTest({ Channels.class })
+@PrepareForTest({ Channels.class, SecureRpcHelper.class, RegionClient.class })
 public class TestRegionClientSendRpc extends BaseTestRegionClient {
   private static final byte[] QUALIFIER = new byte[] { 'Q', 'A', 'L' };
   private static final byte[] VALUE = new byte[] { 42 };
@@ -303,5 +334,32 @@ public class TestRegionClientSendRpc extends BaseTestRegionClient {
     assertEquals(0, region_client.stats().rpcsSent());
     assertEquals(0, region_client.stats().pendingBatchedRPCs());
     assertEquals(0, region_client.stats().pendingRPCs());
+  }
+
+  @Test
+  public void wrap() throws Exception {
+    final SecureRpcHelper helper = mock(SecureRpcHelper.class);
+    Whitebox.setInternalState(region_client, "secure_rpc_helper", helper);
+    doAnswer(new Answer<ChannelBuffer>() {
+      @Override
+      public ChannelBuffer answer(final InvocationOnMock invocation) 
+          throws Throwable {
+        return ChannelBuffers.wrappedBuffer(new byte[]{ 42 });
+      }
+    }).when(helper).wrap(any(ChannelBuffer.class));
+    
+    final GetRequest get = new GetRequest(TABLE, KEY, FAMILY, QUALIFIER);
+    get.setRegion(region);
+    get.getDeferred(); // required to initialize the deferred
+    
+    region_client.sendRpc(get);
+    
+    PowerMockito.verifyStatic(times(1));
+    Channels.write((Channel)any(), (ChannelBuffer)any());
+    verify(hbase_client, never()).sendRpcToRegion(get);
+    assertEquals(1, region_client.stats().rpcsSent());
+    assertEquals(0, region_client.stats().pendingBatchedRPCs());
+    assertEquals(0, region_client.stats().pendingRPCs());
+    verify(helper, times(1)).wrap(any(ChannelBuffer.class));
   }
 }

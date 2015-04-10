@@ -27,7 +27,6 @@
 package org.hbase.async;
 
 import java.io.IOException;
-import java.net.SocketAddress;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
@@ -214,6 +213,9 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
    */
   private final Semaphore meta_lookups = new Semaphore(100);
 
+  private SecureRpcHelper secure_rpc_helper;
+  
+  
   /**
    * Constructor.
    * @param hbase_client The HBase client this instance belongs to.
@@ -1001,17 +1003,35 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
                                final ChannelStateEvent e) {
     final Channel chan = e.getChannel();
     final ChannelBuffer header;
-    if (!hbase_client.has_root) {
-      header = header095();
-      Channels.write(chan, header);
-      becomeReady(chan, SERVER_VERSION_095_OR_ABOVE);
-      return;
-    } else if (System.getProperty("org.hbase.async.cdh3b3") != null) {
-      header = headerCDH3b3();
+    
+    if (hbase_client.getConfig().getBoolean("asynchbase.security.auth.enable") && 
+        hbase_client.getConfig().hasProperty("asynchbase.security.auth.94")) {
+      secure_rpc_helper = new SecureRpcHelper94(hbase_client, this, 
+          chan.getRemoteAddress());
+      secure_rpc_helper.sendHello(chan);
+      LOG.info("Initialized security helper: " + secure_rpc_helper + 
+          " for region client: " + this);
     } else {
-      header = header090();
+      if (!hbase_client.has_root) {
+        if (hbase_client.getConfig().getBoolean("asynchbase.security.auth.enable")) {
+          secure_rpc_helper = new SecureRpcHelper96(hbase_client, this, 
+              chan.getRemoteAddress());
+          secure_rpc_helper.sendHello(chan);
+          LOG.info("Initialized security helper: " + secure_rpc_helper + 
+              " for region client: " + this);
+          return;
+        }
+        header = header095();
+        Channels.write(chan, header);
+        becomeReady(chan, SERVER_VERSION_095_OR_ABOVE);
+        return;
+      } else if (System.getProperty("org.hbase.async.cdh3b3") != null) {
+        header = headerCDH3b3();
+      } else {
+        header = header090();
+      }
+      helloRpc(chan, header);
     }
-    helloRpc(chan, header);
   }
 
   /**
@@ -1266,6 +1286,9 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
         oldrpc.callback(new NonRecoverableException(wtf));
       }
     }
+    if (secure_rpc_helper != null) {
+      payload = secure_rpc_helper.wrap(payload);
+    }
     return payload;
   }
 
@@ -1285,13 +1308,24 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
   @Override
   protected Object decode(final ChannelHandlerContext ctx,
                           final Channel chan,
-                          final ChannelBuffer buf,
+                          final ChannelBuffer channel_buffer,
                           final VoidEnum unused) {
+    ChannelBuffer buf = channel_buffer;
     final long start = System.nanoTime();
     final int rdx = buf.readerIndex();
     LOG.debug("------------------>> ENTERING DECODE >>------------------");
     final int rpcid;
     final RPCPB.ResponseHeader header;
+    
+    if (secure_rpc_helper != null) {
+      buf = secure_rpc_helper.handleResponse(buf, chan);
+      if (buf == null) {
+        // everything in the buffer was part of the security handshake so we're
+        // done here.
+        return null;
+      }
+    }
+    
     if (server_version >= SERVER_VERSION_095_OR_ABOVE) {
       final int size = buf.readInt();
       ensureReadable(buf, size);
@@ -1422,7 +1456,13 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
     //   0x00  Old style success (prior 0.92).
     //   0x01  RPC failed with an exception.
     //   0x02  New style success (0.92 and above).
-    final byte flags = buf.readByte();
+    final int flags;
+    if (secure_rpc_helper != null) {
+      //0.94-security uses an int for the flag section
+      flags = buf.readInt();
+    } else {
+      flags = buf.readByte();
+    }
     if ((flags & HBaseRpc.RPC_FRAMED) != 0) {
       // Total size of the response, including the RPC ID (4 bytes) and flags
       // (1 byte) that we've already read, including the 4 bytes used by
@@ -1879,4 +1919,13 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
     Channels.write(chan, ChannelBuffers.wrappedBuffer(header, encode(rpc)));
   }
 
+  /**
+   * Fetch the protocol version from the region server
+   * @param chan The channel to use for communications
+   */
+  void sendVersion(final Channel chan) {
+    final GetProtocolVersionRequest rpc = new GetProtocolVersionRequest();
+    rpc.getDeferred().addBoth(new ProtocolVersionCB(chan));
+    Channels.write(chan, encode(rpc));
+  }
 }
