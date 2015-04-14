@@ -79,7 +79,7 @@ import org.powermock.modules.junit4.PowerMockRunner;
   "com.sum.*", "org.xml.*"})
 @PrepareForTest({ HBaseClient.class, Login.class, Subject.class, Sasl.class,
   SaslClient.class, KerberosName.class, KerberosClientAuthProvider.class })
-public class TestKerberoseClientAuthProvider {
+public class TestKerberosClientAuthProvider {
   private HBaseClient client;
   private Config config;
   private Login login;
