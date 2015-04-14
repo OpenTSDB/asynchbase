@@ -25,7 +25,7 @@
 
 ZOOKEEPER_VERSION := 3.3.6
 ZOOKEEPER := third_party/zookeeper/zookeeper-$(ZOOKEEPER_VERSION).jar
-ZOOKEEPER_BASE_URL := $(ASYNCHBASE_THIRD_PARTY_BASE_URL)
+ZOOKEEPER_BASE_URL := http://central.maven.org/maven2/org/apache/zookeeper/zookeeper/$(ZOOKEEPER_VERSION)
 
 $(ZOOKEEPER): $(ZOOKEEPER).md5
 	set dummy "$(ZOOKEEPER_BASE_URL)" "$(ZOOKEEPER)"; shift; $(FETCH_DEPENDENCY)
