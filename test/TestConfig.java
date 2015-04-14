@@ -73,9 +73,9 @@ public class TestConfig {
     final Config child = new Config(config);
     assertNotNull(child);
     assertNull(child.config_location);
-    child.overrideConfig("asynchbase.zk.base_path", "/myhbase");
-    assertEquals("/hbase", config.getString("asynchbase.zk.base_path"));
-    assertEquals("/myhbase", child.getString("asynchbase.zk.base_path"));
+    child.overrideConfig("hbase.zookeeper.znode.parent", "/myhbase");
+    assertEquals("/hbase", config.getString("hbase.zookeeper.znode.parent"));
+    assertEquals("/myhbase", child.getString("hbase.zookeeper.znode.parent"));
     assertTrue(config.getMap() != child.getMap());
   }
 
@@ -141,7 +141,7 @@ public class TestConfig {
   @Test
   public void getString() throws Exception {
     final Config config = new Config();
-    assertEquals("/hbase", config.getString("asynchbase.zk.base_path"));
+    assertEquals("/hbase", config.getString("hbase.zookeeper.znode.parent"));
   }
 
   @Test
@@ -555,7 +555,7 @@ public class TestConfig {
   @Test
   public void hasProperty() throws Exception {
     final Config config = new Config();
-    assertTrue(config.hasProperty("asynchbase.rpcs.max_retry_attempts"));
+    assertTrue(config.hasProperty("hbase.rpcs.max_retry_attempts"));
   }
 
   @Test

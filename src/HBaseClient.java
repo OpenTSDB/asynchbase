@@ -498,7 +498,7 @@ public final class HBaseClient {
     this.channel_factory = channel_factory;
     zkclient = new ZKClient(quorum_spec, base_path);
     config = new Config();
-    timer = new HashedWheelTimer(config.getShort("asynchbase.timer.tick"), 
+    timer = new HashedWheelTimer(config.getShort("hbase.timer.tick"), 
         MILLISECONDS);
   }
   
@@ -534,7 +534,7 @@ public final class HBaseClient {
   
   /**
    * Constructor accepting a configuration object with at least the 
-   * "asynchbase.zk.quorum" specified in the format {@code "host1,host2,host3"}
+   * "hbase.zookeeper.quorum" specified in the format {@code "host1,host2,host3"}
    * and a custom channel factory for advanced users.
    * <p>
    * Most users don't need to use this constructor.
@@ -548,14 +548,10 @@ public final class HBaseClient {
   public HBaseClient(final Config config, 
       final ClientSocketChannelFactory channel_factory) {
     this.channel_factory = channel_factory;
-    if (!config.hasProperty("asynchbase.zk.quorum")) {
-      throw new IllegalArgumentException(
-          "Missing the 'asynchbase.zk.quorum' property");
-    }
-    zkclient = new ZKClient(config.getString("asynchbase.zk.quorum"), 
-        config.getString("asynchbase.zk.base_path"));
+    zkclient = new ZKClient(config.getString("hbase.zookeeper.quorum"), 
+        config.getString("hbase.zookeeper.znode.parent"));
     this.config = config;
-    timer = new HashedWheelTimer(config.getShort("asynchbase.timer.tick"), 
+    timer = new HashedWheelTimer(config.getShort("hbase.timer.tick"), 
         MILLISECONDS);
   }
   
@@ -739,7 +735,7 @@ public final class HBaseClient {
       throw new IllegalArgumentException("Negative: " + flush_interval);
     }
     final short prev = config.flushInterval();
-    config.overrideConfig("asynchbase.rpcs.buffered_flush_interval", 
+    config.overrideConfig("hbase.rpcs.buffered_flush_interval", 
         Short.toString(flush_interval));
     return prev;
   }
@@ -775,7 +771,7 @@ public final class HBaseClient {
     if (current == increment_buffer_size) {
       return current;
     }
-    config.overrideConfig("asynchbase.increments.buffer_size", 
+    config.overrideConfig("hbase.increments.buffer_size", 
         Integer.toString(increment_buffer_size));
     final LoadingCache<BufferedIncrement, BufferedIncrement.Amount> prev =
       increment_buffer;  // Volatile-read.

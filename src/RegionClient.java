@@ -1004,8 +1004,8 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
     final Channel chan = e.getChannel();
     final ChannelBuffer header;
     
-    if (hbase_client.getConfig().getBoolean("asynchbase.security.auth.enable") && 
-        hbase_client.getConfig().hasProperty("asynchbase.security.auth.94")) {
+    if (hbase_client.getConfig().getBoolean("hbase.security.auth.enable") && 
+        hbase_client.getConfig().hasProperty("hbase.security.auth.94")) {
       secure_rpc_helper = new SecureRpcHelper94(hbase_client, this, 
           chan.getRemoteAddress());
       secure_rpc_helper.sendHello(chan);
@@ -1013,7 +1013,7 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
           " for region client: " + this);
     } else {
       if (!hbase_client.has_root) {
-        if (hbase_client.getConfig().getBoolean("asynchbase.security.auth.enable")) {
+        if (hbase_client.getConfig().getBoolean("hbase.security.auth.enable")) {
           secure_rpc_helper = new SecureRpcHelper96(hbase_client, this, 
               chan.getRemoteAddress());
           secure_rpc_helper.sendHello(chan);

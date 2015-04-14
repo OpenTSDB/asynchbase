@@ -652,7 +652,7 @@ final class TestNSREs extends BaseTestHBaseClient {
   @Test
   public void tooManyAttempts() throws Exception {
     // stack overflow if we don't set this due to mocking
-    client.getConfig().overrideConfig("asynchbase.rpcs.max_retry_attempts", "2");
+    client.getConfig().overrideConfig("hbase.rpcs.max_retry_attempts", "2");
     
     // probes all fail but the trigger will succeed at one point
     final FakeTimer timer = setupMultiNSRE(
@@ -836,7 +836,7 @@ final class TestNSREs extends BaseTestHBaseClient {
   
   @Test
   public void handleNSREHighWatermark() throws Exception {
-    client.getConfig().overrideConfig("asynchbase.nsre.high_watermark", "2");
+    client.getConfig().overrideConfig("hbase.nsre.high_watermark", "2");
     final HBaseRpc probe = MockProbe();
     Whitebox.setInternalState(client, "timer", mock(HashedWheelTimer.class));
     final GetRequest get = new GetRequest(TABLE, KEY);

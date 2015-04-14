@@ -312,10 +312,10 @@ public class Config {
    * Loads options from the JVM system properties and/or sets defaults
    */
   private void loadSystemAndDefaults() {
-    default_map.put("asynchbase.rpcs.max_retry_attempts", "10");
-    default_map.put("asynchbase.rpcs.buffered_flush_interval", "1000");
-    default_map.put("asynchbase.nsre.low_watermark", "1000");
-    default_map.put("asynchbase.nsre.high_watermark", "10000");
+    default_map.put("hbase.rpcs.max_retry_attempts", "10");
+    default_map.put("hbase.rpcs.buffered_flush_interval", "1000");
+    default_map.put("hbase.nsre.low_watermark", "1000");
+    default_map.put("hbase.nsre.high_watermark", "10000");
     
     /**
      * How many different counters do we want to keep in memory for buffering.
@@ -329,12 +329,13 @@ public class Config {
      * might bite people with large keys or qualifiers, but then it's normal
      * to expect they'd tune this value to cater to their unusual requirements.
      */
-    default_map.put("asynchbase.increments.buffer_size", "65535");
+    default_map.put("hbase.increments.buffer_size", "65535");
     
-    default_map.put("asynchbase.zk.base_path", "/hbase");
-    default_map.put("asynchbase.timer.tick", "20");
+    default_map.put("hbase.zookeeper.quorum", "localhost");
+    default_map.put("hbase.zookeeper.znode.parent", "/hbase");
+    default_map.put("hbase.timer.tick", "20");
     
-    default_map.put("asynchbase.security.auth.enable", "false");
+    default_map.put("hbase.security.auth.enable", "false");
     
     for (Map.Entry<String, String> entry : default_map.entrySet()) {
       if (!properties.containsKey(entry.getKey()))
@@ -349,11 +350,11 @@ public class Config {
    * hash map lookups.
    */
   private void setLocals() {
-    max_retry_attempts = getInt("asynchbase.rpcs.max_retry_attempts");
-    flush_interval = getShort("asynchbase.rpcs.buffered_flush_interval");
-    nsre_low_watermark = getShort("asynchbase.nsre.low_watermark");
-    nsre_high_watermark = getShort("asynchbase.nsre.high_watermark");
-    increment_buffer_size = getInt("asynchbase.increments.buffer_size");
+    max_retry_attempts = getInt("hbase.rpcs.max_retry_attempts");
+    flush_interval = getShort("hbase.rpcs.buffered_flush_interval");
+    nsre_low_watermark = getShort("hbase.nsre.low_watermark");
+    nsre_high_watermark = getShort("hbase.nsre.high_watermark");
+    increment_buffer_size = getInt("hbase.increments.buffer_size");
   }
   
   /**
