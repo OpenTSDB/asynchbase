@@ -23,7 +23,7 @@
 # ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 # POSSIBILITY OF SUCH DAMAGE.
 
-ASYNCHBASE_THIRD_PARTY_BASE_URL := http://opentsdb.googlecode.com/files
+ASYNCHBASE_THIRD_PARTY_BASE_URL := http://central.maven.org/maven2/
 FETCH_DEPENDENCY := ./build-aux/fetchdep.sh "$$@"
 THIRD_PARTY =
 
