@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2014  The Async HBase Authors.  All rights reserved.
+ * Copyright (C) 2015  The Async HBase Authors.  All rights reserved.
  * This file is part of Async HBase.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -33,9 +33,7 @@ import org.hbase.async.generated.HBasePB;
 import org.jboss.netty.buffer.ChannelBuffer;
 
 import java.lang.IllegalArgumentException;
-import java.util.Arrays;
 import java.util.Collection;
-import java.util.Collections;
 
 /**
  * FuzzyRowFilter is a server-side fast-forward filter that allows skipping
@@ -82,6 +80,13 @@ public final class FuzzyRowFilter extends ScanFilter {
     private final byte[] row_key;
     private final byte[] fuzzy_mask;
 
+    /** 
+     * Default Ctor
+     * @param row_key The row key to use for matching
+     * @param fuzzy_mask The row key mask to determine which of the bytes in
+     * {@code row_key} should be matched.
+     * @throws IllegalArgumentException if the keys are not the same length
+     */
     public FuzzyFilterPair(final byte[] row_key, final byte[] fuzzy_mask) {
       if ( row_key.length != fuzzy_mask.length ) {
         throw new IllegalArgumentException("Row key and fuzzy mask length " +
@@ -91,24 +96,29 @@ public final class FuzzyRowFilter extends ScanFilter {
       this.fuzzy_mask = fuzzy_mask;
     }
 
+    /** @return the row key base filter */
     public byte[] getRowKey() {
       return row_key;
     }
 
+    /** @return the row key mask */
     public byte[] getFuzzyMask() {
       return fuzzy_mask;
     }
   }
 
   /**
-   * @param filter_pair
+   * Default ctor that applies a single fuzzy filter against all row keys
+   * @param filter_pair A single filter to apply to all row keys
    */
   public FuzzyRowFilter(final FuzzyFilterPair filter_pair) {
     this.filter_pairs = java.util.Collections.singleton(filter_pair);
   }
 
   /**
-   * @param filter_pairs
+   * Ctor to take a list of filters to apply against row keys
+   * @param filter_pairs One or more filter pairs in a collection to apply
+   * against the row keys
    */
   public FuzzyRowFilter(final Collection<FuzzyFilterPair> filter_pairs) {
     this.filter_pairs = filter_pairs;
