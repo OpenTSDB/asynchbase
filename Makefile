@@ -68,6 +68,7 @@ asynchbase_SOURCES := \
 	src/BufferedIncrement.java	\
 	src/Bytes.java	\
 	src/ClientStats.java	\
+	src/ColumnPaginationFilter.java	\
 	src/ColumnPrefixFilter.java	\
 	src/ColumnRangeFilter.java	\
 	src/CompareAndSetRequest.java	\
@@ -79,12 +80,14 @@ asynchbase_SOURCES := \
 	src/FamilyFilter.java	\
 	src/FilterComparator.java	\
 	src/FilterList.java		\
+	src/FirstKeyOnlyFilter.java	\
 	src/GetRequest.java	\
 	src/HBaseClient.java	\
 	src/HBaseException.java	\
 	src/HBaseRpc.java	\
 	src/HasFailedRpcException.java	\
 	src/InvalidResponseException.java	\
+	src/KeyOnlyFilter.java	\
 	src/KeyRegexpFilter.java	\
 	src/KeyValue.java	\
 	src/MultiAction.java	\

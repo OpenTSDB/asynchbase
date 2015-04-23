@@ -39,6 +39,7 @@ import java.io.OutputStream;
 import java.util.ArrayList;
 import java.util.Collection;
 
+import org.hbase.async.KeyOnlyFilter;
 import org.jboss.netty.logging.InternalLoggerFactory;
 import org.jboss.netty.logging.Slf4JLoggerFactory;
 
@@ -68,6 +69,7 @@ import org.hbase.async.BinaryComparator;
 import org.hbase.async.BinaryPrefixComparator;
 import org.hbase.async.BitComparator;
 import org.hbase.async.Bytes;
+import org.hbase.async.ColumnPaginationFilter;
 import org.hbase.async.ColumnPrefixFilter;
 import org.hbase.async.ColumnRangeFilter;
 import org.hbase.async.CompareFilter.CompareOp;
@@ -75,6 +77,7 @@ import org.hbase.async.DeleteRequest;
 import org.hbase.async.DependentColumnFilter;
 import org.hbase.async.FamilyFilter;
 import org.hbase.async.FilterList;
+import org.hbase.async.FirstKeyOnlyFilter;
 import org.hbase.async.GetRequest;
 import org.hbase.async.HBaseClient;
 import org.hbase.async.KeyRegexpFilter;
@@ -663,6 +666,74 @@ final public class TestIntegration {
     assertEq("krfv3", kvs.get(0).value());
   }
 
+  /** Simple column pagination filter tests.  */
+  @Test
+  public void columnPaginationFilter() throws Exception {
+    client.setFlushInterval(FAST_FLUSH);
+    // Keep only rows with a column qualifier that starts with "qa".
+    final PutRequest put1 = new PutRequest(table, "row1", family, "q1", "v1");
+    final PutRequest put2 = new PutRequest(table, "row1", family, "q2", "v2");
+    final PutRequest put3 = new PutRequest(table, "row1", family, "q3", "v3");
+    final PutRequest put4 = new PutRequest(table, "row1", family, "q4", "v4");
+
+    final PutRequest put5 = new PutRequest(table, "row2", family, "q1", "v5");
+    final PutRequest put6 = new PutRequest(table, "row2", family, "q2", "v6");
+    final PutRequest put7 = new PutRequest(table, "row2", family, "q3", "v7");
+
+    Deferred.group(Deferred.group(client.put(put1), client.put(put2)),
+        Deferred.group(client.put(put3), client.put(put4)),
+        Deferred.group(client.put(put5), client.put(put6), client.put(put7))).join();
+
+    // Test ColumnPaginationFilter(int limit, int offset)
+    Scanner scanner = client.newScanner(table);
+    scanner.setFamily(family);
+    scanner.setStartKey("row1");
+    scanner.setStopKey("row3");
+    scanner.setFilter(new ColumnPaginationFilter(3, 1));
+    ArrayList<ArrayList<KeyValue>> rows = scanner.nextRows().join();
+    assertNotNull(rows);
+    assertSizeIs(2, rows);
+    ArrayList<KeyValue> kvs = rows.get(0);
+    assertSizeIs(3, kvs);
+    assertEq("v2", kvs.get(0).value());
+    assertEq("v3", kvs.get(1).value());
+    assertEq("v4", kvs.get(2).value());
+    kvs = rows.get(1);
+    assertSizeIs(2, kvs);
+    assertEq("v6", kvs.get(0).value());
+    assertEq("v7", kvs.get(1).value());
+
+    // Test ColumnPaginationFilter(int limit, byte[] offset) - Only supported in HBase 0.96+
+    scanner = client.newScanner(table);
+    scanner.setFamily(family);
+    scanner.setStartKey("row1");
+    scanner.setStopKey("row3");
+    scanner.setFilter(new ColumnPaginationFilter(3, Bytes.UTF8("q2")));
+
+    try {
+      rows = scanner.nextRows().join(); //Throws an UnsupportedOperationException if <= HBase 0.94
+
+      // Test for running against >= HBase 0.96
+      assertNotNull(rows);
+      assertSizeIs(2, rows);
+      kvs = rows.get(0);
+      assertSizeIs(3, kvs);
+      assertEq("v2", kvs.get(0).value());
+      assertEq("v3", kvs.get(1).value());
+      assertEq("v4", kvs.get(2).value());
+      kvs = rows.get(1);
+      assertSizeIs(2, kvs);
+      assertEq("v6", kvs.get(0).value());
+      assertEq("v7", kvs.get(1).value());
+    } catch (Exception e) {
+      // Test for running against <= HBase 0.94
+      assertEquals(
+          "Setting a column offset by byte array is not supported before HBase 0.96",
+          e.getMessage());
+    }
+
+  }
+
   /** Simple column prefix filter tests.  */
   @Test
   public void columnPrefixFilter() throws Exception {
@@ -924,6 +995,73 @@ final public class TestIntegration {
     kvs = rows.get(1);
     assertSizeIs(1, kvs);   // KV from "fl2":
     assertEq("v4", kvs.get(0).value());
+  }
+  
+  /** Simple first key only filter tests.  */
+  @Test
+  public void firstKeyOnlyFilter() throws Exception {
+    client.setFlushInterval(FAST_FLUSH);
+    final PutRequest put1 = new PutRequest(table, "row1", family, "q1", "v1");
+    final PutRequest put2 = new PutRequest(table, "row1", family, "q1", "v2");
+    final PutRequest put3 = new PutRequest(table, "row2", family, "q1", "v3");
+    final PutRequest put4 = new PutRequest(table, "row3", family, "q1", "v4");
+    // Add some extra values to rows 1 and 3
+    final PutRequest put5 = new PutRequest(table, "row1", family, "q1", "v5");
+    final PutRequest put6 = new PutRequest(table, "row3", family, "q1", "v6");
+    Deferred.group(Deferred.group(client.put(put1), client.put(put2)),
+        Deferred.group(client.put(put3), client.put(put4))).join();
+    Deferred.group(client.put(put5), client.put(put6)).join();
+    final Scanner scanner = client.newScanner(table);
+    scanner.setFamily(family);
+    scanner.setStartKey("row1");
+    scanner.setStopKey("row4");
+    scanner.setFilter(new FirstKeyOnlyFilter());
+    final ArrayList<ArrayList<KeyValue>> rows = scanner.nextRows().join();
+    assertSizeIs(3, rows);  // One KV from row "row1", one from "row2", and one from "row3".
+    ArrayList<KeyValue> kvs = rows.get(0);
+    assertSizeIs(1, kvs);
+    assertEq("v5", kvs.get(0).value());
+    kvs = rows.get(1);
+    assertSizeIs(1, kvs);
+    assertEq("v3", kvs.get(0).value());
+    kvs = rows.get(2);
+    assertSizeIs(1, kvs);
+    assertEq("v6", kvs.get(0).value());
+  }
+
+  /** Simple key only filter tests.  */
+  @Test
+  public void keyOnlyFilter() throws Exception {
+    client.setFlushInterval(FAST_FLUSH);
+    final PutRequest put1 = new PutRequest(table, "row1", family, "q1", "v1");
+    final PutRequest put2 = new PutRequest(table, "row1", family, "q2", "v2");
+    final PutRequest put3 = new PutRequest(table, "row2", family, "q1", "v3");
+    final PutRequest put4 = new PutRequest(table, "row3", family, "q1", "v4");
+    Deferred.group(Deferred.group(client.put(put1), client.put(put2)),
+        Deferred.group(client.put(put3), client.put(put4))).join();
+    final Scanner scanner = client.newScanner(table);
+    scanner.setFamily(family);
+    scanner.setStartKey("row1");
+    scanner.setStopKey("row4");
+    scanner.setFilter(new KeyOnlyFilter());
+    final ArrayList<ArrayList<KeyValue>> rows = scanner.nextRows().join();
+    assertSizeIs(3, rows);  // Should have all 3 rows
+    ArrayList<KeyValue> kvs = rows.get(0); // row1
+    assertSizeIs(2, kvs);
+    assertEq("row1", kvs.get(0).key());
+    assertEq("", kvs.get(0).value());
+    assertEq("row1", kvs.get(1).key());
+    assertEq("", kvs.get(1).value());
+
+    kvs = rows.get(1); // row2
+    assertSizeIs(1, kvs);
+    assertEq("row2", kvs.get(0).key());
+    assertEq("", kvs.get(0).value());
+
+    kvs = rows.get(2); // row3
+    assertSizeIs(1, kvs);
+    assertEq("row3", kvs.get(0).key());
+    assertEq("", kvs.get(0).value());
   }
 
   /** Simple timestamps filter list tests.  */
