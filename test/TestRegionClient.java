@@ -221,7 +221,7 @@ public class TestRegionClient extends BaseTestRegionClient {
   public void channelClosed() throws Exception {
     RegionClient rclient = new RegionClient(hbase_client);
     assertNotNull(rclient);
-    rclient.becomeReady(chan, SERVER_VERSION_UNKNWON);
+    rclient.becomeReady(chan, SERVER_VERSION_UNKNOWN);
     
     assertNotNull(Whitebox.getInternalState(rclient, "chan"));
     rclient.channelClosed(ctx, cse);

@@ -159,6 +159,7 @@ unittest_SRC := \
 	test/TestNSREs.java	\
 	test/TestPutRequest.java	\
 	test/TestRegionClient.java	\
+	test/TestRegionClientDecode.java	\
 	test/TestRegionClientSendRpc.java	\
 	test/TestSecureRpcHelper.java	\
 	test/TestSecureRpcHelper96.java	\
