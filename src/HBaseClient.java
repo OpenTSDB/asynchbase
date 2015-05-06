@@ -1922,6 +1922,7 @@ public final class HBaseClient {
                                                              final byte[] key) {
     return new Callback<Object, Exception>() {
       public Object call(final Exception e) {
+        LOG.debug("locateRegion failed", e);
         if (e instanceof TableNotFoundException) {
           return new TableNotFoundException(table);  // Populate the name.
         } else if (e instanceof RecoverableException) {
@@ -2125,6 +2126,7 @@ public final class HBaseClient {
       return client;            // discover this region, we lost the race.
     }
     RegionInfo oldregion;
+    final ArrayList<RegionInfo> regions;
     int nregions;
     // If we get a ConnectException immediately when trying to connect to the
     // RegionServer, Netty delivers a CLOSED ChannelStateEvent from a "boss"
@@ -2146,11 +2148,33 @@ public final class HBaseClient {
       // 3. Update the reverse mapping created in step 1.
       // This is done last because it's only used to gracefully handle
       // disconnections and isn't used for serving.
-      final ArrayList<RegionInfo> regions = client2regions.get(client);
-      synchronized (regions) {
-        regions.add(region);
-        nregions = regions.size();
+      regions = client2regions.get(client);
+      if (regions != null) {
+        synchronized (regions) {
+          regions.add(region);
+          nregions = regions.size();
+        }
+      } else {
+        // Lost a race, and other thread removed the client. It happens when
+        // the channel of this client is disconnected as soon as a client tries
+        // to connect a dead region server.
+        nregions = 0;
       }
+    }
+    if (nregions == 0 || regions != client2regions.get(client)) {
+      // Lost a race.
+      // TODO: Resolve the race condition among {@link #ip2client},
+      // {@link #client2regions}, {@link #region2client}, {@link #rootregion},
+      // and {@link #regions_cache}.
+      if (LOG.isDebugEnabled()) {
+        LOG.debug("Lost a race while trying to" +
+                  (oldclient == null ? "add" : "replace") +
+                  " client for region " + region + ", which was " +
+                  (oldregion == null ? "added to" : "updated in") + " the" +
+                  " regions cache. The new client " + client + " is hosting " +
+                  " no regions.");
+      }
+      return null;
     }
 
     // Don't interleave logging with the operations above, in order to attempt
@@ -2452,6 +2476,8 @@ public final class HBaseClient {
       public Object call(final Object arg) {
         if (arg instanceof Exception) {
           LOG.warn("Probe " + probe + " failed", (Exception) arg);
+        } else {
+          LOG.debug("Probe {} was successful", probe);
         }
         ArrayList<HBaseRpc> removed = got_nsre.remove(region_name);
         if (removed != rpcs && removed != null) {  // Should never happen.
