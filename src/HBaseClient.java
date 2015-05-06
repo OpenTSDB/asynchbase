@@ -35,6 +35,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.Iterator;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentSkipListMap;
@@ -1791,6 +1792,145 @@ public final class HBaseClient {
                                                     + request, cause);
     request.callback(e);
     return Deferred.fromError(e);
+  }
+
+  private RegionLocation toRegionLocation(ArrayList<KeyValue> meta_row) {
+
+    if (meta_row.isEmpty()) {
+      throw new TableNotFoundException();
+    }
+    String host = null;
+    int port = -1;
+    RegionInfo region = null;
+    byte[] start_key = null;
+
+    for (final KeyValue kv : meta_row) {
+      final byte[] qualifier = kv.qualifier();
+      if (Arrays.equals(REGIONINFO, qualifier)) {
+        final byte[][] tmp = new byte[1][];  // Yes, this is ugly.
+        region = RegionInfo.fromKeyValue(kv, tmp);
+        if (knownToBeNSREd(region)) {
+          invalidateRegionCache(region.name(), true, "has marked it as split.");
+          return null;
+        }
+        start_key = tmp[0];
+      } else if (Arrays.equals(SERVER, qualifier)
+              && kv.value() != EMPTY_ARRAY) {  // Empty during NSRE.
+        final byte[] hostport = kv.value();
+        int colon = hostport.length - 1;
+        for (/**/; colon > 0 /* Can't be at the beginning */; colon--) {
+          if (hostport[colon] == ':') {
+            break;
+          }
+        }
+        if (colon == 0) {
+          throw BrokenMetaException.badKV(region, "an `info:server' cell"
+                  + " doesn't contain `:' to separate the `host:port'"
+                  + Bytes.pretty(hostport), kv);
+        }
+        host = getIP(new String(hostport, 0, colon));
+        try {
+          port = parsePortNumber(new String(hostport, colon + 1,
+                  hostport.length - colon - 1));
+        } catch (NumberFormatException e) {
+          throw BrokenMetaException.badKV(region, "an `info:server' cell"
+                  + " contains an invalid port: " + e.getMessage() + " in "
+                  + Bytes.pretty(hostport), kv);
+        }
+      }
+    }
+    if (start_key == null) {
+      throw new BrokenMetaException(null, "It didn't contain any"
+              + " `info:regioninfo' cell:  " + meta_row);
+    }
+
+    final byte[] region_name = region.name();
+    if (host == null) {
+      // When there's no `info:server' cell, it typically means that the
+      // location of this region is about to be updated in META, so we
+      // consider this as an NSRE.
+      invalidateRegionCache(region_name, true, "no longer has it assigned.");
+      return null;
+    }
+    return new RegionLocation(region, start_key, host, port);
+  }
+
+  public Deferred<List<RegionLocation>> locateRegions(final byte[] table) {
+
+    // But we don't want to do this for hbase:meta, .META. or -ROOT-.
+    if (Bytes.equals(table, HBASE96_META) || Bytes.equals(table, META) || Bytes.equals(table, ROOT)) {
+      return Deferred.fromResult(null);
+    }
+
+    final byte[] start = EMPTY_ARRAY;
+    final byte[] stop = EMPTY_ARRAY;
+
+    // Create the scan bounds.
+    final byte[] meta_start = createRegionSearchKey(table, start);
+    // In this case, we want the scan to start immediately at the
+    // first entry, but createRegionSearchKey finds the last entry.
+    meta_start[meta_start.length - 1] = 0;
+
+    // The stop bound is trickier.  If the user wants the whole table,
+    // expressed by passing EMPTY_ARRAY, then we need to append a null
+    // byte to the table name (thus catching all rows in the desired
+    // table, but excluding those from others.)  If the user specifies
+    // an explicit stop key, we must leave the table name alone.
+    final byte[] meta_stop;
+    if (stop.length == 0) {
+      meta_stop = createRegionSearchKey(table, stop); // will return "table,,:"
+      meta_stop[table.length] = 0;  // now have "table\0,:"
+      meta_stop[meta_stop.length - 1] = ',';  // now have "table\0,,"
+    } else {
+      meta_stop = createRegionSearchKey(table, stop);
+    }
+
+    if (rootregion == null) {
+      // If we don't know where the root region is, we don't yet know whether
+      // there is even a -ROOT- region at all (pre HBase 0.95).  So we can't
+      // start scanning meta right away, because we don't yet know whether
+      // meta is named ".META." or "hbase:meta".  So instead we first check
+      // whether the table exists, which will force us to do a first meta
+      // lookup (and therefore figure out what the name of meta is).
+      class RetryLocateRegions implements Callback<Deferred<List<RegionLocation>>, Object> {
+        public Deferred<List<RegionLocation>> call(final Object unused) {
+          return locateRegions(table);
+        }
+        public String toString() {
+          return "Retry locateRegions (" + Bytes.pretty(table) + ", "
+                  + Bytes.pretty(start) + ", " + Bytes.pretty(stop) + ")";
+        }
+      }
+      return ensureTableExists(table).addCallbackDeferring(new RetryLocateRegions());
+    }
+
+    final Scanner meta_scanner = newScanner(has_root ? META : HBASE96_META);
+    meta_scanner.setStartKey(meta_start);
+    meta_scanner.setStopKey(meta_stop);
+
+    final List<RegionLocation> result = new ArrayList<RegionLocation>();
+
+    class LocateRegionsContinue
+            implements Callback<Deferred<List<RegionLocation>>, ArrayList<ArrayList<KeyValue>>> {
+      public Deferred<List<RegionLocation>> call(final ArrayList<ArrayList<KeyValue>> results) {
+        if (results != null && !results.isEmpty()) {
+          for (ArrayList<KeyValue> meta_row : results) {
+            RegionLocation region_location = toRegionLocation(meta_row);
+            if (region_location != null) {
+              result.add(region_location);
+            }
+          }
+          return meta_scanner.nextRows().addCallbackDeferring(this);
+        }
+        return Deferred.fromResult(result);
+      }
+
+      public String toString() {
+        return "LocateRegionsContinue scanner=" + meta_scanner;
+      }
+    }
+
+    return meta_scanner.nextRows().addCallbackDeferring(new LocateRegionsContinue());
   }
 
   // --------------------------------------------------- //

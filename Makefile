@@ -98,6 +98,7 @@ asynchbase_SOURCES := \
 	src/RegexStringComparator.java	\
 	src/RegionClient.java	\
 	src/RegionInfo.java	\
+	src/RegionLocation.java	\
 	src/RegionOfflineException.java	\
 	src/RegionMovedException.java	\
 	src/RemoteException.java	\
