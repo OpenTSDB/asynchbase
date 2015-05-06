@@ -1922,6 +1922,7 @@ public final class HBaseClient {
                                                              final byte[] key) {
     return new Callback<Object, Exception>() {
       public Object call(final Exception e) {
+        LOG.debug("locateRegion failed", e);
         if (e instanceof TableNotFoundException) {
           return new TableNotFoundException(table);  // Populate the name.
         } else if (e instanceof RecoverableException) {
@@ -2165,6 +2166,14 @@ public final class HBaseClient {
       // TODO: Resolve the race condition among {@link #ip2client},
       // {@link #client2regions}, {@link #region2client}, {@link #rootregion},
       // and {@link #regions_cache}.
+      if (LOG.isDebugEnabled()) {
+        LOG.debug("Lost a race while trying to" +
+                  (oldclient == null ? "add" : "replace") +
+                  " client for region " + region + ", which was " +
+                  (oldregion == null ? "added to" : "updated in") + " the" +
+                  " regions cache. The new client " + client + " is hosting " +
+                  " no regions.");
+      }
       return null;
     }
 
@@ -2467,6 +2476,8 @@ public final class HBaseClient {
       public Object call(final Object arg) {
         if (arg instanceof Exception) {
           LOG.warn("Probe " + probe + " failed", (Exception) arg);
+        } else {
+          LOG.debug("Probe {} was successful", probe);
         }
         ArrayList<HBaseRpc> removed = got_nsre.remove(region_name);
         if (removed != rpcs && removed != null) {  // Should never happen.
