@@ -252,7 +252,7 @@ final public class TestIntegration {
     assertEq("val1", kvs2.get(0).value());
   }
 
-  /** 
+  /**
    * Call Append on a column for the first time and validate that it was
    * created.
    */
@@ -273,7 +273,7 @@ final public class TestIntegration {
     final double kvts = kv.timestamp();
     assertEquals(write_time, kvts, 5000.0);  // Within five seconds.
   }
- 
+
   /**
    * Call append on a column twice, the first time to create it, the second to
    * append the new value.
@@ -801,6 +801,7 @@ final public class TestIntegration {
 
   }
 
+
   /** Test fuzzy row filters.  */
   @Test
   public void fuzzyRowFilter() throws Exception {
@@ -1103,7 +1104,7 @@ final public class TestIntegration {
     assertSizeIs(1, kvs);   // KV from "fl2":
     assertEq("v4", kvs.get(0).value());
   }
-  
+
   /** Simple timestamps filter list tests.  */
   @Test
   public void timestampsFilter() throws Exception {
@@ -1130,7 +1131,7 @@ final public class TestIntegration {
     assertSizeIs(1, rows.get(1));
     assertEq("v3", rows.get(1).get(0).value());
   }
-  
+
   /** Simple first key only filter tests.  */
   @Test
   public void firstKeyOnlyFilter() throws Exception {
@@ -1173,6 +1174,73 @@ final public class TestIntegration {
                                                table.getBytes(),
                                                HBaseClient.EMPTY_ARRAY);
     assertNotNull(region_info);
+  }
+
+  /** Simple ColumnPaginationFilter filter test on a Get request.  */
+  @Test
+  public void columnPaginationFilterOnGet() throws Exception {
+    client.setFlushInterval(FAST_FLUSH);
+    final PutRequest put1 = new PutRequest(table, "row1", family, "q1", "v1");
+    final PutRequest put2 = new PutRequest(table, "row1", family, "q2", "v2");
+    final PutRequest put3 = new PutRequest(table, "row1", family, "q3", "v3");
+    final PutRequest put4 = new PutRequest(table, "row1", family, "q4", "v4");
+
+    Deferred.group(Deferred.group(client.put(put1), client.put(put2)),
+        Deferred.group(client.put(put3), client.put(put4))).join();
+
+    // Test ColumnPaginationFilter(int limit, int offset)
+    final GetRequest get = new GetRequest(table,  "row1");
+    get.setFilter(new ColumnPaginationFilter(3, 1));
+    ArrayList<KeyValue> kvs = client.get(get).join();
+    assertNotNull(kvs);
+    assertSizeIs(3, kvs);
+    assertEq("v2", kvs.get(0).value());
+    assertEq("v3", kvs.get(1).value());
+    assertEq("v4", kvs.get(2).value());
+  }
+
+  /** SimpleColumnPrefixFilter tests on a Get request. */
+  @Test
+  public void columnPrefixFilterOnGet() throws Exception {
+    client.setFlushInterval(FAST_FLUSH);
+    // Keep only rows with a column qualifier that starts with "qa".
+    final PutRequest put1 = new PutRequest(table, "cpf1", family, "qa1", "v1");
+    final PutRequest put2 = new PutRequest(table, "cpf1", family, "qa2", "v2");
+    final PutRequest put3 = new PutRequest(table, "cpf1", family, "qa3", "v3");
+    final PutRequest put4 = new PutRequest(table, "cpf1", family, "qb4", "v4");
+    Deferred.group(Deferred.group(client.put(put1), client.put(put2)),
+                   Deferred.group(client.put(put3), client.put(put4))).join();
+    final GetRequest get = new GetRequest(table,  "cpf1");
+    get.setFilter(new ColumnPrefixFilter("qa"));
+    ArrayList<KeyValue> kvs = client.get(get).join();
+    assertSizeIs(3, kvs);
+    assertEq("v1", kvs.get(0).value());
+    assertEq("v2", kvs.get(1).value());
+    assertEq("v3", kvs.get(2).value());
+  }
+
+  /** Simple timestamps filter tests on a Get request.  */
+  @Test
+  public void timestampsOnGet() throws Exception {
+    client.setFlushInterval(FAST_FLUSH);
+    final byte[] tableBytes = Bytes.UTF8(table);
+    final byte[] familyBytes = Bytes.UTF8(family);
+    final byte[] rowBytes = Bytes.UTF8("row1");
+    final PutRequest put1 = new PutRequest(tableBytes, rowBytes, familyBytes, Bytes.UTF8("q1"), Bytes.UTF8("v1"), 1L);
+    final PutRequest put2 = new PutRequest(tableBytes, rowBytes, familyBytes, Bytes.UTF8("q2"), Bytes.UTF8("v2"), 2L);
+    final PutRequest put3 = new PutRequest(tableBytes, rowBytes, familyBytes, Bytes.UTF8("q3"), Bytes.UTF8("v3"), 3L);
+    final PutRequest put4 = new PutRequest(tableBytes, rowBytes, familyBytes, Bytes.UTF8("q4"), Bytes.UTF8("v4"), 4L);
+
+    Deferred.group(Deferred.group(client.put(put1), client.put(put2)),
+        Deferred.group(client.put(put3), client.put(put4))).join();
+
+    final GetRequest get = new GetRequest(table,  "row1");
+    get.setMinTimestamp(2L);
+    get.setMaxTimestamp(4L);
+    ArrayList<KeyValue> kvs = client.get(get).join();
+    assertSizeIs(2, kvs);
+    assertEq("v2", kvs.get(0).value());
+    assertEq("v3", kvs.get(1).value());
   }
 
   /** Regression test for issue #2. */
