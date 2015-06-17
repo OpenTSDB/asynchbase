@@ -26,6 +26,7 @@
  */
 package org.hbase.async;
 
+import java.lang.IllegalArgumentException;
 import java.util.Comparator;
 import java.util.Arrays;
 
@@ -54,6 +55,7 @@ final class RegionInfo implements Comparable<RegionInfo> {
   // So it contains the start_key.
   private final byte[] region_name;
   private final byte[] stop_key;
+  private final byte[] start_key;
 
   /**
    * Constructor.
@@ -67,6 +69,13 @@ final class RegionInfo implements Comparable<RegionInfo> {
       this.stop_key = EMPTY_ARRAY;
     } else {
       this.stop_key = stop_key;
+    }
+
+    final byte[] start_key = startKeyFromRegionName(region_name);
+    if (start_key.length == 0){
+      this.start_key = EMPTY_ARRAY;
+    } else {
+      this.start_key = start_key;
     }
   }
 
@@ -83,6 +92,11 @@ final class RegionInfo implements Comparable<RegionInfo> {
   /** Returns the stop key (exclusive) of this region.  */
   public byte[] stopKey() {
     return stop_key;
+  }
+
+  /** Returns the start key (inclusive) of this region.  */
+  public byte[] startKey(){ 
+    return start_key;
   }
 
   /**
@@ -223,6 +237,46 @@ final class RegionInfo implements Comparable<RegionInfo> {
         + " comma: " + Bytes.pretty(region_name));
     }
     return Arrays.copyOf(region_name, comma);
+  }
+
+  /**
+   * Given name of a region, returns its start key
+   * @throws IllegalArgumentException if the name of the region is malformed
+   * @param region_name Full region_name created in the constructor
+   * @return byte Array of the start key
+   */
+  static byte[] startKeyFromRegionName(final byte[] region_name){
+    int key_begin = 0;
+    int key_end= 1;
+    int comma = 0;
+    for (/**/; key_end < region_name.length; key_end++) {
+      if (region_name[key_end] == ',') {
+        comma++;
+        if (comma == 1){
+          key_begin = key_end+1;
+        }
+        if (comma == 2){
+          break;
+        }
+      }
+    }
+
+    // If reached the end and the string being returned is not empty
+    if (key_end == region_name.length &&  (comma == 2)) {
+      throw new IllegalArgumentException("Malformed region name, not enough"
+              + " commas: " + Bytes.pretty(region_name));
+    }
+
+    // Only return the string if region length is greater than 0
+    if (key_end - key_begin > 0 && region_name.length > 0){
+      return Arrays.copyOfRange(region_name, key_begin, key_end);
+    }
+    // Otherwise, return an empty string as start key aka this is the 
+    // start key for the first region in the table.
+    else {
+      return Arrays.copyOfRange(region_name, key_begin, key_begin);
+    }
+
   }
 
   @Override

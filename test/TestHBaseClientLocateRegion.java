@@ -48,7 +48,7 @@ public class TestHBaseClientLocateRegion extends BaseTestHBaseClient {
   @Test
   public void locateRegionRootHadRootLookupInZK() throws Exception {
     final Object obj = Whitebox.invokeMethod(client, "locateRegion", 
-        get, HBaseClient.ROOT, EMPTY_ARRAY);
+        HBaseClient.ROOT, EMPTY_ARRAY);
     assertTrue(root_deferred == obj);
     assertCounters(0, 0, 0);
   }
