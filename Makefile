@@ -151,11 +151,13 @@ unittest_SRC := \
 	test/BaseTestHBaseClient.java	\
 	test/BaseTestRegionClient.java	\
 	test/BaseTestSecureRpcHelper.java	\
+	test/PBufResponses.java	\
 	test/TestConfig.java	\
 	test/TestDeleteRequest.java	\
 	test/TestGetRequest.java	\
 	test/TestHBaseClient.java	\
 	test/TestMETALookup.java	\
+	test/TestMultiAction.java	\
 	test/TestNSREs.java	\
 	test/TestPutRequest.java	\
 	test/TestRegionClient.java	\

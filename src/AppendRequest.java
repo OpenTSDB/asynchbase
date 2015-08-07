@@ -439,6 +439,17 @@ public final class AppendRequest extends BatchableRpc
                                        + ", bufferable=" + super.bufferable);
   }
 
+  /** @param return_result Whether or not to fetch the results of the append
+   * from HBase. */
+  public void returnResult(boolean return_result) {
+    this.return_result = return_result;
+  }
+  
+  /** @return Whether or not to fetch the results of the append from HBase. */
+  public boolean returnResult() {
+    return return_result;
+  }
+  
   // ---------------------- //
   // Package private stuff. //
   // ---------------------- //

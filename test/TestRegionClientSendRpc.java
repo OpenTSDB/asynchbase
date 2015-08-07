@@ -80,6 +80,7 @@ public class TestRegionClientSendRpc extends BaseTestRegionClient {
   @Test
   public void batchedPut() throws Exception {
     final PutRequest put = new PutRequest(TABLE, KEY, FAMILY, QUALIFIER, VALUE);
+    put.region = region;
     final Deferred<Object> deferred = put.getDeferred();
     
     region_client.sendRpc(put);
@@ -107,6 +108,7 @@ public class TestRegionClientSendRpc extends BaseTestRegionClient {
   public void batchedAppend() throws Exception {
     final AppendRequest append = new AppendRequest(TABLE, KEY, FAMILY, 
         QUALIFIER, VALUE);
+    append.region = region;
     final Deferred<Object> deferred = append.getDeferred();
     
     region_client.sendRpc(append);
