@@ -156,6 +156,7 @@ unittest_SRC := \
 	test/TestDeleteRequest.java	\
 	test/TestGetRequest.java	\
 	test/TestHBaseClient.java	\
+	test/TestHBaseClientLocateRegion.java	\
 	test/TestMETALookup.java	\
 	test/TestMultiAction.java	\
 	test/TestNSREs.java	\

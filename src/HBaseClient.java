@@ -1812,7 +1812,7 @@ public final class HBaseClient {
         return d;
       }
     }
-    return locateRegion(table, key).addBothDeferring(new RetryRpc());
+    return locateRegion(request, table, key).addBothDeferring(new RetryRpc());
   }
 
   /**
@@ -1915,13 +1915,15 @@ public final class HBaseClient {
    * <p>
    * This does a lookup in the .META. / -ROOT- table(s), no cache is used.
    * If you want to use a cache, call {@link #getRegion} instead.
+   * @param request The RPC that's hunting for a region
    * @param table The table to which the row belongs.
    * @param key The row key for which we want to locate the region.
    * @return A deferred called back when the lookup completes.  The deferred
    * carries an unspecified result.
    * @see #discoverRegion
    */
-  private Deferred<Object> locateRegion(final byte[] table, final byte[] key) {
+  private Deferred<Object> locateRegion(final HBaseRpc request, 
+      final byte[] table, final byte[] key) {
     final boolean is_meta = Bytes.equals(table, META);
     final boolean is_root = !is_meta && Bytes.equals(table, ROOT);
     // We don't know in which region this row key is.  Let's look it up.
@@ -1953,9 +1955,17 @@ public final class HBaseClient {
             return Deferred.fromResult(null);  // Looks like no lookup needed.
           }
         }
-        final Deferred<Object> d =
-          client.getClosestRowBefore(meta_region, meta_name, meta_key, INFO)
-          .addCallback(meta_lookup_done);
+        Deferred<Object> d = null;
+        try {
+          d = client.getClosestRowBefore(meta_region, meta_name, meta_key, INFO)
+            .addCallback(meta_lookup_done);
+        } catch (RuntimeException e) {
+          LOG.error("Unexpected exception while performing meta lookup", e);
+          if (has_permit) {
+            client.releaseMetaLookupPermit();
+          }
+          throw e;
+        }
         if (has_permit) {
           final class ReleaseMetaLookupPermit implements Callback<Object, Object> {
             public Object call(final Object arg) {
@@ -1972,7 +1982,7 @@ public final class HBaseClient {
           meta_lookups_wo_permit.increment();
         }
         // This errback needs to run *after* the callback above.
-        return d.addErrback(newLocateRegionErrback(table, key));
+        return d.addErrback(newLocateRegionErrback(request, table, key));
       }
     }
 
@@ -1995,7 +2005,7 @@ public final class HBaseClient {
     return rootregion.getClosestRowBefore(root_region, ROOT, root_key, INFO)
       .addCallback(root_lookup_done)
       // This errback needs to run *after* the callback above.
-      .addErrback(newLocateRegionErrback(table, key));
+      .addErrback(newLocateRegionErrback(request, table, key));
   }
 
   /** Callback executed when a lookup in META completes.  */
@@ -2028,22 +2038,24 @@ public final class HBaseClient {
    * a {@link TableNotFoundException} is thrown (because the low-level code
    * doesn't know about tables, it only knows about regions, but for proper
    * error reporting users need the name of the table that wasn't found).
+   * @param request The RPC that is hunting for a region
    * @param table The table to which the row belongs.
    * @param key The row key for which we want to locate the region.
    */
-  private Callback<Object, Exception> newLocateRegionErrback(final byte[] table,
-                                                             final byte[] key) {
+  private Callback<Object, Exception> newLocateRegionErrback(
+      final HBaseRpc request, final byte[] table, final byte[] key) {
     return new Callback<Object, Exception>() {
       public Object call(final Exception e) {
         if (e instanceof TableNotFoundException) {
           return new TableNotFoundException(table);  // Populate the name.
         } else if (e instanceof RecoverableException) {
-          // Retry to locate the region.  TODO(tsuna): exponential backoff?
-          // XXX this can cause an endless retry loop (particularly if the
-          // address of -ROOT- in ZK is stale when we start, this code is
-          // going to retry in an almost-tight loop until the znode is
-          // updated).
-          return locateRegion(table, key);
+          // Retry to locate the region if we haven't tried too many times.  
+          // TODO(tsuna): exponential backoff?
+          if (cannotRetryRequest(request)) {
+            return tooManyAttempts(request, null);
+          }
+          request.attempt++;
+          return locateRegion(request, table, key);
         }
         return e;
       }

@@ -293,101 +293,7 @@ public class TestHBaseClient extends BaseTestHBaseClient {
   public void knownToBeNSREdNullRegionInfo() throws Exception {
     Whitebox.invokeMethod(HBaseClient.class, "knownToBeNSREd", (RegionInfo)null);
   }
-
- // -------- ROOT ----------
-  @Test
-  public void locateRegionRootHadRootStillLookupInZK() throws Exception {
-    Whitebox.setInternalState(client, "has_root", true);
-    final Deferred<Object> root_deferred = new Deferred<Object>();
-    when(zkclient.getDeferredRoot()).thenReturn(root_deferred);
-    
-    final Object obj = Whitebox.invokeMethod(client, "locateRegion", 
-        HBaseClient.ROOT, KEY);
-    assertNotNull(obj);
-    assertTrue(root_deferred == obj);
-    assertEquals(0, 
-        ((Counter)Whitebox.getInternalState(client, "root_lookups")).get());
-  }
   
-  @Test
-  public void locateRegionRootHadRootDeadClientLookupInZK() throws Exception {
-    Whitebox.setInternalState(client, "has_root", true);
-    Whitebox.setInternalState(client, "rootregion", rootclient);
-    final Deferred<Object> root_deferred = new Deferred<Object>();
-    when(zkclient.getDeferredRoot()).thenReturn(root_deferred);
-    
-    final Object obj = Whitebox.invokeMethod(client, "locateRegion", 
-        HBaseClient.ROOT, KEY);
-    assertNotNull(obj);
-    assertTrue(root_deferred == obj);
-    assertEquals(0, 
-        ((Counter)Whitebox.getInternalState(client, "root_lookups")).get());
-  }
-  
-  @SuppressWarnings("unchecked")
-  @Test
-  public void locateRegionRootHadRootBypassZK() throws Exception {
-    Whitebox.setInternalState(client, "has_root", true);
-    Whitebox.setInternalState(client, "rootregion", rootclient);
-    when(rootclient.isAlive()).thenReturn(true);
-    final Deferred<Object> root_deferred = new Deferred<Object>();
-    when(zkclient.getDeferredRoot()).thenReturn(root_deferred);
-    
-    final Object obj = Whitebox.invokeMethod(client, "locateRegion", 
-        HBaseClient.ROOT, KEY);
-    assertNotNull(obj);
-    assertTrue(root_deferred != obj);
-    assertNull(((Deferred<Object>)obj).joinUninterruptibly());
-    assertEquals(0, 
-        ((Counter)Whitebox.getInternalState(client, "root_lookups")).get());
-  }
-  
-  // -------------- GENERAL LOOKUP ------------
-  @Test
-  public void locateRegionLookupInZK() throws Exception {
-    final Deferred<Object> root_deferred = new Deferred<Object>();
-    when(zkclient.getDeferredRoot()).thenReturn(root_deferred);
-    
-    final Object obj = Whitebox.invokeMethod(client, "locateRegion", TABLE, KEY);
-    assertNotNull(obj);
-    assertTrue(root_deferred == obj);
-    assertEquals(0, 
-        ((Counter)Whitebox.getInternalState(client, "root_lookups")).get());
-  }
-
-  // ---------- PARAMS -----------
-  @Test (expected = NullPointerException.class)
-  public void locateRegionNullTable() throws Exception {
-    Whitebox.invokeMethod(client, "locateRegion", (byte[])null, KEY);
-  }
-  
-  @Test (expected = NullPointerException.class)
-  public void locateRegionNullKey() throws Exception {
-    Whitebox.invokeMethod(client, "locateRegion", TABLE, (byte[])null);
-  }
-  
-  @Test
-  public void locateRegionEmptyTable() throws Exception {
-    final Deferred<Object> root_deferred = new Deferred<Object>();
-    when(zkclient.getDeferredRoot()).thenReturn(root_deferred);
-    
-    final Object obj = Whitebox.invokeMethod(client, "locateRegion", 
-        HBaseClient.EMPTY_ARRAY, KEY);
-    assertNotNull(obj);
-    assertTrue(root_deferred == obj);
-  }
-  
-  @Test
-  public void locateRegionEmptyKey() throws Exception {
-    final Deferred<Object> root_deferred = new Deferred<Object>();
-    when(zkclient.getDeferredRoot()).thenReturn(root_deferred);
-    
-    final Object obj = Whitebox.invokeMethod(client, "locateRegion", 
-        TABLE, HBaseClient.EMPTY_ARRAY);
-    assertNotNull(obj);
-    assertTrue(root_deferred == obj);
-  }
-
   // discoverRegion
   
   @Test
@@ -414,7 +320,7 @@ public class TestHBaseClient extends BaseTestHBaseClient {
     final RegionClient region_client = (RegionClient)obj;
     assertEquals(2, regions_cache.size());
     assertEquals(2, region2client.size());
-    assertEquals(1, client2regions.size());
+    assertEquals(3, client2regions.size());
     assertEquals("127.0.0.1:54321", region_client.getRemoteAddress());
     final Iterator<RegionClient> iterator = region2client.values().iterator();
     assertTrue(region_client != iterator.next());

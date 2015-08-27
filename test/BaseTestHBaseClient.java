@@ -35,6 +35,8 @@ import static org.powermock.api.mockito.PowerMockito.mock;
 import java.nio.charset.Charset;
 import java.util.AbstractMap;
 import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
@@ -44,6 +46,9 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 
 import org.hbase.async.HBaseClient.ZKClient;
+import org.jboss.netty.channel.ChannelPipeline;
+import org.jboss.netty.channel.socket.SocketChannel;
+import org.jboss.netty.channel.socket.SocketChannelConfig;
 import org.jboss.netty.channel.socket.nio.NioClientSocketChannelFactory;
 import org.jboss.netty.util.HashedWheelTimer;
 import org.jboss.netty.util.Timeout;
@@ -79,6 +84,13 @@ public class BaseTestHBaseClient {
   protected static final KeyValue KV = new KeyValue(KEY, FAMILY, QUALIFIER, VALUE);
   protected static final RegionInfo meta = mkregion(".META.", ".META.,,1234567890");
   protected static final RegionInfo region = mkregion("table", "table,,1234567890");
+  protected static final int RS_PORT = 50511;
+  protected static final String ROOT_IP = "192.168.0.1";
+  protected static final String META_IP = "192.168.0.2";
+  protected static final String REGION_CLIENT_IP = "192.168.0.3";
+  protected static String MOCK_RS_CLIENT_NAME = "Mock RegionClient";
+  protected static String MOCK_ROOT_CLIENT_NAME = "Mock RootClient";
+  protected static String MOCK_META_CLIENT_NAME = "Mock MetaClient";
   
   protected HBaseClient client = null;
   /** Extracted from {@link #client}.  */
@@ -90,6 +102,8 @@ public class BaseTestHBaseClient {
   /** Extracted from {@link #client}. */
   protected ConcurrentSkipListMap<byte[], ArrayList<HBaseRpc>> got_nsre;
   /** Extracted from {@link #client}. */
+  protected HashMap<String, RegionClient> ip2client;
+  /** Extracted from {@link #client}. */
   protected Counter num_nsre_rpcs;
   /** Fake client supposedly connected to -ROOT-.  */
   protected RegionClient rootclient;
@@ -97,22 +111,34 @@ public class BaseTestHBaseClient {
   protected RegionClient metaclient;
   /** Fake client supposedly connected to our fake test table.  */
   protected RegionClient regionclient;
+  /** Each new region client is dumped here */
+  protected List<RegionClient> region_clients = new ArrayList<RegionClient>();
   /** Fake Zookeeper client */
   protected ZKClient zkclient;
+  /** Fake channel factory */
+  protected NioClientSocketChannelFactory channel_factory;
+  /** Fake channel returned from the factory */
+  protected SocketChannel chan;
   
   @Before
   public void before() throws Exception {
+    region_clients.clear();
     rootclient = mock(RegionClient.class);
+    when(rootclient.toString()).thenReturn(MOCK_ROOT_CLIENT_NAME);
     metaclient = mock(RegionClient.class);
+    when(metaclient.toString()).thenReturn(MOCK_META_CLIENT_NAME);
     regionclient = mock(RegionClient.class);
+    when(regionclient.toString()).thenReturn(MOCK_RS_CLIENT_NAME);
     zkclient = mock(ZKClient.class);
+    channel_factory = mock(NioClientSocketChannelFactory.class);
+    chan = mock(SocketChannel.class);
     
     when(zkclient.getDeferredRoot()).thenReturn(new Deferred<Object>());
     PowerMockito.mockStatic(Executors.class);
     PowerMockito.when(Executors.newCachedThreadPool())
       .thenReturn(mock(ExecutorService.class));
     PowerMockito.whenNew(NioClientSocketChannelFactory.class).withAnyArguments()
-      .thenReturn(mock(NioClientSocketChannelFactory.class));
+      .thenReturn(channel_factory);
     
     client = PowerMockito.spy(new HBaseClient("test-quorum-spec"));
     Whitebox.setInternalState(client, "zkclient", zkclient);
@@ -122,9 +148,14 @@ public class BaseTestHBaseClient {
     regions_cache = Whitebox.getInternalState(client, "regions_cache");
     region2client = Whitebox.getInternalState(client, "region2client");
     client2regions = Whitebox.getInternalState(client, "client2regions");
-    injectRegionInCache(meta, metaclient);
-    injectRegionInCache(region, regionclient);
+    got_nsre = Whitebox.getInternalState(client, "got_nsre");
+    ip2client = Whitebox.getInternalState(client, "ip2client");
+    injectRegionInCache(meta, metaclient, META_IP + ":" + RS_PORT);
+    injectRegionInCache(region, regionclient, REGION_CLIENT_IP + ":" + RS_PORT);
     
+    when(channel_factory.newChannel(any(ChannelPipeline.class)))
+      .thenReturn(chan);
+    when(chan.getConfig()).thenReturn(mock(SocketChannelConfig.class));
     when(rootclient.toString()).thenReturn("Mock RootClient");
     
     PowerMockito.doAnswer(new Answer<RegionClient>(){
@@ -135,19 +166,27 @@ public class BaseTestHBaseClient {
         final RegionClient rc = mock(RegionClient.class);
         when(rc.getRemoteAddress()).thenReturn(endpoint);
         client2regions.put(rc, new ArrayList<RegionInfo>());
+        region_clients.add(rc);
         return rc;
       }
     }).when(client, "newClient", anyString(), anyInt());
   }
  
   /**
-   * Injects an entry in the local META cache of the client.
+   * Injects an entry in the local caches of the client.
    */
   protected void injectRegionInCache(final RegionInfo region,
-                                   final RegionClient client) {
+                                   final RegionClient client,
+                                   final String ip) {
     regions_cache.put(region.name(), region);
     region2client.put(region, client);
-    // We don't care about client2regions in these tests.
+    ArrayList<RegionInfo> regions = client2regions.get(client);
+    if (regions == null) {
+      regions = new ArrayList<RegionInfo>(1);
+      client2regions.put(client, regions);
+    }
+    regions.add(region);
+    ip2client.put(ip, client);
   }
   
   // ----------------- //
@@ -330,6 +369,12 @@ public class BaseTestHBaseClient {
     }
   }
 
+  /**
+   * Generate and return a mocked HBase RPC for testing purposes with a valid
+   * Deferred that can be called on execution. 
+   * @param deferred A deferred to watch for results
+   * @return The RPC to pass through unit tests.
+   */
   protected HBaseRpc getMockHBaseRpc(final Deferred<Object> deferred) {
     final HBaseRpc rpc = mock(HBaseRpc.class);
     rpc.attempt = 0;
