@@ -127,6 +127,9 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
   /** The HBase client we belong to.  */
   private final HBaseClient hbase_client;
 
+  /** Whether or not to check the channel write status before sending RPCs */
+  private final boolean check_write_status;
+  
   /**
    * The channel we're connected to.
    * This will be {@code null} while we're not connected to the RegionServer.
@@ -195,6 +198,9 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
    * they may not have made it all the way */
   private final AtomicInteger rpcs_sent = new AtomicInteger();
   
+  /** Number of RPCs that were blocked due to the channel in a non-writable state */
+  private final AtomicInteger writes_blocked = new AtomicInteger();
+  
   private final TimerTask flush_timer = new TimerTask() {
     public void run(final Timeout timeout) {
       periodicFlush();
@@ -213,8 +219,8 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
    */
   private final Semaphore meta_lookups = new Semaphore(100);
 
+  /** A class used for authentication and/or encryption/decryption of packets. */
   private SecureRpcHelper secure_rpc_helper;
-  
   
   /**
    * Constructor.
@@ -222,6 +228,8 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
    */
   public RegionClient(final HBaseClient hbase_client) {
     this.hbase_client = hbase_client;
+    check_write_status = hbase_client.getConfig().getBoolean(
+            "hbase.region_client.check_channel_write_status");
   }
 
   /**
@@ -268,7 +276,8 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
         rpcid.get(),
         dead,
         chan != null ? chan.getRemoteAddress().toString() : "",
-        batched_rpcs != null ? batched_rpcs.size() : 0
+        batched_rpcs != null ? batched_rpcs.size() : 0,
+        writes_blocked.get()
       );
     }
   }
@@ -937,6 +946,17 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
       }
       final Channel chan = this.chan;  // Volatile read.
       if (chan != null) {  // Double check if we disconnected during encode().
+        // if our channel isn't able to write, we want to properly queue and
+        // retry the RPC later or fail it immediately so we don't fill up the
+        // channel's buffer.
+        if (check_write_status && !chan.isWritable()) {
+          rpc.callback(new PleaseThrottleException("Region client [" + this + 
+              " ] channel is not writeable.", null, rpc, rpc.getDeferred()));
+          rpcs_inflight.remove(rpc.rpc_id);
+          writes_blocked.incrementAndGet();
+          return;
+        }
+        
         Channels.write(chan, serialized);
         rpcs_sent.incrementAndGet();
         return;
@@ -1199,7 +1219,7 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
     // more than M RPCs in flight at the same time, and we may be overwhelming
     // the server if we do.
 
-    final int rpcid = this.rpcid.incrementAndGet();
+    rpc.rpc_id = this.rpcid.incrementAndGet();
     ChannelBuffer payload;
     try {
       payload = rpc.serialize(server_version);
@@ -1211,7 +1231,7 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
       final byte[] method = rpc.method(server_version);
       if (server_version >= SERVER_VERSION_095_OR_ABOVE) {
         final RPCPB.RequestHeader header = RPCPB.RequestHeader.newBuilder()
-          .setCallId(rpcid)                        // 1 + 1-to-5 bytes (vint)
+          .setCallId(rpc.rpc_id)                        // 1 + 1-to-5 bytes (vint)
           .setMethodNameBytes(Bytes.wrap(method))  // 1 + 1 + N bytes
           .setRequestParam(true)                   // 1 + 1 bytes
           .build();
@@ -1246,7 +1266,7 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
         // The first int is the size of the message, excluding the 4 bytes
         // needed for the size itself, hence the `-4'.
         payload.setInt(0, payload.readableBytes() - 4); // 4 bytes
-        payload.setInt(4, rpcid);                       // 4 bytes
+        payload.setInt(4, rpc.rpc_id);                  // 4 bytes
         // RPC version (org.apache.hadoop.hbase.ipc.Invocation.RPC_VERSION).
         payload.setByte(8, 1);                          // 4 bytes
         payload.setShort(9, method.length);             // 2 bytes
@@ -1262,7 +1282,7 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
         // The first int is the size of the message, excluding the 4 bytes
         // needed for the size itself, hence the `-4'.
         payload.setInt(0, payload.readableBytes() - 4); // 4 bytes
-        payload.setInt(4, rpcid);                       // 4 bytes
+        payload.setInt(4, rpc.rpc_id);                  // 4 bytes
         payload.setShort(8, method.length);             // 2 bytes
         payload.setBytes(10, method);                   // method.length bytes
       }
@@ -1283,7 +1303,7 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
                 + Bytes.pretty(payload));
     }
     {
-      final HBaseRpc oldrpc = rpcs_inflight.put(rpcid, rpc);
+      final HBaseRpc oldrpc = rpcs_inflight.put(rpc.rpc_id, rpc);
       if (oldrpc != null) {
         final String wtf = "WTF?  There was already an RPC in flight with"
           + " rpcid=" + rpcid + ": " + oldrpc

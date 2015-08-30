@@ -403,6 +403,9 @@ public abstract class HBaseRpc {
    */
   boolean failfast = false;
 
+  /** The ID of this RPC as set by the last region client that handled it */
+  int rpc_id;
+  
   /**
    * Set whether or not the RPC not be retried upon encountering a problem.
    * <p>

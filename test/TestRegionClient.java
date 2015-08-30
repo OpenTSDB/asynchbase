@@ -77,9 +77,9 @@ public class TestRegionClient extends BaseTestRegionClient {
     assertNotNull(new RegionClient(hbase_client));
   }
   
-  @Test
+  @Test (expected = NullPointerException.class)
   public void ctorNullClient() throws Exception {
-    assertNotNull(new RegionClient(null));
+    new RegionClient(null);
   }
 
   @Test

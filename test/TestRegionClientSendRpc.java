@@ -29,6 +29,7 @@ package org.hbase.async;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.fail;
 import static org.mockito.Matchers.any;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
@@ -153,6 +154,48 @@ public class TestRegionClientSendRpc extends BaseTestRegionClient {
     final GetRequest get = new GetRequest(TABLE, KEY, FAMILY, QUALIFIER);
     
     region_client.sendRpc(get);
+  }
+  
+
+  @Test
+  public void getRequestBlockedWriteIgnoreState() throws Exception {
+    when(chan.isWritable()).thenReturn(false);
+    final GetRequest get = new GetRequest(TABLE, KEY, FAMILY, QUALIFIER);
+    get.setRegion(region);
+    get.getDeferred();
+    
+    region_client.sendRpc(get);
+
+    PowerMockito.verifyStatic(times(1));
+    Channels.write((Channel)any(), (ChannelBuffer)any());
+    verify(hbase_client, never()).sendRpcToRegion(get);
+    assertEquals(1, region_client.stats().rpcsSent());
+    assertEquals(0, region_client.stats().writesBlocked());
+    assertEquals(0, region_client.stats().pendingBatchedRPCs());
+    assertEquals(0, region_client.stats().pendingRPCs());
+  }
+  
+  @Test
+  public void getRequestBlockedWrite() throws Exception {
+    when(chan.isWritable()).thenReturn(false);
+    Whitebox.setInternalState(region_client, "check_write_status", true);
+    final GetRequest get = new GetRequest(TABLE, KEY, FAMILY, QUALIFIER);
+    get.setRegion(region);
+    final Deferred<Object> deferred = get.getDeferred();
+    
+    region_client.sendRpc(get);
+
+    PowerMockito.verifyStatic(never());
+    Channels.write((Channel)any(), (ChannelBuffer)any());
+    verify(hbase_client, never()).sendRpcToRegion(get);
+    assertEquals(0, region_client.stats().rpcsSent());
+    assertEquals(1, region_client.stats().writesBlocked());
+    assertEquals(0, region_client.stats().pendingBatchedRPCs());
+    assertEquals(0, region_client.stats().pendingRPCs());
+    try {
+      deferred.join();
+      fail("Expected a PleaseThrottleException");
+    } catch (PleaseThrottleException e) { } 
   }
   
   @Test

@@ -314,6 +314,7 @@ public class Config {
   private void loadSystemAndDefaults() {
     default_map.put("hbase.rpcs.max_retry_attempts", "10");
     default_map.put("hbase.rpcs.buffered_flush_interval", "1000");
+    default_map.put("hbase.region_client.check_channel_write_status", "false");
     default_map.put("hbase.nsre.low_watermark", "1000");
     default_map.put("hbase.nsre.high_watermark", "10000");
     

@@ -46,6 +46,7 @@ public final class RegionClientStats {
   private final String remote_endpoint;
   private final int pending_batched_rpcs;
   private final int rpcs_retried;
+  private final int writes_blocked;
   
   /** Package-private constructor.  */
   RegionClientStats(
@@ -55,7 +56,8 @@ public final class RegionClientStats {
       final int rpcid,
       final boolean dead,
       final String remote_endpoint,
-      final int pending_batched_rpcs
+      final int pending_batched_rpcs,
+      final int writes_blocked
       ) {
     this.rpcs_sent = rpcs_sent;
     this.inflight_rpcs = rpcs_inflight;
@@ -64,6 +66,7 @@ public final class RegionClientStats {
     this.dead = dead;
     this.remote_endpoint = remote_endpoint;
     this.pending_batched_rpcs = pending_batched_rpcs;
+    this.writes_blocked = writes_blocked;
     rpcs_retried = rpcs_sent - (rpcid + 1);
   }
 
@@ -144,5 +147,14 @@ public final class RegionClientStats {
    */
   public int rpcsRetried() {
     return rpcs_retried;
+  }
+
+  /**
+   * The number of times sending an RPC was blocked due to the socket send
+   * buffer being full. This means HBase was not consuming RPCs fast enough.
+   * @return The number of writes blocked due to a full buffer.
+   */
+  public int writesBlocked() {
+    return writes_blocked;
   }
 }
