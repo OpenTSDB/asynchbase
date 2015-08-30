@@ -26,7 +26,7 @@
  */
 package org.hbase.async;
 
-import org.jboss.netty.buffer.ChannelBuffer;
+import io.netty.buffer.ByteBuf;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -116,7 +116,7 @@ public final class FilterList extends ScanFilter {
   }
 
   @Override
-  void serializeOld(final ChannelBuffer buf) {
+  void serializeOld(final ByteBuf buf) {
     buf.writeByte((byte) NAME.length);   // 1
     buf.writeBytes(NAME);                //41
     buf.writeByte((byte) op.ordinal());  // 1

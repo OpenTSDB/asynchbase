@@ -28,7 +28,7 @@ package org.hbase.async;
 
 import com.google.common.collect.Lists;
 import org.hbase.async.generated.FilterPB;
-import org.jboss.netty.buffer.ChannelBuffer;
+import io.netty.buffer.ByteBuf;
 
 import java.util.Collection;
 import java.util.TreeSet;
@@ -82,7 +82,7 @@ public final class TimestampsFilter extends ScanFilter {
   }
 
   @Override
-  void serializeOld(ChannelBuffer buf) {
+  void serializeOld(ByteBuf buf) {
     buf.writeByte((byte) NAME.length);   //  1
     buf.writeBytes(NAME);                // 47
     buf.writeInt(timestamps.size());     //  4

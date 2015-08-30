@@ -34,9 +34,9 @@ import java.util.concurrent.ConcurrentSkipListMap;
 import java.util.concurrent.TimeUnit;
 
 import com.stumbleupon.async.Callback;
-import org.jboss.netty.util.HashedWheelTimer;
-import org.jboss.netty.util.Timeout;
-import org.jboss.netty.util.TimerTask;
+import io.netty.util.HashedWheelTimer;
+import io.netty.util.Timeout;
+import io.netty.util.TimerTask;
 
 import com.stumbleupon.async.Deferred;
 
@@ -667,7 +667,7 @@ final class TestNSREs {
   }
 
   /**
-   * A fake {@link Timer} implementation that fires up tasks immediately.
+   * A fake {@link HashedWheelTimer} implementation that fires up tasks immediately.
    * Tasks are called immediately from the current thread.
    */
   static final class FakeTimer extends HashedWheelTimer {
@@ -692,7 +692,7 @@ final class TestNSREs {
   }
 
   /**
-   * A fake {@link org.jboss.netty.util.Timer} implementation.
+   * A fake {@link io.netty.util.Timer} implementation.
    * Instead of executing the task it will store that task in a internal state
    * and provides a function to start the execution of the stored task.
    * This implementation thus allows the flexibility of simulating the

@@ -27,7 +27,7 @@
 package org.hbase.async;
 
 import com.google.protobuf.ByteString;
-import org.jboss.netty.buffer.ChannelBuffer;
+import io.netty.buffer.ByteBuf;
 
 import org.hbase.async.generated.ComparatorPB;
 
@@ -73,7 +73,7 @@ public final class BinaryComparator extends FilterComparator {
   }
 
   @Override
-  void serializeOld(ChannelBuffer buf) {
+  void serializeOld(ByteBuf buf) {
     super.serializeOld(buf);              // super.predictSerializedSize()
     // Write class code
     buf.writeByte(CODE);                  // 1

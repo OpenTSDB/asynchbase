@@ -39,7 +39,7 @@ proto_builddir := $(top_builddir)/protobuf
 spec_title := Asynchronous HBase Client
 spec_vendor := The Async HBase Authors
 # Semantic Versioning (see http://semver.org/).
-spec_version := 1.6.0
+spec_version := 1.6.0-netty4
 jar := $(top_builddir)/asynchbase-$(spec_version).jar
 
 asynchbase_PROTOS := \
@@ -197,7 +197,7 @@ test_classes_with_nested_classes := $(test_classes:$(top_builddir)/%.class=%*.cl
 
 run: jar $(test_classes)
 	@test -n "$(CLASS)" || { echo 'usage: $(MAKE) run CLASS=<name>'; exit 1; }
-	$(JAVA) -ea -esa $(JVM_ARGS) -cp "$(get_runtime_dep_classpath):$(top_builddir)" $(package).test.$(CLASS) $(ARGS)
+	$(JAVA) -ea -esa $(JVM_ARGS) -cp "$(get_runtime_dep_classpath):$(top_builddir)" $(package).$(CLASS) $(ARGS)
 
 cli:
 	$(MAKE) run CLASS=Test

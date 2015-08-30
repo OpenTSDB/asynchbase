@@ -26,7 +26,7 @@
  */
 package org.hbase.async;
 
-import org.jboss.netty.buffer.ChannelBuffer;
+import io.netty.buffer.ByteBuf;
 
 import org.hbase.async.generated.ClientPB.MutateRequest;
 import org.hbase.async.generated.ClientPB.MutateResponse;
@@ -475,7 +475,7 @@ public final class PutRequest extends BatchableRpc
   }
 
   @Override
-  void serializePayload(final ChannelBuffer buf) {
+  void serializePayload(final ByteBuf buf) {
     for (int i = 0; i < qualifiers.length; i++) {
       KeyValue.serialize(buf, KeyValue.PUT, timestamp, key, family,
                          qualifiers[i], values[i]);
@@ -553,7 +553,7 @@ public final class PutRequest extends BatchableRpc
 
   /** Serializes this request.  */
   @Override
-  ChannelBuffer serialize(final byte server_version) {
+  ByteBuf serialize(final byte server_version) {
     if (server_version < RegionClient.SERVER_VERSION_095_OR_ABOVE) {
       return serializeOld(server_version);
     }
@@ -562,12 +562,12 @@ public final class PutRequest extends BatchableRpc
       .setRegion(region.toProtobuf())
       .setMutation(toMutationProto())
       .build();
-    return toChannelBuffer(MUTATE, req);
+    return toByteBuf(MUTATE, req);
   }
 
   /** Serializes this request for HBase 0.94 and before.  */
-  private ChannelBuffer serializeOld(final byte server_version) {
-    final ChannelBuffer buf = newBuffer(server_version,
+  private ByteBuf serializeOld(final byte server_version) {
+    final ByteBuf buf = newBuffer(server_version,
                                         predictSerializedSize());
     buf.writeInt(2);  // Number of parameters.
 
@@ -581,14 +581,14 @@ public final class PutRequest extends BatchableRpc
   }
 
   @Override
-  Object deserialize(final ChannelBuffer buf, int cell_size) {
+  Object deserialize(final ByteBuf buf, int cell_size) {
     HBaseRpc.ensureNoCell(cell_size);
     final MutateResponse resp = readProtobuf(buf, MutateResponse.PARSER);
     return null;
   }
 
   /** Serialize the raw underlying `Put' into the given buffer.  */
-  void serializeInto(final ChannelBuffer buf) {
+  void serializeInto(final ByteBuf buf) {
     buf.writeByte(CODE); // Code for a `Put' parameter.
     buf.writeByte(CODE); // Code again (see HBASE-2877).
     buf.writeByte(1);    // Put#PUT_VERSION.  Stick to v1 here for now.

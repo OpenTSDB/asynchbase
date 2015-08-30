@@ -26,7 +26,7 @@
  */
 package org.hbase.async;
 
-import org.jboss.netty.buffer.ChannelBuffer;
+import io.netty.buffer.ByteBuf;
 
 import org.hbase.async.generated.ClientPB.MutationProto;
 
@@ -71,7 +71,6 @@ abstract class BatchableRpc extends HBaseRpc
   /**
    * Package private constructor.
    * @param table The name of the table this RPC is for.
-   * @param row The name of the row this RPC is for.
    * @param family The column family to edit in that table.  Subclass must
    * validate, this class doesn't perform any validation on the family.
    * @param timestamp The timestamp to use for {@link KeyValue}s of this RPC.
@@ -168,6 +167,6 @@ abstract class BatchableRpc extends HBaseRpc
   /**
    * Serialize the part of this RPC for a {@link MultiAction}.
    */
-  abstract void serializePayload(final ChannelBuffer buf);
+  abstract void serializePayload(final ByteBuf buf);
 
 }

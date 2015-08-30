@@ -24,26 +24,13 @@
  * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
  * POSSIBILITY OF SUCH DAMAGE.
  */
-package org.hbase.async.test;
+package org.hbase.async;
 
-import java.lang.annotation.ElementType;
-import java.lang.annotation.Retention;
-import java.lang.annotation.RetentionPolicy;
-import java.lang.annotation.Target;
-import java.lang.reflect.Method;
-import java.io.BufferedReader;
-import java.io.File;
-import java.io.InputStream;
-import java.io.InputStreamReader;
-import java.io.OutputStream;
-import java.util.ArrayList;
-import java.util.Collection;
-
-import org.jboss.netty.logging.InternalLoggerFactory;
-import org.jboss.netty.logging.Slf4JLoggerFactory;
-
-import org.slf4j.Logger;
-
+import com.stumbleupon.async.Callback;
+import com.stumbleupon.async.Deferred;
+import com.stumbleupon.async.DeferredGroupException;
+import org.hbase.async.*;
+import org.hbase.async.CompareFilter.CompareOp;
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
@@ -54,44 +41,13 @@ import org.junit.runner.Result;
 import org.junit.runner.notification.Failure;
 import org.junit.runner.notification.RunListener;
 import org.powermock.reflect.Whitebox;
-import static org.junit.Assert.assertArrayEquals;
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertNotNull;
-import static org.junit.Assert.assertNull;
+import org.slf4j.Logger;
 
-import com.stumbleupon.async.Callback;
-import com.stumbleupon.async.Deferred;
-import com.stumbleupon.async.DeferredGroupException;
+import java.io.*;
+import java.util.ArrayList;
+import java.util.Collection;
 
-import org.hbase.async.AtomicIncrementRequest;
-import org.hbase.async.BinaryComparator;
-import org.hbase.async.BinaryPrefixComparator;
-import org.hbase.async.BitComparator;
-import org.hbase.async.Bytes;
-import org.hbase.async.ColumnPrefixFilter;
-import org.hbase.async.ColumnRangeFilter;
-import org.hbase.async.CompareFilter.CompareOp;
-import org.hbase.async.DeleteRequest;
-import org.hbase.async.DependentColumnFilter;
-import org.hbase.async.FamilyFilter;
-import org.hbase.async.FilterList;
-import org.hbase.async.GetRequest;
-import org.hbase.async.HBaseClient;
-import org.hbase.async.KeyRegexpFilter;
-import org.hbase.async.KeyValue;
-import org.hbase.async.NoSuchColumnFamilyException;
-import org.hbase.async.PutRequest;
-import org.hbase.async.QualifierFilter;
-import org.hbase.async.RegexStringComparator;
-import org.hbase.async.RowFilter;
-import org.hbase.async.ScanFilter;
-import org.hbase.async.Scanner;
-import org.hbase.async.SubstringComparator;
-import org.hbase.async.TableNotFoundException;
-import org.hbase.async.TimestampsFilter;
-import org.hbase.async.ValueFilter;
-
-import org.hbase.async.test.Common;
+import static org.junit.Assert.*;
 
 /**
  * Basic integration and regression tests for asynchbase.

@@ -28,6 +28,8 @@ package org.hbase.async;
 
 import java.util.Comparator;
 
+import org.hbase.async.Bytes;
+import org.hbase.async.generated.HBasePB;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import static org.junit.Assert.fail;
