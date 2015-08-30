@@ -33,9 +33,9 @@ import com.google.protobuf.CodedOutputStream;
 import com.google.protobuf.InvalidProtocolBufferException;
 import com.google.protobuf.Parser;
 
-import org.jboss.netty.buffer.ChannelBuffer;
-import org.jboss.netty.buffer.ChannelBuffers;
-import org.jboss.netty.util.CharsetUtil;
+import io.netty.buffer.ByteBuf;
+import io.netty.buffer.Unpooled;
+import io.netty.util.CharsetUtil;
 
 import com.stumbleupon.async.Deferred;
 
@@ -278,8 +278,8 @@ public abstract class HBaseRpc {
   static final byte RPC_ERROR = 0x01;
   /**
    * Indicates that the next byte is an integer with the length of the response.
-   * This can be found on both successful ({@link RPC_SUCCESS}) or failed
-   * ({@link RPC_ERROR}) responses.
+   * This can be found on both successful (RPC_SUCCESS) or failed
+   * (RPC_ERROR) responses.
    * @since HBase 0.92
    */
   static final byte RPC_FRAMED = 0x02;
@@ -303,7 +303,7 @@ public abstract class HBaseRpc {
 
   /**
    * To be implemented by the concrete sub-type.
-   * This method is expected to instantiate a {@link ChannelBuffer} using
+   * This method is expected to instantiate a {@link ByteBuf} using
    * either {@link #newBuffer} and return it
    * properly populated so it's ready to be written out to the wire (except
    * for the "RPC header" that contains the RPC ID and method name and such,
@@ -315,7 +315,7 @@ public abstract class HBaseRpc {
    *
    * @param server_version What RPC protocol version the server is running.
    */
-  abstract ChannelBuffer serialize(byte server_version);
+  abstract ByteBuf serialize(byte server_version);
 
   /**
    * To be implemented by the concrete sub-type.
@@ -330,7 +330,7 @@ public abstract class HBaseRpc {
    * protobuf of the RPC response.  If 0, then there is just the protobuf.
    * The value is guaranteed to be both positive and of a "reasonable" size.
    */
-   abstract Object deserialize(ChannelBuffer buf, int cell_size);
+   abstract Object deserialize(ByteBuf buf, int cell_size);
 
   /**
    * Throws an exception if the argument is non-zero.
@@ -437,7 +437,7 @@ public abstract class HBaseRpc {
   /**
    * Package private constructor for RPCs that are for a region.
    * @param table The name of the table this RPC is for.
-   * @param row The name of the row this RPC is for.
+   * @param key The name of the row this RPC is for.
    */
   HBaseRpc(final byte[] table, final byte[] key) {
     KeyValue.checkTable(table);
@@ -655,7 +655,7 @@ public abstract class HBaseRpc {
    * payload as trying to store more than {@code max_payload_size} bytes in
    * the buffer returned will cause an {@link ArrayIndexOutOfBoundsException}.
    */
-  final ChannelBuffer newBuffer(final byte server_version,
+  final ByteBuf newBuffer(final byte server_version,
                                 final int max_payload_size) {
     // Add extra bytes for the RPC header:
     //   4 bytes: Payload size (always present, even in HBase 0.95+).
@@ -682,19 +682,19 @@ public abstract class HBaseRpc {
     // 1 varint + 4 fields + 5 + 1 + N + 1 + 6 = 18 bytes max + method name.
     // Since for HBase 0.92 we reserve 19 bytes, we're good, we over-allocate
     // at most 1 bytes.  So the logic above doesn't need to change for 0.95+.
-    final ChannelBuffer buf = ChannelBuffers.buffer(header + max_payload_size);
+    final ByteBuf buf = Unpooled.buffer(header + max_payload_size);
     buf.setIndex(0, header);  // Advance the writerIndex past the header.
     return buf;
   }
 
   /**
-   * Serializes the given protobuf object into a Netty {@link ChannelBuffer}.
+   * Serializes the given protobuf object into a Netty {@link ByteBuf}.
    * @param method The name of the method of the RPC we're going to send.
    * @param pb The protobuf to serialize.
    * @return A new channel buffer containing the serialized protobuf, with
    * enough free space at the beginning to tack on the RPC header.
    */
-  static final ChannelBuffer toChannelBuffer(final byte[] method,
+  static final ByteBuf toByteBuf(final byte[] method,
                                              final AbstractMessageLite pb) {
     final int pblen = pb.getSerializedSize();
     final int vlen = CodedOutputStream.computeRawVarint32Size(pblen);
@@ -708,7 +708,7 @@ public abstract class HBaseRpc {
     } catch (IOException e) {
       throw new RuntimeException("Should never happen", e);
     }
-    return ChannelBuffers.wrappedBuffer(buf);
+    return Unpooled.wrappedBuffer(buf);
   }
 
   /**
@@ -716,7 +716,7 @@ public abstract class HBaseRpc {
    * @param buf The buffer to serialize the string to.
    * @param b The boolean value to serialize.
    */
-  static void writeHBaseBool(final ChannelBuffer buf, final boolean b) {
+  static void writeHBaseBool(final ByteBuf buf, final boolean b) {
     buf.writeByte(1);  // Code for Boolean.class in HbaseObjectWritable
     buf.writeByte(b ? 0x01 : 0x00);
   }
@@ -726,7 +726,7 @@ public abstract class HBaseRpc {
    * @param buf The buffer to serialize the string to.
    * @param v The value to serialize.
    */
-  static void writeHBaseInt(final ChannelBuffer buf, final int v) {
+  static void writeHBaseInt(final ByteBuf buf, final int v) {
     buf.writeByte(5);  // Code for Integer.class in HbaseObjectWritable
     buf.writeInt(v);
   }
@@ -736,7 +736,7 @@ public abstract class HBaseRpc {
    * @param buf The buffer to serialize the string to.
    * @param v The value to serialize.
    */
-  static void writeHBaseLong(final ChannelBuffer buf, final long v) {
+  static void writeHBaseLong(final ByteBuf buf, final long v) {
     buf.writeByte(6);  // Code for Long.class in HbaseObjectWritable
     buf.writeLong(v);
   }
@@ -746,7 +746,7 @@ public abstract class HBaseRpc {
    * @param buf The buffer to serialize the string to.
    * @param s The string to serialize.
    */
-  static void writeHBaseString(final ChannelBuffer buf, final String s) {
+  static void writeHBaseString(final ByteBuf buf, final String s) {
     buf.writeByte(10);  // Code for String.class in HbaseObjectWritable
     final byte[] b = s.getBytes(CharsetUtil.UTF_8);
     writeVLong(buf, b.length);
@@ -758,7 +758,7 @@ public abstract class HBaseRpc {
    * @param buf The buffer to serialize the string to.
    * @param b The byte array to serialize.
    */
-  static void writeHBaseByteArray(final ChannelBuffer buf, final byte[] b) {
+  static void writeHBaseByteArray(final ByteBuf buf, final byte[] b) {
     buf.writeByte(11);     // Code for byte[].class in HbaseObjectWritable
     writeByteArray(buf, b);
   }
@@ -768,7 +768,7 @@ public abstract class HBaseRpc {
    * @param buf The buffer to serialize the string to.
    * @param b The byte array to serialize.
    */
-  static void writeByteArray(final ChannelBuffer buf, final byte[] b) {
+  static void writeByteArray(final ByteBuf buf, final byte[] b) {
     writeVLong(buf, b.length);
     buf.writeBytes(b);
   }
@@ -777,7 +777,7 @@ public abstract class HBaseRpc {
    * Serializes a `null' reference.
    * @param buf The buffer to write to.
    */
-  static void writeHBaseNull(final ChannelBuffer buf) {
+  static void writeHBaseNull(final ByteBuf buf) {
     buf.writeByte(14);  // Code type for `Writable'.
     buf.writeByte(17);  // Code type for `NullInstance'.
     buf.writeByte(14);  // Code type for `Writable'.
@@ -802,7 +802,7 @@ public abstract class HBaseRpc {
    * @throws IllegalArgumentException if the length is negative or
    * suspiciously large.
    */
-  static void checkArrayLength(final ChannelBuffer buf, final long length) {
+  static void checkArrayLength(final ByteBuf buf, final long length) {
     // 2 checks in 1.  If any of the high bits are set, we know the value is
     // either too large, or is negative (if the most-significant bit is set).
     if ((length & MAX_BYTE_ARRAY_MASK) != 0) {
@@ -846,7 +846,7 @@ public abstract class HBaseRpc {
    * @throws IllegalArgumentException if the length is zero, negative or
    * suspiciously large.
    */
-  static void checkNonEmptyArrayLength(final ChannelBuffer buf,
+  static void checkNonEmptyArrayLength(final ByteBuf buf,
                                        final long length) {
     if (length == 0) {
       throw new IllegalArgumentException("Read zero-length byte array "
@@ -862,7 +862,7 @@ public abstract class HBaseRpc {
    * @throws IllegalArgumentException if the length we read for the byte array
    * is out of reasonable bounds.
    */
-  static byte[] readByteArray(final ChannelBuffer buf) {
+  static byte[] readByteArray(final ByteBuf buf) {
     final long length = readVLong(buf);
     checkArrayLength(buf, length);
     final byte[] b = new byte[(int) length];
@@ -875,7 +875,7 @@ public abstract class HBaseRpc {
    * @throws IllegalArgumentException if the length we read for the string
    * is out of reasonable bounds.
    */
-  static String readHadoopString(final ChannelBuffer buf) {
+  static String readHadoopString(final ByteBuf buf) {
     final int length = buf.readInt();
     checkArrayLength(buf, length);
     final byte[] s = new byte[length];
@@ -893,7 +893,7 @@ public abstract class HBaseRpc {
    * @throws InvalidResponseException if the buffer contained an invalid
    * protobuf that couldn't be de-serialized.
    */
-  static <T> T readProtobuf(final ChannelBuffer buf, final Parser<T> parser) {
+  static <T> T readProtobuf(final ByteBuf buf, final Parser<T> parser) {
     final int length = HBaseRpc.readProtoBufVarint(buf);
     HBaseRpc.checkArrayLength(buf, length);
     final byte[] payload;
@@ -987,7 +987,7 @@ public abstract class HBaseRpc {
    *
    * However, since we use Netty, we don't have to deal with the stupid Java
    * I/O library, so unlike Hadoop we don't use DataOutputStream and
-   * ByteArrayOutputStream, instead we use ChannelBuffer.  This gives us a
+   * ByteArrayOutputStream, instead we use ByteBuf.  This gives us a
    * significant extra performance boost over Hadoop.  The 14%-60% difference
    * above becomes a 70% to 80% difference!  Yes, that's >4 times faster!  With
    * the code below my MacBook Pro with a 2.66 GHz Intel Core 2 Duo easily
@@ -1006,7 +1006,7 @@ public abstract class HBaseRpc {
    * @param n The value to write.
    */
   @SuppressWarnings("fallthrough")
-  static void writeVLong(final ChannelBuffer buf, long n) {
+  static void writeVLong(final ByteBuf buf, long n) {
     // All those values can be encoded on 1 byte.
     if (n >= -112 && n <= 127) {
       buf.writeByte((byte) n);
@@ -1074,7 +1074,7 @@ public abstract class HBaseRpc {
    * @return The value read.
    */
   @SuppressWarnings("fallthrough")
-  static long readVLong(final ChannelBuffer buf) {
+  static long readVLong(final ByteBuf buf) {
     byte b = buf.readByte();
     // Unless the first half of the first byte starts with 0xb1000, we're
     // dealing with a single-byte value.
@@ -1126,7 +1126,7 @@ public abstract class HBaseRpc {
    * @param buf The buffer to read from.
    * @return The integer read.
    */
-  static int readProtoBufVarint(final ChannelBuffer buf) {
+  static int readProtoBufVarint(final ByteBuf buf) {
     int result = buf.readByte();
     if (result >= 0) {
       return result;

@@ -26,7 +26,7 @@
  */
 package org.hbase.async;
 
-import org.jboss.netty.buffer.ChannelBuffer;
+import io.netty.buffer.ByteBuf;
 
 import org.hbase.async.generated.ComparatorPB;
 import org.hbase.async.generated.FilterPB;
@@ -156,7 +156,7 @@ public final class DependentColumnFilter extends CompareFilter {
   }
 
   @Override
-  void serializeOld(ChannelBuffer buf) {
+  void serializeOld(ByteBuf buf) {
     super.serializeOld(buf);                            // super.predictSerializedSize
     HBaseRpc.writeByteArray(buf, family);               // 3 + family.length
     HBaseRpc.writeByteArray(buf, qualifier);            // 3 + qualifier.length
@@ -195,7 +195,7 @@ public final class DependentColumnFilter extends CompareFilter {
     }
 
     @Override
-    void serializeOld(ChannelBuffer buf) {
+    void serializeOld(ByteBuf buf) {
       // It's unclear why the order is different here, but it is.
       buf.writeByte(14);    // Writable class code        // 1
       buf.writeByte(17);    // NullInstance class code    // 1
