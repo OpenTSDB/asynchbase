@@ -26,30 +26,25 @@
  */
 package org.hbase.async.auth;
 
+import io.netty.util.HashedWheelTimer;
+import org.apache.zookeeper.server.auth.KerberosName;
+import org.hbase.async.HBaseClient;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import javax.security.auth.Subject;
+import javax.security.auth.callback.*;
+import javax.security.auth.login.LoginException;
+import javax.security.sasl.AuthorizeCallback;
+import javax.security.sasl.RealmCallback;
+import javax.security.sasl.Sasl;
+import javax.security.sasl.SaslClient;
 import java.net.InetAddress;
 import java.net.UnknownHostException;
 import java.security.Principal;
 import java.security.PrivilegedExceptionAction;
 import java.util.Map;
 import java.util.Set;
-
-import javax.security.auth.Subject;
-import javax.security.auth.callback.Callback;
-import javax.security.auth.callback.CallbackHandler;
-import javax.security.auth.callback.NameCallback;
-import javax.security.auth.callback.PasswordCallback;
-import javax.security.auth.callback.UnsupportedCallbackException;
-import javax.security.auth.login.LoginException;
-import javax.security.sasl.AuthorizeCallback;
-import javax.security.sasl.RealmCallback;
-import javax.security.sasl.Sasl;
-import javax.security.sasl.SaslClient;
-
-import org.apache.zookeeper.server.auth.KerberosName;
-import org.hbase.async.HBaseClient;
-import org.jboss.netty.util.HashedWheelTimer;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 /**
  * Handles Kerberos based authentication using the Java Authentication and
@@ -192,7 +187,7 @@ public class KerberosClientAuthProvider extends ClientAuthProvider {
   static class ClientCallbackHandler implements CallbackHandler {
     private String password;
 
-    /** @param the password to use for auth */
+    /** @param password the password to use for auth */
     public ClientCallbackHandler(final String password) {
       this.password = password;
     }

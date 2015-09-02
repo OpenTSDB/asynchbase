@@ -27,10 +27,10 @@
 package org.hbase.async;
 
 import com.google.protobuf.ByteString;
+import io.netty.buffer.ByteBuf;
 import org.hbase.async.HBaseRpc;
 import org.hbase.async.generated.FilterPB;
 import org.hbase.async.generated.HBasePB;
-import org.jboss.netty.buffer.ChannelBuffer;
 
 import java.lang.IllegalArgumentException;
 import java.util.Collection;
@@ -154,7 +154,7 @@ public final class FuzzyRowFilter extends ScanFilter {
   }
 
   @Override
-  void serializeOld(ChannelBuffer buf) {
+  void serializeOld(ByteBuf buf) {
     buf.writeByte((byte) NAME.length);   //  1
     buf.writeBytes(NAME);                // 45
     buf.writeInt(filter_pairs.size());   //  4

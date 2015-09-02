@@ -26,7 +26,7 @@
  */
 package org.hbase.async;
 
-import org.jboss.netty.buffer.ChannelBuffer;
+import io.netty.buffer.ByteBuf;
 
 /**
  * Abstract base class for {@link org.hbase.async.Scanner} filters.
@@ -71,7 +71,7 @@ public abstract class ScanFilter {
    * This method is only used with HBase 0.94 and before.
    * @param buf The RPC channel buffer to which the byte array is serialized
    */
-  abstract void serializeOld(ChannelBuffer buf);
+  abstract void serializeOld(ByteBuf buf);
 
   /**
    * returns the number of bytes that it will write to the RPC channel buffer when {@code serialize}

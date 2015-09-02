@@ -26,21 +26,11 @@
  */
 package org.hbase.async;
 
+import org.junit.Ignore;
+import org.slf4j.Logger;
+
 import java.util.ArrayList;
 import java.util.HashMap;
-
-import org.hbase.async.AtomicIncrementRequest;
-import org.hbase.async.DeleteRequest;
-import org.hbase.async.GetRequest;
-import org.hbase.async.HBaseClient;
-import org.hbase.async.KeyValue;
-import org.hbase.async.PutRequest;
-import org.hbase.async.RowLock;
-import org.hbase.async.RowLockRequest;
-import org.hbase.async.Scanner;
-import org.slf4j.Logger;
-import org.hbase.async.Common;
-import org.junit.Ignore;
 
 /**
  * Simple command-line interface to quickly test async HBase.

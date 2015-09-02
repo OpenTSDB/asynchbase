@@ -28,7 +28,7 @@ package org.hbase.async;
 
 import com.google.protobuf.ByteString;
 
-import org.jboss.netty.buffer.ChannelBuffer;
+import io.netty.buffer.ByteBuf;
 
 import org.hbase.async.generated.ClientPB.Condition;
 import org.hbase.async.generated.ClientPB.MutateRequest;
@@ -69,7 +69,7 @@ final class CompareAndSetRequest extends HBaseRpc
   /**
    * Constructor.
    * @param put Put request to execute if value matches.
-   * @param value The expected value to compare against.
+   * @param expected The expected value to compare against.
    * <strong>This byte array will NOT be copied.</strong>
    */
   public CompareAndSetRequest(final PutRequest put,
@@ -159,7 +159,7 @@ final class CompareAndSetRequest extends HBaseRpc
   }
 
   @Override
-  ChannelBuffer serialize(byte server_version) {
+  ByteBuf serialize(byte server_version) {
     if (server_version < RegionClient.SERVER_VERSION_095_OR_ABOVE) {
       return serializeOld(server_version);
     }
@@ -210,12 +210,12 @@ final class CompareAndSetRequest extends HBaseRpc
       .setMutation(put.build())
       .setCondition(cond)
       .build();
-    return toChannelBuffer(MUTATE, req);
+    return toByteBuf(MUTATE, req);
   }
 
   /** Serializes this request for HBase 0.94 and before.  */
-  private ChannelBuffer serializeOld(final byte server_version) {
-    final ChannelBuffer buf = newBuffer(server_version, predictSerializedSize());
+  private ByteBuf serializeOld(final byte server_version) {
+    final ByteBuf buf = newBuffer(server_version, predictSerializedSize());
     buf.writeInt(6);  // Number of parameters.
 
     // 1st param: byte array: region name.
@@ -240,7 +240,7 @@ final class CompareAndSetRequest extends HBaseRpc
   }
 
   @Override
-  Boolean deserialize(final ChannelBuffer buf, final int cell_size) {
+  Boolean deserialize(final ByteBuf buf, final int cell_size) {
     HBaseRpc.ensureNoCell(cell_size);
     final MutateResponse resp = readProtobuf(buf, MutateResponse.PARSER);
     if (!resp.hasProcessed()) {

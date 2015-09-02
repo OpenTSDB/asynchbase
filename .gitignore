@@ -1,4 +1,7 @@
 build/
 pom.xml
 target/
+.idea/
 /bin/
+.classpath
+.project

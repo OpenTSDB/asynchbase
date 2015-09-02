@@ -7,15 +7,20 @@ import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 import static org.mockito.Matchers.any;
+import static org.mockito.Matchers.anyInt;
+import static org.mockito.Matchers.anyString;
 import static org.mockito.Mockito.when;
+import static org.powermock.api.mockito.PowerMockito.mock;
 
 import java.util.ArrayList;
 
+import io.netty.bootstrap.Bootstrap;
 import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.mockito.invocation.InvocationOnMock;
 import org.mockito.stubbing.Answer;
+import org.powermock.api.mockito.PowerMockito;
 import org.powermock.core.classloader.annotations.PowerMockIgnore;
 import org.powermock.core.classloader.annotations.PrepareForTest;
 import org.powermock.modules.junit4.PowerMockRunner;
@@ -30,7 +35,7 @@ import com.stumbleupon.async.Deferred;
              "ch.qos.*", "org.slf4j.*",
              "com.sum.*", "org.xml.*"})
 @PrepareForTest({ HBaseClient.class, RegionClient.class, RegionInfo.class, 
-HBaseRpc.class, RegionClientStats.class })
+HBaseRpc.class, RegionClientStats.class, Bootstrap.class })
 public class TestHBaseClientLocateRegion extends BaseTestHBaseClient {
   private Deferred<Object> root_deferred;
   private GetRequest get;
@@ -173,11 +178,12 @@ public class TestHBaseClientLocateRegion extends BaseTestHBaseClient {
         .thenReturn(Deferred.<ArrayList<KeyValue>>fromError(
             new RegionOfflineException(EMPTY_ARRAY)))
         .thenReturn(Deferred.<ArrayList<KeyValue>>fromError(
-            new RegionOfflineException(EMPTY_ARRAY)))
+                new RegionOfflineException(EMPTY_ARRAY)))
         .thenReturn(Deferred.<ArrayList<KeyValue>>fromResult(metaRow()));
 
-    final Deferred<Object> obj = Whitebox.invokeMethod(client, "locateRegion", 
+    final Deferred<Object> obj = Whitebox.invokeMethod(client, "locateRegion",
         get, HBaseClient.META, EMPTY_ARRAY);
+
     assertTrue(root_deferred != obj);
     assertCounters(4, 0, 0);
     assertEquals(3, client2regions.size());

@@ -26,40 +26,15 @@
  */
 package org.hbase.async;
 
-import java.lang.reflect.Method;
-import java.util.ArrayList;
-import java.util.Map;
-import java.util.concurrent.ConcurrentSkipListMap;
-
-import org.jboss.netty.util.HashedWheelTimer;
-import org.jboss.netty.util.TimerTask;
-
 import com.stumbleupon.async.Deferred;
-
+import io.netty.util.HashedWheelTimer;
+import io.netty.util.TimerTask;
 import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
-
-import static org.junit.Assert.assertArrayEquals;
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertNotNull;
-import static org.junit.Assert.assertSame;
-
 import org.mockito.ArgumentMatcher;
 import org.mockito.invocation.InvocationOnMock;
 import org.mockito.stubbing.Answer;
-
-import static org.mockito.Matchers.any;
-import static org.mockito.Matchers.argThat;
-import static org.mockito.Matchers.eq;
-import static org.mockito.Mockito.any;
-import static org.mockito.Mockito.doAnswer;
-import static org.mockito.Mockito.never;
-import static org.mockito.Mockito.times;
-import static org.mockito.Mockito.verify;
-import static org.mockito.Mockito.when;
-import static org.junit.Assert.assertTrue;
-
 import org.powermock.api.mockito.PowerMockito;
 import org.powermock.api.support.membermodification.MemberMatcher;
 import org.powermock.api.support.membermodification.MemberModifier;
@@ -68,6 +43,16 @@ import org.powermock.core.classloader.annotations.PrepareForTest;
 import org.powermock.modules.junit4.PowerMockRunner;
 import org.powermock.reflect.Whitebox;
 
+import java.lang.reflect.Method;
+import java.util.ArrayList;
+import java.util.Map;
+import java.util.concurrent.ConcurrentSkipListMap;
+
+import static org.junit.Assert.*;
+import static org.mockito.Matchers.any;
+import static org.mockito.Matchers.argThat;
+import static org.mockito.Matchers.eq;
+import static org.mockito.Mockito.*;
 import static org.powermock.api.mockito.PowerMockito.mock;
 import static org.powermock.api.mockito.PowerMockito.verifyPrivate;
 
@@ -373,6 +358,8 @@ final class TestNSREs extends BaseTestHBaseClient {
     assertSame(row, mainRpcDeferred.joinUninterruptibly());
     // Number of times this RPC is sent to regionServer
     verify(regionclient, times(1)).sendRpc(mainGet);
+
+    taskTimer.stop();
   }
 
   @Test
@@ -548,6 +535,8 @@ final class TestNSREs extends BaseTestHBaseClient {
       //  + 1 after the NSRE is cleared
       verify(regionclient, times(1)).sendRpc(dummyGet[i]);
     }
+
+    taskTimer.stop();
   }
 
   @Test
@@ -604,6 +593,8 @@ final class TestNSREs extends BaseTestHBaseClient {
     final ConcurrentSkipListMap<byte[], ArrayList<HBaseRpc>> got_nsre = 
         Whitebox.getInternalState(client, "got_nsre");
     assertEquals(0, got_nsre.size());
+
+    timer.stop();
   }
   
   @Test
@@ -647,6 +638,8 @@ final class TestNSREs extends BaseTestHBaseClient {
     final ConcurrentSkipListMap<byte[], ArrayList<HBaseRpc>> got_nsre = 
         Whitebox.getInternalState(client, "got_nsre");
     assertEquals(0, got_nsre.size());
+
+    timer.stop();
   }
   
   @Test
@@ -707,6 +700,8 @@ final class TestNSREs extends BaseTestHBaseClient {
     final ConcurrentSkipListMap<byte[], ArrayList<HBaseRpc>> got_nsre = 
         Whitebox.getInternalState(client, "got_nsre");
     assertEquals(0, got_nsre.size());
+
+    timer.stop();
   }
   
   @Test (expected = NullPointerException.class)
@@ -725,7 +720,7 @@ final class TestNSREs extends BaseTestHBaseClient {
   // apparently this is OK so just perform a basic validation
   @Test
   public void handleNSRENullException() throws Exception {
-    setupMultiNSRE(1, 1, false);
+    final FakeTimer timer = setupMultiNSRE(1, 1, false);
     final GetRequest get = new GetRequest(TABLE, KEY);
     client.handleNSRE(get, region.name(), null);
     
@@ -737,6 +732,8 @@ final class TestNSREs extends BaseTestHBaseClient {
     final ConcurrentSkipListMap<byte[], ArrayList<HBaseRpc>> got_nsre = 
         Whitebox.getInternalState(client, "got_nsre");
     assertEquals(0, got_nsre.size());
+
+    timer.stop();
   }
   
   @Test

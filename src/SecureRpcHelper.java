@@ -26,6 +26,20 @@
  */
 package org.hbase.async;
 
+import io.netty.buffer.ByteBuf;
+import io.netty.buffer.ByteBufAllocator;
+import io.netty.channel.Channel;
+import io.netty.util.ReferenceCountUtil;
+import org.hbase.async.auth.ClientAuthProvider;
+import org.hbase.async.auth.KerberosClientAuthProvider;
+import org.hbase.async.auth.SimpleClientAuthProvider;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import javax.security.auth.Subject;
+import javax.security.sasl.Sasl;
+import javax.security.sasl.SaslClient;
+import javax.security.sasl.SaslException;
 import java.lang.reflect.Constructor;
 import java.net.InetSocketAddress;
 import java.net.SocketAddress;
@@ -33,21 +47,6 @@ import java.security.PrivilegedActionException;
 import java.security.PrivilegedExceptionAction;
 import java.util.HashMap;
 import java.util.Map;
-
-import javax.security.auth.Subject;
-import javax.security.sasl.Sasl;
-import javax.security.sasl.SaslClient;
-import javax.security.sasl.SaslException;
-
-import org.hbase.async.auth.ClientAuthProvider;
-import org.hbase.async.auth.KerberosClientAuthProvider;
-import org.hbase.async.auth.SimpleClientAuthProvider;
-import org.hbase.async.SecureRpcHelper;
-import org.jboss.netty.buffer.ChannelBuffer;
-import org.jboss.netty.buffer.ChannelBuffers;
-import org.jboss.netty.channel.Channel;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 /**
  * This base class provides the logic needed to interface with SASL supported 
@@ -197,15 +196,17 @@ public abstract class SecureRpcHelper {
    * @throws IllegalStateException if the sasl client was unable to unwrap
    * the payload
    */
-  public ChannelBuffer unwrap(final ChannelBuffer payload) {
+  public ByteBuf unwrap(final ByteBuf payload) {
     if (!use_wrap) {
       return payload;
     }
 
     final int len = payload.readInt();
     try {
-      final ChannelBuffer unwrapped = ChannelBuffers.wrappedBuffer(
-              sasl_client.unwrap(payload.readBytes(len).array(), 0, len));
+      byte[] unwrappedBytes = sasl_client.unwrap(payload.readBytes(len).array(), 0, len);
+      // use heap as this byte buf is not for IO
+      final ByteBuf unwrapped = ByteBufAllocator.DEFAULT.heapBuffer(unwrappedBytes.length);
+      unwrapped.writeBytes(unwrappedBytes);
       // If encryption was enabled, it's a good bet that you shouldn't log it
       //if (LOG.isDebugEnabled()) {
       //  LOG.debug("Unwrapped payload: " + Bytes.pretty(unwrapped));
@@ -225,7 +226,7 @@ public abstract class SecureRpcHelper {
    * @throws IllegalStateException if the sasl client was unable to wrap
    * the payload
    */
-  public ChannelBuffer wrap(final ChannelBuffer content) {
+  public ByteBuf wrap(final ByteBuf content) {
     if (!use_wrap) {
       return content;
     }
@@ -233,10 +234,11 @@ public abstract class SecureRpcHelper {
     try {
       final byte[] payload = new byte[content.writerIndex()];
       content.readBytes(payload);
+      // we must release the content as we will return a different ByteBuf
+      ReferenceCountUtil.release(content);
+
       final byte[] wrapped = sasl_client.wrap(payload, 0, payload.length);
-      final ChannelBuffer ret = ChannelBuffers.wrappedBuffer(
-          new byte[4 + wrapped.length]);
-      ret.clear();
+      final ByteBuf ret = ByteBufAllocator.DEFAULT.ioBuffer(4 + wrapped.length);
       ret.writeInt(wrapped.length);
       ret.writeBytes(wrapped);
       //if (LOG.isDebugEnabled()) {
@@ -266,7 +268,7 @@ public abstract class SecureRpcHelper {
    * @return The possibly unwrapped channel buffer for further decoding. If null
    * then the response was security related.
    */
-  public abstract ChannelBuffer handleResponse(final ChannelBuffer buf, 
+  public abstract ByteBuf handleResponse(final ByteBuf buf,
       final Channel chan);
 
   /**

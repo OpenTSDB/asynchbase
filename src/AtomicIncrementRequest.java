@@ -28,7 +28,7 @@ package org.hbase.async;
 
 import java.util.ArrayList;
 
-import org.jboss.netty.buffer.ChannelBuffer;
+import io.netty.buffer.ByteBuf;
 
 import org.hbase.async.generated.ClientPB.MutateRequest;
 import org.hbase.async.generated.ClientPB.MutateResponse;
@@ -219,7 +219,7 @@ public final class AtomicIncrementRequest extends HBaseRpc
   }
 
   /** Serializes this request.  */
-  ChannelBuffer serialize(final byte server_version) {
+  ByteBuf serialize(final byte server_version) {
     if (server_version < RegionClient.SERVER_VERSION_095_OR_ABOVE) {
       return serializeOld(server_version);
     }
@@ -244,12 +244,12 @@ public final class AtomicIncrementRequest extends HBaseRpc
       .setRegion(region.toProtobuf())
       .setMutation(incr.build())
       .build();
-    return toChannelBuffer(MUTATE, req);
+    return toByteBuf(MUTATE, req);
   }
 
   /** Serializes this request for HBase 0.94 and before.  */
-  private ChannelBuffer serializeOld(final byte server_version) {
-    final ChannelBuffer buf = newBuffer(server_version,
+  private ByteBuf serializeOld(final byte server_version) {
+    final ByteBuf buf = newBuffer(server_version,
                                         predictSerializedSize());
     buf.writeInt(6);  // Number of parameters.
 
@@ -264,7 +264,7 @@ public final class AtomicIncrementRequest extends HBaseRpc
   }
 
   @Override
-  Object deserialize(final ChannelBuffer buf, int cell_size) {
+  Object deserialize(final ByteBuf buf, int cell_size) {
     final MutateResponse resp = readProtobuf(buf, MutateResponse.PARSER);
     // An increment must always produce a result, so we shouldn't need to
     // check whether the `result' field is set here.

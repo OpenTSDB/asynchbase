@@ -26,19 +26,17 @@
  */
 package org.hbase.async;
 
-import java.util.Comparator;
-import java.util.Arrays;
-
-import com.google.protobuf.InvalidProtocolBufferException;
 import com.google.protobuf.ByteString;
-
-import org.jboss.netty.buffer.ChannelBuffer;
-import org.jboss.netty.buffer.ChannelBuffers;
-
+import com.google.protobuf.InvalidProtocolBufferException;
+import io.netty.buffer.ByteBuf;
+import io.netty.buffer.Unpooled;
+import org.hbase.async.generated.HBasePB;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import org.hbase.async.generated.HBasePB;
+import java.util.Arrays;
+import java.util.Comparator;
+
 import static org.hbase.async.HBaseClient.EMPTY_ARRAY;
 
 /**
@@ -130,7 +128,9 @@ final class RegionInfo implements Comparable<RegionInfo> {
    */
   private static RegionInfo
   deserializeOldRegionInfo(final KeyValue kv, final byte[][] out_start_key) {
-    final ChannelBuffer buf = ChannelBuffers.wrappedBuffer(kv.value());
+
+    // as the bytes are already allocated and this ByteBuf is not for IO, so we use Unpooled wrapper
+    ByteBuf buf = Unpooled.wrappedBuffer(kv.value());
     buf.readByte(); // Skip the version.
     // version 1 was introduced in HBase 0.92 (see HBASE-451).
     // The differences between v0 and v1 are irrelevant to us,
@@ -319,7 +319,7 @@ final class RegionInfo implements Comparable<RegionInfo> {
 
   /**
    * Comparator for region names.
-   * We can't just use {@link Bytes.MEMCMP} because it doesn't play nicely
+   * We can't just use Bytes.MEMCMP because it doesn't play nicely
    * with the way META keys are built as the first region has an empty start
    * key.  Let's assume we know about those 2 regions in our cache:
    * <pre>

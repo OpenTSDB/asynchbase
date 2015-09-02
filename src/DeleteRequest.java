@@ -26,7 +26,7 @@
  */
 package org.hbase.async;
 
-import org.jboss.netty.buffer.ChannelBuffer;
+import io.netty.buffer.ByteBuf;
 
 import org.hbase.async.generated.ClientPB.MutateRequest;
 import org.hbase.async.generated.ClientPB.MutateResponse;
@@ -488,7 +488,7 @@ public final class DeleteRequest extends BatchableRpc
   }
 
   @Override
-  void serializePayload(final ChannelBuffer buf) {
+  void serializePayload(final ByteBuf buf) {
     if (family == null) {
       return;  // No payload when deleting whole rows.
     }
@@ -598,7 +598,7 @@ public final class DeleteRequest extends BatchableRpc
   }
 
   /** Serializes this request.  */
-  ChannelBuffer serialize(final byte server_version) {
+  ByteBuf serialize(final byte server_version) {
     if (server_version < RegionClient.SERVER_VERSION_095_OR_ABOVE) {
       return serializeOld(server_version);
     }
@@ -607,12 +607,12 @@ public final class DeleteRequest extends BatchableRpc
       .setRegion(region.toProtobuf())
       .setMutation(toMutationProto())
       .build();
-    return toChannelBuffer(MUTATE, req);
+    return toByteBuf(MUTATE, req);
   }
 
   /** Serializes this request for HBase 0.94 and before.  */
-  private ChannelBuffer serializeOld(final byte server_version) {
-    final ChannelBuffer buf = newBuffer(server_version,
+  private ByteBuf serializeOld(final byte server_version) {
+    final ByteBuf buf = newBuffer(server_version,
                                         predictSerializedSize());
     buf.writeInt(2);  // Number of parameters.
 
@@ -642,7 +642,7 @@ public final class DeleteRequest extends BatchableRpc
   }
 
   @Override
-  Object deserialize(final ChannelBuffer buf, int cell_size) {
+  Object deserialize(final ByteBuf buf, int cell_size) {
     HBaseRpc.ensureNoCell(cell_size);
     final MutateResponse resp = readProtobuf(buf, MutateResponse.PARSER);
     return null;

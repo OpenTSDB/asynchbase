@@ -39,8 +39,8 @@ import java.util.TreeMap;
 import com.google.protobuf.ByteString;
 import com.google.protobuf.ZeroCopyLiteralByteString;
 
-import org.jboss.netty.buffer.ChannelBuffer;
-import org.jboss.netty.util.CharsetUtil;
+import io.netty.buffer.ByteBuf;
+import io.netty.util.CharsetUtil;
 
 /**
  * Helper functions to manipulate byte arrays.
@@ -429,11 +429,11 @@ public final class Bytes {
   // Ugly stuff
   // ----------
   // Background: when using ReplayingDecoder (which makes it easy to deal with
-  // unframed RPC responses), the ChannelBuffer we manipulate is in fact a
-  // ReplayingDecoderBuffer, a package-private class that Netty uses.  This
+  // unframed RPC responses), the ByteBuf we manipulate is in fact a
+  // ReplayingDecoderByteBuf, a package-private class that Netty uses.  This
   // class, for some reason, throws UnsupportedOperationException on its
   // array() method.  This method is unfortunately the only way to easily dump
-  // the contents of a ChannelBuffer, which is useful for debugging or logging
+  // the contents of a ByteBuf, which is useful for debugging or logging
   // unexpected buffers.  An issue (NETTY-346) has been filed to get access to
   // the buffer, but the resolution was useless: instead of making the array()
   // method work, a new internalBuffer() method was added on ReplayingDecoder,
@@ -445,16 +445,15 @@ public final class Bytes {
   // a different hack.  Yes this is horrible, but it's for the greater good as
   // this is what allows us to debug unexpected buffers when deserializing RPCs
   // and what's more important than being able to debug unexpected stuff?
-  private static final Class<?> ReplayingDecoderBuffer;
+  private static final Class<?> ReplayingDecoderByteBuf;
   private static final Field RDB_buffer;  // For Netty 3.5.0 and before.
   private static final Method RDB_buf;    // For Netty 3.5.1 and above.
   static {
     try {
-      ReplayingDecoderBuffer = Class.forName("org.jboss.netty.handler.codec."
-                                             + "replay.ReplayingDecoderBuffer");
+      ReplayingDecoderByteBuf = Class.forName("io.netty.handler.codec.ReplayingDecoderByteBuf");
       Field field = null;
       try {
-        field = ReplayingDecoderBuffer.getDeclaredField("buffer");
+        field = ReplayingDecoderByteBuf.getDeclaredField("buffer");
         field.setAccessible(true);
       } catch (NoSuchFieldException e) {
         // Ignore.  Field has been removed in Netty 3.5.1.
@@ -463,7 +462,7 @@ public final class Bytes {
       if (field != null) {  // Netty 3.5.0 or before.
         RDB_buf = null;
       } else {
-        RDB_buf = ReplayingDecoderBuffer.getDeclaredMethod("buf");
+        RDB_buf = ReplayingDecoderByteBuf.getDeclaredMethod("buf");
         RDB_buf.setAccessible(true);
       }
     } catch (Exception e) {
@@ -476,18 +475,18 @@ public final class Bytes {
    * @param buf The (possibly {@code null}) buffer to pretty-print.
    * @return The buffer in a pretty-printed string.
    */
-  public static String pretty(final ChannelBuffer buf) {
+  public static String pretty(final ByteBuf buf) {
     if (buf == null) {
       return "null";
     }
     byte[] array;
     try {
-      if (buf.getClass() != ReplayingDecoderBuffer) {
+      if (buf.getClass() != ReplayingDecoderByteBuf) {
         array = buf.array();
       } else if (RDB_buf != null) {  // Netty 3.5.1 and above.
-        array = ((ChannelBuffer) RDB_buf.invoke(buf)).array();
+        array = ((ByteBuf) RDB_buf.invoke(buf)).array();
       } else {  // Netty 3.5.0 and before.
-        final ChannelBuffer wrapped_buf = (ChannelBuffer) RDB_buffer.get(buf);
+        final ByteBuf wrapped_buf = (ByteBuf) RDB_buffer.get(buf);
         array = wrapped_buf.array();
       }
     } catch (UnsupportedOperationException e) {

@@ -26,9 +26,7 @@
  */
 package org.hbase.async;
 
-import java.lang.UnsupportedOperationException;
-
-import org.jboss.netty.buffer.ChannelBuffer;
+import io.netty.buffer.ByteBuf;
 import org.hbase.async.generated.FilterPB;
 
 /**
@@ -110,7 +108,7 @@ public final class ColumnPaginationFilter extends ScanFilter {
   }
 
   @Override
-  void serializeOld(final ChannelBuffer buf) {
+  void serializeOld(final ByteBuf buf) {
     buf.writeByte((byte) NAME.length);     // 1
     buf.writeBytes(NAME);                  // 53
     buf.writeInt(limit);                  // 4

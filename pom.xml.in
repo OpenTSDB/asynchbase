@@ -182,8 +182,8 @@
     </dependency>
 
     <dependency>
-      <groupId>io.netty</groupId>
-      <artifactId>netty</artifactId>
+    	<groupId>io.netty</groupId>
+    	<artifactId>netty-all</artifactId>
       <version>@NETTY_VERSION@</version>
     </dependency>
 
@@ -230,6 +230,12 @@
       <artifactId>log4j-over-slf4j</artifactId>
       <version>@LOG4J_OVER_SLF4J_VERSION@</version>
       <scope>runtime</scope>
+    </dependency>
+
+    <dependency>
+      <groupId>ch.qos.logback</groupId>
+      <artifactId>logback-classic</artifactId>
+      <version>1.0.13</version>
     </dependency>
 
     <!-- test dependencies -->

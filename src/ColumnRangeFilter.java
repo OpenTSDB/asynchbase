@@ -26,7 +26,7 @@
  */
 package org.hbase.async;
 
-import org.jboss.netty.buffer.ChannelBuffer;
+import io.netty.buffer.ByteBuf;
 
 import org.hbase.async.generated.FilterPB;
 
@@ -128,7 +128,7 @@ public final class ColumnRangeFilter extends ScanFilter {
   }
 
   @Override
-  void serializeOld(final ChannelBuffer buf) {
+  void serializeOld(final ByteBuf buf) {
     buf.writeByte((byte) NAME.length);             // 1
     buf.writeBytes(NAME);                          // 48
 

@@ -26,33 +26,28 @@
  */
 package org.hbase.async;
 
-import static org.junit.Assert.assertArrayEquals;
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertNull;
-import static org.junit.Assert.assertTrue;
-import static org.mockito.Matchers.any;
-import static org.mockito.Matchers.anyInt;
-import static org.mockito.Mockito.when;
-
-import java.security.PrivilegedActionException;
-import java.security.PrivilegedExceptionAction;
-
-import javax.security.auth.Subject;
-import javax.security.sasl.SaslException;
-
+import io.netty.buffer.ByteBuf;
+import io.netty.buffer.Unpooled;
 import org.hbase.async.auth.KerberosClientAuthProvider;
 import org.hbase.async.auth.MockProvider;
 import org.hbase.async.auth.SimpleClientAuthProvider;
-import org.jboss.netty.buffer.ChannelBuffer;
-import org.jboss.netty.buffer.ChannelBuffers;
 import org.junit.Test;
 import org.mockito.invocation.InvocationOnMock;
 import org.mockito.stubbing.Answer;
 import org.powermock.api.mockito.PowerMockito;
 
+import javax.security.auth.Subject;
+import javax.security.sasl.SaslException;
+import java.security.PrivilegedActionException;
+import java.security.PrivilegedExceptionAction;
+
+import static org.junit.Assert.*;
+import static org.mockito.Matchers.any;
+import static org.mockito.Matchers.anyInt;
+import static org.mockito.Mockito.when;
+
 public class TestSecureRpcHelper extends BaseTestSecureRpcHelper {
-  
+
   @Test (expected = IllegalArgumentException.class)
   public void ctorNoConfigs() throws Exception {
     // we assume "simple" by default but haven't set a username
@@ -139,25 +134,25 @@ public class TestSecureRpcHelper extends BaseTestSecureRpcHelper {
   @Test
   public void unwrap() throws Exception {
     setupUnwrap();
-    final ChannelBuffer buf = ChannelBuffers.wrappedBuffer(wrapped_payload);
+    final ByteBuf buf = Unpooled.wrappedBuffer(wrapped_payload);
     config.overrideConfig(SecureRpcHelper.SECURITY_AUTHENTICATION_KEY, 
         "kerberos");
     config.overrideConfig(SecureRpcHelper.RPC_QOP_KEY, "Integrity");
     final UTHelper helper = new UTHelper(client, region_client, remote_endpoint);
-    final ChannelBuffer unwrapped = helper.unwrap(buf);
-    assertArrayEquals(unwrapped.array(), unwrapped_payload);
+    final ByteBuf unwrapped = helper.unwrap(buf);
+    assertArrayEquals(toArray(unwrapped), unwrapped_payload);
     assertFalse(unwrapped == buf);
   }
   
   @Test
   public void unwrapNotWrapped() throws Exception {
     setupUnwrap();
-    final ChannelBuffer buf = getBuffer(unwrapped_payload);
+    final ByteBuf buf = getBuffer(unwrapped_payload);
     config.overrideConfig(SecureRpcHelper.SECURITY_AUTHENTICATION_KEY, 
         "kerberos");
     final UTHelper helper = new UTHelper(client, region_client, remote_endpoint);
-    final ChannelBuffer unwrapped = helper.unwrap(buf);
-    assertArrayEquals(unwrapped.array(), getBuffer(unwrapped_payload).array());
+    final ByteBuf unwrapped = helper.unwrap(buf);
+    assertArrayEquals(toArray(unwrapped), getBuffer(unwrapped_payload).array());
     assertTrue(unwrapped == buf);
   }
   
@@ -166,7 +161,7 @@ public class TestSecureRpcHelper extends BaseTestSecureRpcHelper {
     when(sasl_client.unwrap(any(byte[].class), anyInt(), anyInt()))
       .thenThrow(new SaslException("Boo!"));
     config.overrideConfig(SecureRpcHelper.RPC_QOP_KEY, "Integrity");
-    final ChannelBuffer buf = getBuffer(unwrapped_payload);
+    final ByteBuf buf = getBuffer(unwrapped_payload);
     config.overrideConfig(SecureRpcHelper.SECURITY_AUTHENTICATION_KEY, 
         "kerberos");
     final UTHelper helper = new UTHelper(client, region_client, remote_endpoint);
@@ -176,25 +171,25 @@ public class TestSecureRpcHelper extends BaseTestSecureRpcHelper {
   @Test
   public void wrap() throws Exception {
     setupWrap();
-    final ChannelBuffer buf = getBuffer(unwrapped_payload);
+    final ByteBuf buf = getBuffer(unwrapped_payload);
     config.overrideConfig(SecureRpcHelper.SECURITY_AUTHENTICATION_KEY, 
         "kerberos");
     config.overrideConfig(SecureRpcHelper.RPC_QOP_KEY, "Integrity");
     final UTHelper helper = new UTHelper(client, region_client, remote_endpoint);
-    final ChannelBuffer wrapped = helper.wrap(buf);
-    assertArrayEquals(wrapped.array(), getBuffer(wrapped_payload).array());
+    final ByteBuf wrapped = helper.wrap(buf);
+    assertArrayEquals(toArray(wrapped), getBuffer(wrapped_payload).array());
     assertFalse(wrapped == buf);
   }
   
   @Test
   public void wrapNotWrapped() throws Exception {
     setupWrap();
-    final ChannelBuffer buf = getBuffer(unwrapped_payload);
+    final ByteBuf buf = getBuffer(unwrapped_payload);
     config.overrideConfig(SecureRpcHelper.SECURITY_AUTHENTICATION_KEY, 
         "kerberos");
     final UTHelper helper = new UTHelper(client, region_client, remote_endpoint);
-    final ChannelBuffer wrapped = helper.wrap(buf);
-    assertArrayEquals(wrapped.array(), getBuffer(unwrapped_payload).array());
+    final ByteBuf wrapped = helper.wrap(buf);
+    assertArrayEquals(toArray(wrapped), getBuffer(unwrapped_payload).array());
     assertTrue(wrapped == buf);
   }
   
@@ -203,7 +198,7 @@ public class TestSecureRpcHelper extends BaseTestSecureRpcHelper {
     when(sasl_client.wrap(any(byte[].class), anyInt(), anyInt()))
       .thenThrow(new SaslException("Boo!"));
     config.overrideConfig(SecureRpcHelper.RPC_QOP_KEY, "Integrity");
-    final ChannelBuffer buf = getBuffer(unwrapped_payload);
+    final ByteBuf buf = getBuffer(unwrapped_payload);
     config.overrideConfig(SecureRpcHelper.SECURITY_AUTHENTICATION_KEY, 
         "kerberos");
     final UTHelper helper = new UTHelper(client, region_client, remote_endpoint);

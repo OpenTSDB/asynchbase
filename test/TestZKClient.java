@@ -33,6 +33,7 @@ import java.net.UnknownHostException;
 import java.nio.charset.Charset;
 import java.util.ArrayList;
 
+import io.netty.util.TimerTask;
 import org.apache.zookeeper.WatchedEvent;
 import org.apache.zookeeper.Watcher;
 import org.apache.zookeeper.KeeperException.Code;
@@ -43,7 +44,6 @@ import org.hbase.async.HBaseClient.ZKClient;
 import org.hbase.async.HBaseClient.ZKClient.ZKCallback;
 import org.hbase.async.generated.HBasePB.ServerName;
 import org.hbase.async.generated.ZooKeeperPB.MetaRegionServer;
-import org.jboss.netty.util.TimerTask;
 import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;

@@ -28,7 +28,8 @@ package org.hbase.async;
 
 import java.util.ArrayList;
 
-import org.jboss.netty.buffer.ChannelBuffer;
+import io.netty.buffer.ByteBuf;
+
 import org.hbase.async.generated.ClientPB;
 import org.hbase.async.generated.FilterPB;
 import org.hbase.async.generated.HBasePB.TimeRange;
@@ -529,7 +530,7 @@ public final class GetRequest extends HBaseRpc
   }
 
   /** Serializes this request.  */
-  ChannelBuffer serialize(final byte server_version) {
+  ByteBuf serialize(final byte server_version) {
     if (server_version < RegionClient.SERVER_VERSION_095_OR_ABOVE) {
       return serializeOld(server_version);
     }
@@ -581,12 +582,12 @@ public final class GetRequest extends HBaseRpc
       .setRegion(region.toProtobuf())
       .setGet(getpb.build());
 
-    return toChannelBuffer(GetRequest.GGET, get.build());
+    return toByteBuf(GetRequest.GGET, get.build());
   }
 
   /** Serializes this request for HBase 0.94 and before.  */
-  private ChannelBuffer serializeOld(final byte server_version) {
-    final ChannelBuffer buf = newBuffer(server_version,
+  private ByteBuf serializeOld(final byte server_version) {
+    final ByteBuf buf = newBuffer(server_version,
                                         predictSerializedSize(server_version));
     buf.writeInt(2);  // Number of parameters.
 
@@ -642,7 +643,7 @@ public final class GetRequest extends HBaseRpc
   }
 
   @Override
-  Object deserialize(final ChannelBuffer buf, final int cell_size) {
+  Object deserialize(final ByteBuf buf, final int cell_size) {
     final ClientPB.GetResponse resp =
       readProtobuf(buf, ClientPB.GetResponse.PARSER);
     if (isGetRequest()) {
@@ -661,7 +662,7 @@ public final class GetRequest extends HBaseRpc
    * in the buffer.
    */
   static ArrayList<KeyValue> extractResponse(final ClientPB.GetResponse resp,
-                                             final ChannelBuffer buf,
+                                             final ByteBuf buf,
                                              final int cell_size) {
     final ClientPB.Result res = resp.getResult();
     if (res == null) {
@@ -678,7 +679,7 @@ public final class GetRequest extends HBaseRpc
    * in the buffer.
    */
   static ArrayList<KeyValue> convertResult(final ClientPB.Result res,
-                                           final ChannelBuffer buf,
+                                           final ByteBuf buf,
                                            final int cell_size) {
     final int cell_kvs = RegionClient.numberOfKeyValuesAhead(buf, cell_size);
     final int size = res.getCellCount();

@@ -58,11 +58,11 @@ import javax.security.auth.login.Configuration;
 import javax.security.auth.login.LoginContext;
 import javax.security.auth.login.LoginException;
 
+import io.netty.util.HashedWheelTimer;
+import io.netty.util.TimerTask;
 import org.apache.zookeeper.Shell;
 import org.hbase.async.Config;
 import org.hbase.async.auth.Login.TicketRenewalTask;
-import org.jboss.netty.util.HashedWheelTimer;
-import org.jboss.netty.util.TimerTask;
 import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
@@ -76,7 +76,7 @@ import org.powermock.reflect.Whitebox;
 @PowerMockIgnore({"javax.management.*", "javax.xml.*",
   "ch.qos.*", "org.slf4j.*",
   "com.sum.*", "org.xml.*"})
-@PrepareForTest({ HashedWheelTimer.class, Configuration.class, Subject.class, 
+@PrepareForTest({ HashedWheelTimer.class, Configuration.class, Subject.class,
   AppConfigurationEntry.class, LoginContext.class, Login.class, 
   KerberosTicket.class, KerberosPrincipal.class, System.class, Shell.class })
 public class TestLogin {
@@ -158,7 +158,7 @@ public class TestLogin {
     
     verify(login_context, never()).logout();
     verify(login_context, times(1)).login();
-    verify(timer, times(1)).newTimeout((TimerTask)any(), anyLong(), 
+    verify(timer, times(1)).newTimeout((TimerTask)any(), anyLong(),
         eq(TimeUnit.MILLISECONDS));
   }
   
