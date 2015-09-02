@@ -42,6 +42,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentSkipListMap;
 import java.util.concurrent.Executor;
 import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
 
@@ -60,8 +61,11 @@ import org.jboss.netty.channel.DefaultChannelPipeline;
 import org.jboss.netty.channel.socket.ClientSocketChannelFactory;
 import org.jboss.netty.channel.socket.SocketChannel;
 import org.jboss.netty.channel.socket.SocketChannelConfig;
+import org.jboss.netty.channel.socket.nio.NioClientBossPool;
 import org.jboss.netty.channel.socket.nio.NioClientSocketChannelFactory;
+import org.jboss.netty.channel.socket.nio.NioWorkerPool;
 import org.jboss.netty.util.HashedWheelTimer;
+import org.jboss.netty.util.ThreadNameDeterminer;
 import org.jboss.netty.util.Timeout;
 import org.jboss.netty.util.Timer;
 import org.jboss.netty.util.TimerTask;
@@ -380,6 +384,11 @@ public final class HBaseClient {
   /** The configuration for this client */
   private final Config config;
   
+  /** Integers for thread naming */
+  final static AtomicInteger BOSS_THREAD_ID = new AtomicInteger();
+  final static AtomicInteger WORKER_THREAD_ID = new AtomicInteger();
+  final static AtomicInteger TIMER_THREAD_ID = new AtomicInteger();
+  
   // ------------------------ //
   // Client usage statistics. //
   // ------------------------ //
@@ -449,7 +458,7 @@ public final class HBaseClient {
    * -ROOT- region.
    */
   public HBaseClient(final String quorum_spec, final String base_path) {
-    this(quorum_spec, base_path, defaultChannelFactory());
+    this(quorum_spec, base_path, defaultChannelFactory(new Config()));
   }
 
   /**
@@ -498,8 +507,7 @@ public final class HBaseClient {
     this.channel_factory = channel_factory;
     zkclient = new ZKClient(quorum_spec, base_path);
     config = new Config();
-    timer = new HashedWheelTimer(config.getShort("hbase.timer.tick"), 
-        MILLISECONDS);
+    timer = newTimer(config, "HBaseClient");
   }
   
   /**
@@ -509,7 +517,7 @@ public final class HBaseClient {
    * @since 1.7
    */
   public HBaseClient(final Config config) {
-    this(config, defaultChannelFactory());
+    this(config, defaultChannelFactory(config));
   }
   
   /**
@@ -551,14 +559,66 @@ public final class HBaseClient {
     zkclient = new ZKClient(config.getString("hbase.zookeeper.quorum"), 
         config.getString("hbase.zookeeper.znode.parent"));
     this.config = config;
-    timer = new HashedWheelTimer(config.getShort("hbase.timer.tick"), 
-        MILLISECONDS);
+    timer = newTimer(config, "HBaseClient");
   }
   
-  /** Creates a default channel factory in case we haven't been given one.  */
-  private static NioClientSocketChannelFactory defaultChannelFactory() {
+  /**
+   * Package private timer constructor that provides a useful name for the
+   * timer thread.
+   * @param config The config object used to pull out the tick interval
+   * @param name A name to stash in the timer
+   * @return A timer
+   */
+  static HashedWheelTimer newTimer(final Config config, final String name) {
+    class TimerThreadNamer implements ThreadNameDeterminer {
+      @Override
+      public String determineThreadName(String currentThreadName,
+          String proposedThreadName) throws Exception {
+        return "AsyncHBase Timer " + name + " #" + TIMER_THREAD_ID.incrementAndGet();
+      }
+    }
+    if (config == null) {
+      return new HashedWheelTimer(Executors.defaultThreadFactory(), 
+          new TimerThreadNamer(), 100, MILLISECONDS, 512);
+    }
+    return new HashedWheelTimer(Executors.defaultThreadFactory(), 
+        new TimerThreadNamer(), config.getShort("hbase.timer.tick"), 
+        MILLISECONDS, config.getInt("hbase.timer.ticks_per_wheel"));
+  }
+  
+  /** Creates a default channel factory in case we haven't been given one. 
+   * The factory will use Netty defaults and provide thread naming rules for
+   * easier debugging.
+   * @param config The config to pull settings from 
+   */
+  private static NioClientSocketChannelFactory defaultChannelFactory(
+      final Config config) {
+    class BossThreadNamer implements ThreadNameDeterminer {
+      @Override
+      public String determineThreadName(String currentThreadName,
+          String proposedThreadName) throws Exception {
+        return "AsyncHBase I/O Boss #" + BOSS_THREAD_ID.incrementAndGet();
+      }
+    }
+    
+    class WorkerThreadNamer implements ThreadNameDeterminer {
+      @Override
+      public String determineThreadName(String currentThreadName,
+          String proposedThreadName) throws Exception {
+        return "AsyncHBase I/O Worker #" + WORKER_THREAD_ID.incrementAndGet();
+      }
+    }
+    
     final Executor executor = Executors.newCachedThreadPool();
-    return new NioClientSocketChannelFactory(executor, executor);
+    final NioClientBossPool boss_pool = 
+        new NioClientBossPool(executor, 1, newTimer(config, "Boss Pool"), 
+            new BossThreadNamer());
+    final int num_workers = config.hasProperty("hbase.workers.size") ? 
+        config.getInt("hbase.workers.size") : 
+          Runtime.getRuntime().availableProcessors() * 2;
+    final NioWorkerPool worker_pool = new NioWorkerPool(executor, 
+        num_workers, new WorkerThreadNamer());
+    return new NioClientSocketChannelFactory(boss_pool, worker_pool);
   }
 
   /** A custom channel factory that doesn't shutdown its executor.  */

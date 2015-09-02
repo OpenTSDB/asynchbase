@@ -335,6 +335,7 @@ public class Config {
     default_map.put("hbase.zookeeper.quorum", "localhost");
     default_map.put("hbase.zookeeper.znode.parent", "/hbase");
     default_map.put("hbase.timer.tick", "20");
+    default_map.put("hbase.timer.ticks_per_wheel", "512");
     
     default_map.put("hbase.security.auth.enable", "false");
     

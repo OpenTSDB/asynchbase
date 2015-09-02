@@ -43,13 +43,16 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentSkipListMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeUnit;
 
 import org.hbase.async.HBaseClient.ZKClient;
 import org.jboss.netty.channel.ChannelPipeline;
 import org.jboss.netty.channel.socket.SocketChannel;
 import org.jboss.netty.channel.socket.SocketChannelConfig;
+import org.jboss.netty.channel.socket.nio.NioClientBossPool;
 import org.jboss.netty.channel.socket.nio.NioClientSocketChannelFactory;
+import org.jboss.netty.channel.socket.nio.NioWorkerPool;
 import org.jboss.netty.util.HashedWheelTimer;
 import org.jboss.netty.util.Timeout;
 import org.jboss.netty.util.TimerTask;
@@ -65,7 +68,8 @@ import com.stumbleupon.async.Deferred;
 
 @PrepareForTest({ HBaseClient.class, RegionClient.class, HBaseRpc.class, 
   GetRequest.class, RegionInfo.class, NioClientSocketChannelFactory.class, 
-  Executors.class })
+  Executors.class, HashedWheelTimer.class, NioClientBossPool.class, 
+  NioWorkerPool.class })
 @Ignore // ignore for test runners
 public class BaseTestHBaseClient {
   protected static final Charset CHARSET = Charset.forName("ASCII");
@@ -119,6 +123,8 @@ public class BaseTestHBaseClient {
   protected NioClientSocketChannelFactory channel_factory;
   /** Fake channel returned from the factory */
   protected SocketChannel chan;
+  /** Fake timer for testing */
+  protected FakeTimer timer;
   
   @Before
   public void before() throws Exception {
@@ -132,19 +138,27 @@ public class BaseTestHBaseClient {
     zkclient = mock(ZKClient.class);
     channel_factory = mock(NioClientSocketChannelFactory.class);
     chan = mock(SocketChannel.class);
+    timer = new FakeTimer();
     
     when(zkclient.getDeferredRoot()).thenReturn(new Deferred<Object>());
     PowerMockito.mockStatic(Executors.class);
+    PowerMockito.when(Executors.defaultThreadFactory())
+      .thenReturn(mock(ThreadFactory.class));
     PowerMockito.when(Executors.newCachedThreadPool())
       .thenReturn(mock(ExecutorService.class));
     PowerMockito.whenNew(NioClientSocketChannelFactory.class).withAnyArguments()
       .thenReturn(channel_factory);
     
+    PowerMockito.whenNew(HashedWheelTimer.class).withAnyArguments()
+      .thenReturn(timer);
+    PowerMockito.whenNew(NioClientBossPool.class).withAnyArguments()
+      .thenReturn(mock(NioClientBossPool.class));
+    PowerMockito.whenNew(NioWorkerPool.class).withAnyArguments()
+      .thenReturn(mock(NioWorkerPool.class));
+    
     client = PowerMockito.spy(new HBaseClient("test-quorum-spec"));
     Whitebox.setInternalState(client, "zkclient", zkclient);
     Whitebox.setInternalState(client, "rootregion", rootclient);
-    // Inject a timer that always fires away immediately.
-    Whitebox.setInternalState(client, "timer", new FakeTimer());
     regions_cache = Whitebox.getInternalState(client, "regions_cache");
     region2client = Whitebox.getInternalState(client, "region2client");
     client2regions = Whitebox.getInternalState(client, "client2regions");
