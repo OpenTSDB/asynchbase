@@ -49,6 +49,8 @@ public final class RegionClientStats {
   private final long writes_blocked;
   private final long rpc_response_timedout;
   private final long rpc_response_unknown;
+  private final long inflight_breached;
+  private final long pending_breached;
   
   /** Package-private constructor.  */
   RegionClientStats(
@@ -62,7 +64,9 @@ public final class RegionClientStats {
       final long rpcs_timedout,
       final long writes_blocked,
       final long rpc_response_timedout,
-      final long rpc_response_unknown
+      final long rpc_response_unknown,
+      final long inflight_breached,
+      final long pending_breached
       ) {
     this.rpcs_sent = rpcs_sent;
     this.inflight_rpcs = rpcs_inflight;
@@ -75,6 +79,8 @@ public final class RegionClientStats {
     this.rpcs_timedout = rpcs_timedout;
     this.rpc_response_timedout = rpc_response_timedout;
     this.rpc_response_unknown = rpc_response_unknown;
+    this.inflight_breached = inflight_breached;
+    this.pending_breached = pending_breached;
   }
 
   /**
@@ -183,5 +189,26 @@ public final class RegionClientStats {
    */
   public long rpcResponsesUnknown() {
     return rpc_response_unknown;
+  }
+
+  /**
+   * The number of times RPCs were rejected due to there being too many RPCs
+   * in flight and waiting for responses from the HBase server. Failed RPCs
+   * throw a {@link PleaseThrottleException}
+   * @return The number of times we rejected RPCs due to a full inflight queue.
+   */
+  public long inflightBreached() {
+    return inflight_breached;
+  }
+  
+  /**
+   * The number of times RPCs were rejected due to there being too many RPCs 
+   * in the pending queue, i.e. while we were waiting for HBase to respond to
+   * the connection request. Failed RPCs throw a 
+   * {@link PleaseThrottleException}
+   * @return The number of times we rejected RPCs due to a full pending queue.
+   */
+  public long pendingBreached() {
+    return pending_breached;
   }
 }

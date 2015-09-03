@@ -555,7 +555,7 @@ public class TestConfig {
   @Test
   public void hasProperty() throws Exception {
     final Config config = new Config();
-    assertTrue(config.hasProperty("hbase.rpcs.max_retry_attempts"));
+    assertTrue(config.hasProperty("hbase.rpcs.buffered_flush_interval"));
   }
 
   @Test

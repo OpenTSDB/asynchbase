@@ -212,6 +212,12 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
   /** Number of RPCs that were blocked due to the channel in a non-writable state */
   private final AtomicInteger writes_blocked = new AtomicInteger();
   
+  /** Number of RPCs failed due to exceeding the inflight limit */
+  private final AtomicInteger inflight_breached = new AtomicInteger();
+  
+  /** Number of RPCs failed due to exceeding the pending limit */
+  private final AtomicInteger pending_breached = new AtomicInteger();
+  
   private final TimerTask flush_timer = new TimerTask() {
     public void run(final Timeout timeout) {
       periodicFlush();
@@ -233,6 +239,15 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
   /** A class used for authentication and/or encryption/decryption of packets. */
   private SecureRpcHelper secure_rpc_helper;
   
+  /** Maximum number of inflight RPCs. If 0, unlimited */
+  private int inflight_limit;
+  
+  /** Maximum number of RPCs queued while waiting to connect. If 0, unlimited */
+  private int pending_limit;
+  
+  /** Number of batchable RPCs allowed in a single batch before it's sent off */
+  private int batch_size;
+  
   /**
    * Constructor.
    * @param hbase_client The HBase client this instance belongs to.
@@ -241,6 +256,11 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
     this.hbase_client = hbase_client;
     check_write_status = hbase_client.getConfig().getBoolean(
             "hbase.region_client.check_channel_write_status");
+    inflight_limit = hbase_client.getConfig().getInt(
+        "hbase.region_client.inflight_limit");
+    pending_limit = hbase_client.getConfig().getInt(
+        "hbase.region_client.pending_limit");
+    batch_size = hbase_client.getConfig().getInt("hbase.rpcs.batch.size");
   }
 
   /**
@@ -291,7 +311,9 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
         rpcs_timedout.get(),
         writes_blocked.get(),
         rpc_response_timedout.get(),
-        rpc_response_unknown.get()
+        rpc_response_unknown.get(),
+        inflight_breached.get(),
+        pending_breached.get()
       );
     }
   }
@@ -804,7 +826,7 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
       // Unfortunately we have to hold the monitor on `this' while we do
       // this entire atomic dance.
       batch.add(request);
-      if (batch.size() < 1024) {  // XXX Don't hardcode.
+      if (batch.size() < batch_size) {
         batch = null;  // We're going to buffer this edit for now.
       } else {
         // Execute the edits buffered so far.  But first we must clear
@@ -988,6 +1010,12 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
       } else if (!dead) {
         if (pending_rpcs == null) {
           pending_rpcs = new ArrayList<HBaseRpc>();
+        }
+        if (pending_limit > 0 && pending_rpcs.size() >= pending_limit) {
+          rpc.callback(new PleaseThrottleException(
+              "Exceeded the pending RPC limit", null, rpc, rpc.getDeferred()));
+          pending_breached.incrementAndGet();
+          return;
         }
         pending_rpcs.add(rpc);
       }
@@ -1318,6 +1346,12 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
                 + Bytes.pretty(payload));
     }
     {
+      if (inflight_limit > 0 && rpcs_inflight.size() >= inflight_limit) {
+        rpc.callback(new PleaseThrottleException(
+            "Exceeded the inflight RPC limit", null, rpc, rpc.getDeferred()));
+        inflight_breached.incrementAndGet();
+        return null;
+      }
       final HBaseRpc oldrpc = rpcs_inflight.put(rpc.rpc_id, rpc);
       if (oldrpc != null) {
         final String wtf = "WTF?  There was already an RPC in flight with"

@@ -58,21 +58,6 @@ public class Config {
     RUNNING_WINDOWS = System.getProperty("os.name") != null ? System
         .getProperty("os.name").contains("Windows") : false;
   }
-
-  /** How many times we should retry an RPC */
-  private int max_retry_attempts;
-  
-  /** How often, in ms, to flush buffered RPC calls */
-  private volatile short flush_interval;
-  
-  /** ?? */
-  private short nsre_low_watermark;
-  
-  /** The maximum number of NSREs outstanding */
-  private short nsre_high_watermark;
-  
-  /** How many buffered increment RPCs to maintain in memory at any given time */
-  private volatile int increment_buffer_size;
   
   /**
    * The list of properties configured to their defaults or modified by users.
@@ -131,7 +116,6 @@ public class Config {
    */
   public void overrideConfig(final String property, final String value) {
     properties.put(property, value);
-    setLocals();
   }
 
   /**
@@ -312,12 +296,18 @@ public class Config {
    * Loads options from the JVM system properties and/or sets defaults
    */
   private void loadSystemAndDefaults() {
-    default_map.put("hbase.rpcs.max_retry_attempts", "10");
+    /* --------- AsyncHBase specific configs --------- */
     default_map.put("hbase.rpcs.buffered_flush_interval", "1000");
+    default_map.put("hbase.rpcs.batch.size", "1024");
     default_map.put("hbase.region_client.check_channel_write_status", "false");
+    default_map.put("hbase.region_client.inflight_limit", "0");
+    default_map.put("hbase.region_client.pending_limit", "0");
     default_map.put("hbase.nsre.low_watermark", "1000");
     default_map.put("hbase.nsre.high_watermark", "10000");
-    
+    default_map.put("hbase.timer.tick", "20");
+    default_map.put("hbase.timer.ticks_per_wheel", "512");
+    default_map.put("hbase.security.auth.enable", "false");
+    default_map.put("hbase.zookeeper.getroot.retry_delay", "1000");
     /**
      * How many different counters do we want to keep in memory for buffering.
      * Each entry requires storing the table name, row key, family name and
@@ -332,36 +322,27 @@ public class Config {
      */
     default_map.put("hbase.increments.buffer_size", "65535");
     
+    /* --- HBase configs (same names as their HTable counter parts --- 
+     * Note that the defaults may differ though */
     default_map.put("hbase.zookeeper.quorum", "localhost");
+    // HBase drops the "hbase" bit. *shrug*
     default_map.put("hbase.zookeeper.znode.parent", "/hbase");
-    default_map.put("hbase.timer.tick", "20");
-    default_map.put("hbase.timer.ticks_per_wheel", "512");
-    
-    default_map.put("hbase.security.auth.enable", "false");
-    
+    default_map.put("hbase.zookeeper.session.timeout", "5000");
+    default_map.put("hbase.client.retries.number", "10");
     /** Note that HBase's client defaults to 60 seconds. We default to 0 for
      * AsyncHBase backwards compatibility. This may change in the future.
      */
     default_map.put("hbase.rpc.timeout", "0");
+    default_map.put("hbase.ipc.client.connection.maxidletime", "0");
+    default_map.put("hbase.ipc.client.connect.max.retries", "0");
+    default_map.put("hbase.ipc.client.socket.timeout.connect", "5000");
+    default_map.put("hbase.ipc.client.tcpnodelay", "true");
+    default_map.put("hbase.ipc.client.tcpkeepalive", "true");
     
     for (Map.Entry<String, String> entry : default_map.entrySet()) {
       if (!properties.containsKey(entry.getKey()))
         properties.put(entry.getKey(), entry.getValue());
     }
-    
-    setLocals();
-  }
-
-  /**
-   * Sets the local fields that are accessed often enough that we want to avoid
-   * hash map lookups.
-   */
-  private void setLocals() {
-    max_retry_attempts = getInt("hbase.rpcs.max_retry_attempts");
-    flush_interval = getShort("hbase.rpcs.buffered_flush_interval");
-    nsre_low_watermark = getShort("hbase.nsre.low_watermark");
-    nsre_high_watermark = getShort("hbase.nsre.high_watermark");
-    increment_buffer_size = getInt("hbase.increments.buffer_size");
   }
   
   /**
@@ -401,30 +382,4 @@ public class Config {
     }
   }
 
-  // GETTERS & SETTERS
-  /** @return How many times we should retry an RPC */
-  public int maxRetryAttempts() {
-    return max_retry_attempts;
-  }
-  
-  /** @return How often, in ms, to flush buffered RPC calls */
-  public short flushInterval() {
-    return flush_interval;
-  }
-  
-  /** @return ?? */
-  public short nsreLowWatermark() {
-    return nsre_low_watermark;
-  }
-  
-  /** @return The maximum number of NSREs outstanding */
-  public short nsreHighWatermark() {
-    return nsre_high_watermark;
-  }
-  
-  /** @return How many buffered increment RPCs to maintain in memory at any 
-   * given time */
-  public int incrementBufferSize() {
-    return increment_buffer_size;
-  }
 }

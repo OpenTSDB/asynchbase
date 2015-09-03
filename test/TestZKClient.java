@@ -90,14 +90,17 @@ public class TestZKClient {
   private final static String base_path = "/hbase";
   private final static Charset CHARSET = Charset.forName("ASCII");
   private final static Stat stat = mock(Stat.class);
-  private HBaseClient client = //PowerMockito.spy(new HBaseClient("test-quorum-spec"));
-          mock(HBaseClient.class);
+  private HBaseClient client;
+  private Config config;
   private ZKClient zk_client;
   private ZooKeeper zk = mock(ZooKeeper.class);
   private ArrayList<Deferred<Object>> deferred_rootregion;
   
   @Before
   public void before() throws Exception {
+    client = mock(HBaseClient.class);
+    config = new Config();
+    Whitebox.setInternalState(client, "config", config);
     zk_client = PowerMockito.spy(client.new ZKClient(quorum, base_path));
     whenNew(ZooKeeper.class).withAnyArguments().thenReturn(zk);
 

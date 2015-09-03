@@ -79,7 +79,6 @@ import static org.powermock.api.mockito.PowerMockito.verifyPrivate;
                   "com.sum.*", "org.xml.*"})
 @PrepareForTest({ HBaseClient.class, RegionClient.class })
 final class TestNSREs extends BaseTestHBaseClient {
-  
   private GetRequest[] dummy_gets;
   private GetRequest trigger;
   private Counter num_nsres;
@@ -556,7 +555,7 @@ final class TestNSREs extends BaseTestHBaseClient {
     final int trigger_retries = 5;
     // probes all fail but the trigger will succeed at one point
     final FakeTimer timer = setupMultiNSRE(trigger_retries, 
-        client.getConfig().maxRetryAttempts() + 2, false);
+        client.getConfig().getInt("hbase.client.retries.number") + 2, false);
     
     Deferred<ArrayList<KeyValue>> triggerRpcDeferred = client.get(trigger);
 
@@ -578,7 +577,8 @@ final class TestNSREs extends BaseTestHBaseClient {
 
     assertSame(row, triggerRpcDeferred.join());
     assertEquals(
-        (trigger_retries * client.getConfig().maxRetryAttempts()) + trigger_retries, 
+        (trigger_retries * client.getConfig()
+            .getInt("hbase.client.retries.number")) + trigger_retries, 
         timer.tasks.size());
     
     Long last = 400L;
@@ -652,12 +652,12 @@ final class TestNSREs extends BaseTestHBaseClient {
   @Test
   public void tooManyAttempts() throws Exception {
     // stack overflow if we don't set this due to mocking
-    client.getConfig().overrideConfig("hbase.rpcs.max_retry_attempts", "2");
+    client.getConfig().overrideConfig("hbase.client.retries.number", "2");
     
     // probes all fail but the trigger will succeed at one point
     final FakeTimer timer = setupMultiNSRE(
-        client.getConfig().maxRetryAttempts() + 2, 
-        client.getConfig().maxRetryAttempts() + 2, true);
+        client.getConfig().getInt("hbase.client.retries.number") + 2, 
+        client.getConfig().getInt("hbase.client.retries.number") + 2, true);
     
     Deferred<ArrayList<KeyValue>> triggerRpcDeferred = client.get(trigger);
 
@@ -800,7 +800,7 @@ final class TestNSREs extends BaseTestHBaseClient {
   // ?? What's the real purpose here?
   @Test
   public void handleNSRELowWatermark() throws Exception {
-    client.getConfig().overrideConfig("asynchbase.nsre.low_watermark", "1");
+    Whitebox.setInternalState(client, "nsre_low_watermark", (short)1);
     final HBaseRpc probe = MockProbe();
     Whitebox.setInternalState(client, "timer", mock(HashedWheelTimer.class));
     final GetRequest get = new GetRequest(TABLE, KEY);
@@ -836,7 +836,7 @@ final class TestNSREs extends BaseTestHBaseClient {
   
   @Test
   public void handleNSREHighWatermark() throws Exception {
-    client.getConfig().overrideConfig("hbase.nsre.high_watermark", "2");
+    Whitebox.setInternalState(client, "nsre_high_watermark", (short)2);
     final HBaseRpc probe = MockProbe();
     Whitebox.setInternalState(client, "timer", mock(HashedWheelTimer.class));
     final GetRequest get = new GetRequest(TABLE, KEY);
@@ -894,7 +894,7 @@ final class TestNSREs extends BaseTestHBaseClient {
   
   @Test
   public void handleNSREReProbe() throws Exception {
-    client.getConfig().overrideConfig("asynchbase.nsre.high_watermark", "10000");
+    Whitebox.setInternalState(client, "nsre_high_watermark", (short)10000);
     final HBaseRpc probe = MockProbe();
     Whitebox.setInternalState(client, "timer", mock(HashedWheelTimer.class));
     final GetRequest get = new GetRequest(TABLE, KEY);
@@ -937,7 +937,8 @@ final class TestNSREs extends BaseTestHBaseClient {
     Whitebox.setInternalState(client, "timer", mock(HashedWheelTimer.class));
     final GetRequest get = new GetRequest(TABLE, KEY);
     final Deferred<Object> deferred = get.getDeferred();
-    get.attempt = (byte)(client.getConfig().maxRetryAttempts() + 2);
+    get.attempt = (byte)(client.getConfig()
+        .getInt("hbase.client.retries.number") + 2);
     
     assertEquals(0, got_nsre.size());
     assertEquals(0, num_nsres.get());
@@ -978,7 +979,8 @@ final class TestNSREs extends BaseTestHBaseClient {
     Whitebox.setInternalState(client, "timer", mock(HashedWheelTimer.class));
     final GetRequest get = new GetRequest(TABLE, KEY);
     final Deferred<Object> deferred = get.getDeferred();
-    get.attempt = (byte)(client.getConfig().maxRetryAttempts() + 2);
+    get.attempt = (byte)(client.getConfig()
+        .getInt("hbase.client.retries.number") + 2);
     
     assertEquals(1, got_nsre.size());
     assertEquals(0, num_nsres.get());

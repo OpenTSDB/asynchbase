@@ -61,6 +61,7 @@ import org.jboss.netty.channel.DefaultChannelPipeline;
 import org.jboss.netty.channel.socket.ClientSocketChannelFactory;
 import org.jboss.netty.channel.socket.SocketChannel;
 import org.jboss.netty.channel.socket.SocketChannelConfig;
+import org.jboss.netty.channel.socket.nio.NioChannelConfig;
 import org.jboss.netty.channel.socket.nio.NioClientBossPool;
 import org.jboss.netty.channel.socket.nio.NioClientSocketChannelFactory;
 import org.jboss.netty.channel.socket.nio.NioWorkerPool;
@@ -189,7 +190,6 @@ public final class HBaseClient {
    *      network blip.
    *    - If the -ROOT- region is unavailable when we start, we should
    *      put a watch in ZK instead of polling it every second.
-   * - Handling RPC timeouts.
    * - Stats:
    *     - QPS per RPC type.
    *     - Latency histogram per RPC type (requires open-sourcing the SU Java
@@ -249,6 +249,19 @@ public final class HBaseClient {
    */
   private final HashedWheelTimer rpc_timeout_timer;
 
+  /** Up to how many milliseconds can we buffer an edit on the client side.  */
+  private volatile short flush_interval;
+  
+  /** How many different counters do we want to keep in memory for buffering. */
+  private volatile int increment_buffer_size;
+  
+  /**
+   * Low and high watermarks when buffering RPCs due to an NSRE.
+   * @see #handleNSRE
+   */
+  private short nsre_low_watermark;
+  private short nsre_high_watermark;
+  
   /**
    * Factory through which we will create all its channels / sockets.
    */
@@ -519,6 +532,10 @@ public final class HBaseClient {
     rpc_timeout = config.getInt("hbase.rpc.timeout");
     timer = newTimer(config, "HBaseClient");
     rpc_timeout_timer = newTimer(config, "RPC Timeout Timer");
+    flush_interval = config.getShort("hbase.rpcs.buffered_flush_interval");
+    increment_buffer_size = config.getInt("hbase.increments.buffer_size");
+    nsre_low_watermark = config.getShort("hbase.nsre.low_watermark");
+    nsre_high_watermark = config.getShort("hbase.nsre.high_watermark");
   }
   
   /**
@@ -573,6 +590,10 @@ public final class HBaseClient {
     rpc_timeout = config.getInt("hbase.rpc.timeout");
     timer = newTimer(config, "HBaseClient");
     rpc_timeout_timer = newTimer(config, "RPC Timeout Timer");
+    flush_interval = config.getShort("hbase.rpcs.buffered_flush_interval");
+    increment_buffer_size = config.getInt("hbase.increments.buffer_size");
+    nsre_low_watermark = config.getShort("hbase.nsre.low_watermark");
+    nsre_high_watermark = config.getShort("hbase.nsre.high_watermark");
   }
   
   /**
@@ -807,9 +828,10 @@ public final class HBaseClient {
     if (flush_interval < 0) {
       throw new IllegalArgumentException("Negative: " + flush_interval);
     }
-    final short prev = config.flushInterval();
+    final short prev = config.getShort("hbase.rpcs.buffered_flush_interval");
     config.overrideConfig("hbase.rpcs.buffered_flush_interval", 
         Short.toString(flush_interval));
+    this.flush_interval = flush_interval; 
     return prev;
   }
 
@@ -840,12 +862,13 @@ public final class HBaseClient {
     if (increment_buffer_size < 0) {
       throw new IllegalArgumentException("Negative: " + increment_buffer_size);
     }
-    final int current = config.incrementBufferSize();
+    final int current = config.getInt("hbase.increments.buffer_size");
     if (current == increment_buffer_size) {
       return current;
     }
     config.overrideConfig("hbase.increments.buffer_size", 
         Integer.toString(increment_buffer_size));
+    this.increment_buffer_size = increment_buffer_size;
     final LoadingCache<BufferedIncrement, BufferedIncrement.Amount> prev =
       increment_buffer;  // Volatile-read.
     if (prev != null) {  // Need to resize.
@@ -909,7 +932,7 @@ public final class HBaseClient {
    * @see #setFlushInterval
    */
   public short getFlushInterval() {
-    return config.flushInterval();
+    return flush_interval;
   }
 
   /** @returns the default RPC timeout period in milliseconds
@@ -927,7 +950,7 @@ public final class HBaseClient {
    * @since 1.3
    */
   public int getIncrementBufferSize() {
-    return config.incrementBufferSize();
+    return increment_buffer_size;
   }
 
   /**
@@ -1346,7 +1369,7 @@ public final class HBaseClient {
   public Deferred<Long> bufferAtomicIncrement(final AtomicIncrementRequest request) {
     final long value = request.getAmount();
     if (!BufferedIncrement.Amount.checkOverflow(value)  // Value too large.
-        || config.flushInterval() == 0) {           // Client-side buffer disabled.
+        || flush_interval == 0) {           // Client-side buffer disabled.
       return atomicIncrement(request);
     }
 
@@ -1397,7 +1420,7 @@ public final class HBaseClient {
         try {
           flushBufferedIncrements(increment_buffer);
         } finally {
-          final short interval = config.flushInterval(); // Volatile-read.
+          final short interval = flush_interval; // Volatile-read.
           // Even if we paused or disabled the client side buffer by calling
           // setFlushInterval(0), we will continue to schedule this timer
           // forever instead of pausing it.  Pausing it is troublesome because
@@ -1410,7 +1433,7 @@ public final class HBaseClient {
         }
       }
     }
-    final short interval = config.flushInterval(); // Volatile-read.
+    final short interval = flush_interval; // Volatile-read.
     // Handle the extremely unlikely yet possible racy case where:
     //   flush_interval was > 0
     //   A buffered increment came in
@@ -1462,7 +1485,7 @@ public final class HBaseClient {
    * Creates the increment buffer according to current configuration.
    */
   private void makeIncrementBuffer() {
-    final int size = config.incrementBufferSize();
+    final int size = increment_buffer_size;
     increment_buffer = BufferedIncrement.newCache(this, size);
     if (LOG.isDebugEnabled()) {
       LOG.debug("Created increment buffer of " + size + " entries");
@@ -1963,7 +1986,7 @@ public final class HBaseClient {
    * already.
    */
   boolean cannotRetryRequest(final HBaseRpc rpc) {
-    return rpc.attempt > config.maxRetryAttempts();
+    return rpc.attempt > config.getInt("hbase.client.retries.number");
   }
 
   /**
@@ -2594,8 +2617,8 @@ public final class HBaseClient {
         // If `rpc' is the first element in nsred_rpcs, it's our "probe" RPC,
         // in which case we must not add it to the array again.
         else if ((exists_rpc = nsred_rpcs.get(0)) != rpc) {
-          if (size < config.nsreHighWatermark()) {
-            if (size == config.nsreLowWatermark()) {
+          if (size < nsre_high_watermark) {
+            if (size == nsre_low_watermark) {
               nsred_rpcs.add(null);  // "Skip" one slot.
             } else if (can_retry_rpc) {
               reject = false;
@@ -2614,10 +2637,10 @@ public final class HBaseClient {
 
       // Stop here if this is a known NSRE and `rpc' is not our probe RPC.
       if (known_nsre && exists_rpc != rpc) {
-        if (size != config.nsreHighWatermark() && size % NSRE_LOG_EVERY == 0) {
+        if (size != nsre_high_watermark && size % NSRE_LOG_EVERY == 0) {
           final String msg = "There are now " + size
             + " RPCs pending due to NSRE on " + Bytes.pretty(region_name);
-          if (size + NSRE_LOG_EVERY < config.nsreHighWatermark()) {
+          if (size + NSRE_LOG_EVERY < nsre_high_watermark) {
             LOG.info(msg);  // First message logged at INFO level.
           } else {
             LOG.warn(msg);  // Last message logged with increased severity.
@@ -2830,13 +2853,35 @@ public final class HBaseClient {
     client2regions.put(client, new ArrayList<RegionInfo>());
     num_connections_created.increment();
     // Configure and connect the channel without locking ip2client.
-    final SocketChannelConfig config = chan.getConfig();
-    config.setConnectTimeoutMillis(5000);
-    config.setTcpNoDelay(true);
+    final SocketChannelConfig socket_config = chan.getConfig();
+    socket_config.setConnectTimeoutMillis(
+        config.getInt("hbase.ipc.client.socket.timeout.connect"));
+    socket_config.setTcpNoDelay(
+        config.getBoolean("hbase.ipc.client.tcpnodelay"));
     // Unfortunately there is no way to override the keep-alive timeout in
     // Java since the JRE doesn't expose any way to call setsockopt() with
     // TCP_KEEPIDLE.  And of course the default timeout is >2h.  Sigh.
-    config.setKeepAlive(true);
+    socket_config.setKeepAlive(
+        config.getBoolean("hbase.ipc.client.tcpkeepalive"));
+    
+    // socket overrides using system defaults instead of setting them in a conf
+    if (config.hasProperty("hbase.ipc.client.socket.write.high_watermark")) {
+      ((NioChannelConfig)config).setWriteBufferHighWaterMark(
+          config.getInt("hbase.ipc.client.socket.write.high_watermark"));
+    }
+    if (config.hasProperty("hbase.ipc.client.socket.write.low_watermark")) {
+      ((NioChannelConfig)config).setWriteBufferLowWaterMark(
+          config.getInt("hbase.ipc.client.socket.write.low_watermark"));
+    }
+    if (config.hasProperty("hbase.ipc.client.socket.sendBufferSize")) {
+      socket_config.setOption("sendBufferSize", 
+          config.getInt("hbase.ipc.client.socket.sendBufferSize"));
+    }
+    if (config.hasProperty("hbase.ipc.client.socket.receiveBufferSize")) {
+      socket_config.setOption("receiveBufferSize", 
+          config.getInt("hbase.ipc.client.socket.receiveBufferSize"));
+    }
+    
     chan.connect(new InetSocketAddress(host, port));  // Won't block.
     return client;
   }
@@ -3248,7 +3293,8 @@ public final class HBaseClient {
           if (zk != null) {  // Already connected.
             return;
           }
-          zk = new ZooKeeper(quorum_spec, 5000, this);
+          zk = new ZooKeeper(quorum_spec, 
+              config.getInt("hbase.zookeeper.session.timeout"), this);
         }
       } catch (UnknownHostException e) {
         // No need to retry, we usually cannot recover from this.
@@ -3303,7 +3349,8 @@ public final class HBaseClient {
               connectZK();  // unless we need to connect first.
             }
           }
-        }, 1000 /* milliseconds */);
+        }, config.getInt("hbase.zookeeper.getroot.retry_delay") 
+          /* milliseconds */);
     }
 
     /**

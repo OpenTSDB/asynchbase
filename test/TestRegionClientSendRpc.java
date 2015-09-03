@@ -39,6 +39,8 @@ import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.when;
 import static org.mockito.Mockito.verify;
 
+import java.util.ArrayList;
+
 import org.jboss.netty.buffer.ChannelBuffer;
 import org.jboss.netty.buffer.ChannelBuffers;
 import org.jboss.netty.channel.Channel;
@@ -552,5 +554,68 @@ public class TestRegionClientSendRpc extends BaseTestRegionClient {
     assertEquals(0, region_client.stats().pendingBatchedRPCs());
     assertEquals(0, region_client.stats().pendingRPCs());
     verify(helper, times(1)).wrap(any(ChannelBuffer.class));
+  }
+
+  @Test
+  public void pendingBreached() throws Exception {
+    Whitebox.setInternalState(region_client, "pending_limit", 1);
+    Whitebox.setInternalState(region_client, "chan", (Channel)null);
+    final ArrayList<HBaseRpc> pending_rpcs = new ArrayList<HBaseRpc>(1);
+    pending_rpcs.add(new GetRequest(TABLE, KEY, FAMILY));
+    Whitebox.setInternalState(region_client, "pending_rpcs", pending_rpcs);
+    
+    final PutRequest put = new PutRequest(TABLE, KEY, FAMILY, QUALIFIER, VALUE);
+    put.region = region;
+    final Deferred<Object> deferred = put.getDeferred();
+    
+    region_client.sendRpc(put);
+    
+    try {
+      deferred.join(1);
+    } catch (PleaseThrottleException e) { }
+    final MultiAction batched_rpcs = 
+        Whitebox.getInternalState(region_client, "batched_rpcs");
+    assertNull(batched_rpcs);
+    PowerMockito.verifyStatic(never());
+    Channels.write((Channel)any(), (ChannelBuffer)any());
+    verify(hbase_client, never()).sendRpcToRegion(put);
+    assertEquals(0, rpcs_inflight.size());
+    assertEquals(0, region_client.stats().rpcsSent());
+    assertEquals(0, region_client.stats().writesBlocked());
+    assertEquals(0, region_client.stats().pendingBatchedRPCs());
+    assertEquals(1, region_client.stats().pendingRPCs());
+    assertEquals(1, region_client.stats().pendingBreached());
+    assertEquals(0, timer.tasks.size());
+  }
+  
+  @Test
+  public void inflightBreached() throws Exception {
+    Whitebox.setInternalState(region_client, "inflight_limit", 1);
+    rpcs_inflight.put(1, new GetRequest(TABLE, KEY, FAMILY));
+    
+    final PutRequest put = new PutRequest(TABLE, KEY, FAMILY, QUALIFIER, VALUE);
+    put.setBufferable(false);
+    put.region = region;
+    final Deferred<Object> deferred = put.getDeferred();
+    
+    region_client.sendRpc(put);
+    
+    try {
+      deferred.join(1);
+    } catch (PleaseThrottleException e) { }
+    final MultiAction batched_rpcs = 
+        Whitebox.getInternalState(region_client, "batched_rpcs");
+    assertNull(batched_rpcs);
+    PowerMockito.verifyStatic(never());
+    Channels.write((Channel)any(), (ChannelBuffer)any());
+    verify(hbase_client, never()).sendRpcToRegion(put);
+    assertEquals(1, rpcs_inflight.size());
+    assertEquals(0, region_client.stats().rpcsSent());
+    assertEquals(0, region_client.stats().writesBlocked());
+    assertEquals(0, region_client.stats().pendingBatchedRPCs());
+    assertEquals(0, region_client.stats().pendingRPCs());
+    assertEquals(0, region_client.stats().pendingBreached());
+    assertEquals(1, region_client.stats().inflightBreached());
+    assertEquals(0, timer.tasks.size());
   }
 }
