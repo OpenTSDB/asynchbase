@@ -99,6 +99,8 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
                                new NotServingRegionException(null, null));
     REMOTE_EXCEPTION_TYPES.put(RegionMovedException.REMOTE_CLASS,
                                new RegionMovedException(null, null));
+    REMOTE_EXCEPTION_TYPES.put(RegionOpeningException.REMOTE_CLASS,
+                               new RegionOpeningException(null, null));
     REMOTE_EXCEPTION_TYPES.put(UnknownScannerException.REMOTE_CLASS,
                                new UnknownScannerException(null, null));
     REMOTE_EXCEPTION_TYPES.put(UnknownRowLockException.REMOTE_CLASS,

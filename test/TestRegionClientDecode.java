@@ -376,6 +376,25 @@ public class TestRegionClientDecode extends BaseTestRegionClient {
   }
   
   @Test
+  public void regionOpeningException() throws Exception {
+    final int id = 42;
+    final GetRequest get = new GetRequest(TABLE, ROW);
+    get.region = region;
+    inflightTheRpc(id, get);
+    
+    ChannelBuffer buffer = PBufResponses.generateException(id, 
+        "org.apache.hadoop.hbase.exceptions.RegionOpeningException");
+    assertNull(region_client.decode(ctx, chan, buffer, VOID));
+
+    assertEquals(0, rpcs_inflight.size());
+    verify(hbase_client, never()).handleNSRE(any(HBaseRpc.class), 
+        any(byte[].class), any(RecoverableException.class));
+    assertEquals(1, timer.tasks.size());
+    assertEquals(60000, (long)timer.tasks.get(0).getValue());
+    verify(timer.timeouts.get(0), times(1)).cancel();
+  }
+  
+  @Test
   public void versionMismatchException() throws Exception {
     final int id = 42;
     final GetRequest get = new GetRequest(TABLE, ROW);
