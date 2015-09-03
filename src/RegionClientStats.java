@@ -38,26 +38,31 @@ package org.hbase.async;
  */
 public final class RegionClientStats {
 
-  private final int rpcs_sent;
-  private final long inflight_rpcs;
+  private final long rpcs_sent;
+  private final int inflight_rpcs;
   private final int pending_rpcs;
-  private final int rpcid;
+  private final long rpcid;
   private final boolean dead;
   private final String remote_endpoint;
   private final int pending_batched_rpcs;
-  private final int rpcs_retried;
-  private final int writes_blocked;
+  private final long rpcs_timedout;
+  private final long writes_blocked;
+  private final long rpc_response_timedout;
+  private final long rpc_response_unknown;
   
   /** Package-private constructor.  */
   RegionClientStats(
-      final int rpcs_sent,
-      final long rpcs_inflight,
+      final long rpcs_sent,
+      final int rpcs_inflight,
       final int pending_rpcs,
-      final int rpcid,
+      final long rpcid,
       final boolean dead,
       final String remote_endpoint,
       final int pending_batched_rpcs,
-      final int writes_blocked
+      final long rpcs_timedout,
+      final long writes_blocked,
+      final long rpc_response_timedout,
+      final long rpc_response_unknown
       ) {
     this.rpcs_sent = rpcs_sent;
     this.inflight_rpcs = rpcs_inflight;
@@ -67,7 +72,9 @@ public final class RegionClientStats {
     this.remote_endpoint = remote_endpoint;
     this.pending_batched_rpcs = pending_batched_rpcs;
     this.writes_blocked = writes_blocked;
-    rpcs_retried = rpcs_sent - (rpcid + 1);
+    this.rpcs_timedout = rpcs_timedout;
+    this.rpc_response_timedout = rpc_response_timedout;
+    this.rpc_response_unknown = rpc_response_unknown;
   }
 
   /**
@@ -85,7 +92,7 @@ public final class RegionClientStats {
    * region server is likely overloaded.
    * @return the number of RPCs sent to region client waiting for response.
    */
-  public long inflightRPCs() {
+  public int inflightRPCs() {
     return inflight_rpcs;
   }
   
@@ -138,23 +145,43 @@ public final class RegionClientStats {
   public int pendingBatchedRPCs() {
     return pending_batched_rpcs;
   }
-
+  
   /**
-   * The number of RPCs that were retried by the client. This is calculated
-   * from {@code rpcsSent - (rpcid + 1)} instead of tracked independently.
-   * NOTE that if the RPC ID and/or RPCs sent wrap, this value may become funky.
-   * @return The number of RPCs retried against the server.
+   * The number of RPCs that timed out due to not receiving a response from 
+   * HBase in a configurable amount of time.
+   * @return The number of RPCs timedout
    */
-  public int rpcsRetried() {
-    return rpcs_retried;
+  public long rpcsTimedout() {
+    return rpcs_timedout;
   }
-
+  
   /**
    * The number of times sending an RPC was blocked due to the socket send
    * buffer being full. This means HBase was not consuming RPCs fast enough.
    * @return The number of writes blocked due to a full buffer.
    */
-  public int writesBlocked() {
+  public long writesBlocked() {
     return writes_blocked;
+  }
+  
+  /**
+   * Represents the number of responses that were received from HBase for RPCs
+   * that were already timed out by the client. A fairly high number means
+   * HBase is busy but recovered.
+   * @return The number of late responses received from HBase
+   */
+  public long rpcResponsesTimedout() {
+    return rpc_response_timedout;
+  }
+  
+  /**
+   * Represents the number of responses that were received from HBase that 
+   * were for RPCs the region client supposedly did not send. This means 
+   * something really strange happened, i.e. we had a corrupt packet or 
+   * HBase is sending responses for another connection.
+   * @return The number of unknown responses from HBase
+   */
+  public long rpcResponsesUnknown() {
+    return rpc_response_unknown;
   }
 }

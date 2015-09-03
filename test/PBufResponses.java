@@ -83,14 +83,16 @@ public class PBufResponses {
       final GeneratedMessageLite response) throws Exception {
     final int hlen = header.getSerializedSize();
     final int vhlen = CodedOutputStream.computeRawVarint32Size(hlen);
-    final int pblen = response.getSerializedSize();
+    final int pblen = response != null ? response.getSerializedSize() : 0;
     final int vlen = CodedOutputStream.computeRawVarint32Size(pblen);
     final byte[] buf = new byte[hlen + vhlen + vlen + pblen + 4];
     final CodedOutputStream out = CodedOutputStream.newInstance(buf, 4, 
         hlen + vhlen + vlen + pblen);
     
     out.writeMessageNoTag(header);
-    out.writeMessageNoTag(response);
+    if (response != null) {
+      out.writeMessageNoTag(response);
+    }
     
     Bytes.setInt(buf, buf.length - 4);
     return ChannelBuffers.wrappedBuffer(buf);
@@ -230,5 +232,30 @@ public class PBufResponses {
       //ByteString.copyFromUtf8(StringUtils.stringifyException(t))); // need HDP
       ByteString.copyFromUtf8(t.toString()));
     return parameterBuilder.build();
+  }
+
+  /**
+   * Generates a single PBuf with an exception instead of a response. For use,
+   * e.g., in responding to a GetRequest with an NSRE
+   * @param id The RPC ID
+   * @param clazz The remote exception class name
+   * @return A buffer you can pass to the Region Client
+   */
+  static ChannelBuffer generateException(final int id, final String clazz)
+      throws Exception {
+  
+    final RPCPB.ExceptionResponse response = 
+        RPCPB.ExceptionResponse.newBuilder()
+        .setExceptionClassName(clazz)
+        .setStackTrace("mock stack trace")
+        .build();
+    
+    final RPCPB.ResponseHeader header = RPCPB.ResponseHeader.newBuilder()
+        .setCallId(id)
+        .setException(response)
+        //.setCellBlockMeta(meta)
+        .build();
+    
+    return writeToBuffer(header, null);
   }
 }

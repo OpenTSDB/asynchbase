@@ -28,6 +28,7 @@ package org.hbase.async;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 import static org.mockito.Matchers.any;
@@ -57,20 +58,12 @@ import com.stumbleupon.async.TimeoutException;
 public class TestRegionClientSendRpc extends BaseTestRegionClient {
   private static final byte[] QUALIFIER = new byte[] { 'Q', 'A', 'L' };
   private static final byte[] VALUE = new byte[] { 42 };
-  
-  private RegionClient region_client;
-  
+
   @Before
   public void beforeLocal() throws Exception {
+    when(hbase_client.getDefaultRpcTimeout()).thenReturn(60000);
     PowerMockito.mockStatic(Channels.class);
-
-    region_client = new RegionClient(hbase_client);
-    Whitebox.setInternalState(region_client, "chan", chan);
-    Whitebox.setInternalState(region_client, "server_version", 
-        RegionClient.SERVER_VERSION_095_OR_ABOVE);
-    
-    when(hbase_client.getFlushInterval()).thenReturn((short)1000);
-    when(chan.isWritable()).thenReturn(true);
+    timer.stop();
   }
   
   @Test (expected = NullPointerException.class)
@@ -79,20 +72,17 @@ public class TestRegionClientSendRpc extends BaseTestRegionClient {
   }
   
   @Test
-  public void batchedPut() throws Exception {
+  public void putBatched() throws Exception {
+    when(hbase_client.getFlushInterval()).thenReturn((short)1000);
     final PutRequest put = new PutRequest(TABLE, KEY, FAMILY, QUALIFIER, VALUE);
     put.region = region;
     final Deferred<Object> deferred = put.getDeferred();
     
     region_client.sendRpc(put);
     
-    Exception ex = null;
     try {
       deferred.join(1);
-    } catch (Exception e) {
-      ex = e;
-    }
-    assertTrue(ex instanceof TimeoutException);
+    } catch (TimeoutException e) { }
     final MultiAction batched_rpcs = 
         Whitebox.getInternalState(region_client, "batched_rpcs");
     assertNotNull(batched_rpcs);
@@ -100,13 +90,72 @@ public class TestRegionClientSendRpc extends BaseTestRegionClient {
     PowerMockito.verifyStatic(never());
     Channels.write((Channel)any(), (ChannelBuffer)any());
     verify(hbase_client, never()).sendRpcToRegion(put);
+    assertEquals(0, rpcs_inflight.size());
     assertEquals(0, region_client.stats().rpcsSent());
+    assertEquals(0, region_client.stats().writesBlocked());
     assertEquals(1, region_client.stats().pendingBatchedRPCs());
     assertEquals(0, region_client.stats().pendingRPCs());
+    assertEquals(0, timer.tasks.size());
   }
   
   @Test
-  public void batchedAppend() throws Exception {
+  public void putNoFlushing() throws Exception {
+    final PutRequest put = new PutRequest(TABLE, KEY, FAMILY, QUALIFIER, VALUE);
+    put.region = region;
+    final Deferred<Object> deferred = put.getDeferred();
+    
+    region_client.sendRpc(put);
+    
+    try {
+      deferred.join(1);
+    } catch (TimeoutException e) { }
+    final MultiAction batched_rpcs = 
+        Whitebox.getInternalState(region_client, "batched_rpcs");
+    assertNull(batched_rpcs);
+    PowerMockito.verifyStatic(times(1));
+    Channels.write((Channel)any(), (ChannelBuffer)any());
+    verify(hbase_client, never()).sendRpcToRegion(put);
+    assertEquals(1, rpcs_inflight.size());
+    assertEquals(1, region_client.stats().rpcsSent());
+    assertEquals(0, region_client.stats().writesBlocked());
+    assertEquals(0, region_client.stats().pendingBatchedRPCs());
+    assertEquals(0, region_client.stats().pendingRPCs());
+    assertEquals(1, timer.tasks.size());
+    assertEquals(60000, (long)timer.tasks.get(0).getValue());
+    verify(timer.timeouts.get(0), never()).cancel();
+  }
+  
+  @Test
+  public void putBatchDisabled() throws Exception {
+    final PutRequest put = new PutRequest(TABLE, KEY, FAMILY, QUALIFIER, VALUE);
+    put.region = region;
+    put.setBufferable(false);
+    final Deferred<Object> deferred = put.getDeferred();
+    
+    region_client.sendRpc(put);
+    
+    try {
+      deferred.join(1);
+    } catch (TimeoutException e) { }
+    final MultiAction batched_rpcs = 
+        Whitebox.getInternalState(region_client, "batched_rpcs");
+    assertNull(batched_rpcs);
+    PowerMockito.verifyStatic(times(1));
+    Channels.write((Channel)any(), (ChannelBuffer)any());
+    verify(hbase_client, never()).sendRpcToRegion(put);
+    assertEquals(1, rpcs_inflight.size());
+    assertEquals(1, region_client.stats().rpcsSent());
+    assertEquals(0, region_client.stats().writesBlocked());
+    assertEquals(0, region_client.stats().pendingBatchedRPCs());
+    assertEquals(0, region_client.stats().pendingRPCs());
+    assertEquals(1, timer.tasks.size());
+    assertEquals(60000, (long)timer.tasks.get(0).getValue());
+    verify(timer.timeouts.get(0), never()).cancel();
+  }
+  
+  @Test
+  public void appendBatched() throws Exception {
+    when(hbase_client.getFlushInterval()).thenReturn((short)1000);
     final AppendRequest append = new AppendRequest(TABLE, KEY, FAMILY, 
         QUALIFIER, VALUE);
     append.region = region;
@@ -114,13 +163,9 @@ public class TestRegionClientSendRpc extends BaseTestRegionClient {
     
     region_client.sendRpc(append);
     
-    Exception ex = null;
     try {
       deferred.join(1);
-    } catch (Exception e) {
-      ex = e;
-    }
-    assertTrue(ex instanceof TimeoutException);
+    } catch (TimeoutException e) { }
     final MultiAction batched_rpcs = 
         Whitebox.getInternalState(region_client, "batched_rpcs");
     assertNotNull(batched_rpcs);
@@ -128,9 +173,69 @@ public class TestRegionClientSendRpc extends BaseTestRegionClient {
     PowerMockito.verifyStatic(never());
     Channels.write((Channel)any(), (ChannelBuffer)any());
     verify(hbase_client, never()).sendRpcToRegion(append);
+    assertEquals(0, rpcs_inflight.size());
     assertEquals(0, region_client.stats().rpcsSent());
+    assertEquals(0, region_client.stats().writesBlocked());
     assertEquals(1, region_client.stats().pendingBatchedRPCs());
     assertEquals(0, region_client.stats().pendingRPCs());
+    assertEquals(0, timer.tasks.size());
+  }
+  
+  @Test
+  public void appendNoFlushing() throws Exception {
+    final AppendRequest append = new AppendRequest(TABLE, KEY, FAMILY, 
+        QUALIFIER, VALUE);
+    append.region = region;
+    final Deferred<Object> deferred = append.getDeferred();
+    
+    region_client.sendRpc(append);
+    
+    try {
+      deferred.join(1);
+    } catch (TimeoutException e) { }
+    final MultiAction batched_rpcs = 
+        Whitebox.getInternalState(region_client, "batched_rpcs");
+    assertNull(batched_rpcs);
+    PowerMockito.verifyStatic(times(1));
+    Channels.write((Channel)any(), (ChannelBuffer)any());
+    verify(hbase_client, never()).sendRpcToRegion(append);
+    assertEquals(1, rpcs_inflight.size());
+    assertEquals(1, region_client.stats().rpcsSent());
+    assertEquals(0, region_client.stats().writesBlocked());
+    assertEquals(0, region_client.stats().pendingBatchedRPCs());
+    assertEquals(0, region_client.stats().pendingRPCs());
+    assertEquals(1, timer.tasks.size());
+    assertEquals(60000, (long)timer.tasks.get(0).getValue());
+    verify(timer.timeouts.get(0), never()).cancel();
+  }
+  
+  @Test
+  public void appendBatchDisabled() throws Exception {
+    final AppendRequest append = new AppendRequest(TABLE, KEY, FAMILY, 
+        QUALIFIER, VALUE);
+    append.region = region;
+    append.setBufferable(false);
+    final Deferred<Object> deferred = append.getDeferred();
+    
+    region_client.sendRpc(append);
+    
+    try {
+      deferred.join(1);
+    } catch (TimeoutException e) { }
+    final MultiAction batched_rpcs = 
+        Whitebox.getInternalState(region_client, "batched_rpcs");
+    assertNull(batched_rpcs);
+    PowerMockito.verifyStatic(times(1));
+    Channels.write((Channel)any(), (ChannelBuffer)any());
+    verify(hbase_client, never()).sendRpcToRegion(append);
+    assertEquals(1, rpcs_inflight.size());
+    assertEquals(1, region_client.stats().rpcsSent());
+    assertEquals(0, region_client.stats().writesBlocked());
+    assertEquals(0, region_client.stats().pendingBatchedRPCs());
+    assertEquals(0, region_client.stats().pendingRPCs());
+    assertEquals(1, timer.tasks.size());
+    assertEquals(60000, (long)timer.tasks.get(0).getValue());
+    verify(timer.timeouts.get(0), never()).cancel();
   }
   
   @Test
@@ -148,7 +253,49 @@ public class TestRegionClientSendRpc extends BaseTestRegionClient {
     assertEquals(0, region_client.stats().pendingBatchedRPCs());
     assertEquals(0, region_client.stats().pendingRPCs());
   }
- 
+
+  @Test
+  public void getRequestNoTimeout() throws Exception {
+    final GetRequest get = new GetRequest(TABLE, KEY, FAMILY, QUALIFIER);
+    get.setRegion(region);
+    get.setTimeout(0);
+    get.getDeferred(); // required to initialize the deferred
+    
+    region_client.sendRpc(get);
+    
+    PowerMockito.verifyStatic(times(1));
+    Channels.write((Channel)any(), (ChannelBuffer)any());
+    verify(hbase_client, never()).sendRpcToRegion(get);
+    assertEquals(1, rpcs_inflight.size());
+    assertEquals(1, region_client.stats().rpcsSent());
+    assertEquals(0, region_client.stats().writesBlocked());
+    assertEquals(0, region_client.stats().pendingBatchedRPCs());
+    assertEquals(0, region_client.stats().pendingRPCs());
+    assertEquals(0, timer.tasks.size());
+  }
+  
+  @Test
+  public void getRequestCustomTimeout() throws Exception {
+    final GetRequest get = new GetRequest(TABLE, KEY, FAMILY, QUALIFIER);
+    get.setRegion(region);
+    get.setTimeout(42000);
+    get.getDeferred(); // required to initialize the deferred
+    
+    region_client.sendRpc(get);
+    
+    PowerMockito.verifyStatic(times(1));
+    Channels.write((Channel)any(), (ChannelBuffer)any());
+    verify(hbase_client, never()).sendRpcToRegion(get);
+    assertEquals(1, rpcs_inflight.size());
+    assertEquals(1, region_client.stats().rpcsSent());
+    assertEquals(0, region_client.stats().writesBlocked());
+    assertEquals(0, region_client.stats().pendingBatchedRPCs());
+    assertEquals(0, region_client.stats().pendingRPCs());
+    assertEquals(1, timer.tasks.size());
+    assertEquals(42000, (long)timer.tasks.get(0).getValue());
+    verify(timer.timeouts.get(0), never()).cancel();
+  }
+  
   @Test (expected = AssertionError.class)
   public void getRequestUninitializedDeferred() throws Exception {
     final GetRequest get = new GetRequest(TABLE, KEY, FAMILY, QUALIFIER);
@@ -156,7 +303,6 @@ public class TestRegionClientSendRpc extends BaseTestRegionClient {
     region_client.sendRpc(get);
   }
   
-
   @Test
   public void getRequestBlockedWriteIgnoreState() throws Exception {
     when(chan.isWritable()).thenReturn(false);

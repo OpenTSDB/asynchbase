@@ -339,6 +339,11 @@ public class Config {
     
     default_map.put("hbase.security.auth.enable", "false");
     
+    /** Note that HBase's client defaults to 60 seconds. We default to 0 for
+     * AsyncHBase backwards compatibility. This may change in the future.
+     */
+    default_map.put("hbase.rpc.timeout", "0");
+    
     for (Map.Entry<String, String> entry : default_map.entrySet()) {
       if (!properties.containsKey(entry.getKey()))
         properties.put(entry.getKey(), entry.getValue());

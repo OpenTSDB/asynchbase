@@ -198,6 +198,17 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
    * they may not have made it all the way */
   private final AtomicInteger rpcs_sent = new AtomicInteger();
   
+  /** Number of RPCs failed due to timeout */
+  private final AtomicInteger rpcs_timedout = new AtomicInteger();
+  
+  /** The number of responses received from HBase that were timed out, meaning
+   * we got the results late. */
+  private final AtomicInteger rpc_response_timedout = new AtomicInteger();
+  
+  /** The number of responses received from HBase that didn't match an RPC that
+   * we sent. This means the ID was greater than our RPC ID counter */
+  private final AtomicInteger rpc_response_unknown = new AtomicInteger();
+  
   /** Number of RPCs that were blocked due to the channel in a non-writable state */
   private final AtomicInteger writes_blocked = new AtomicInteger();
   
@@ -277,7 +288,10 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
         dead,
         chan != null ? chan.getRemoteAddress().toString() : "",
         batched_rpcs != null ? batched_rpcs.size() : 0,
-        writes_blocked.get()
+        rpcs_timedout.get(),
+        writes_blocked.get(),
+        rpc_response_timedout.get(),
+        rpc_response_unknown.get()
       );
     }
   }
@@ -952,11 +966,12 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
         if (check_write_status && !chan.isWritable()) {
           rpc.callback(new PleaseThrottleException("Region client [" + this + 
               " ] channel is not writeable.", null, rpc, rpc.getDeferred()));
-          rpcs_inflight.remove(rpc.rpc_id);
+          removeRpc(rpc, false);
           writes_blocked.incrementAndGet();
           return;
         }
         
+        rpc.enqueueTimeout(this);
         Channels.write(chan, serialized);
         rpcs_sent.incrementAndGet();
         return;
@@ -1353,8 +1368,9 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
       }
     }
     
+    final int size;
     if (server_version >= SERVER_VERSION_095_OR_ABOVE) {
-      final int size = buf.readInt();
+      size = buf.readInt();
       ensureReadable(buf, size);
       HBaseRpc.checkArrayLength(buf, size);
       header = HBaseRpc.readProtobuf(buf, RPCPB.ResponseHeader.PARSER);
@@ -1365,25 +1381,44 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
       }
       rpcid = header.getCallId();
     } else {  // HBase 0.94 and before.
+      size = 0;
       header = null;  // No protobuf back then.
       rpcid = buf.readInt();
     }
 
-    final HBaseRpc rpc = rpcs_inflight.get(rpcid);
-
+    final HBaseRpc rpc = rpcs_inflight.remove(rpcid);
     if (rpc == null) {
-      final String msg = "Invalid rpcid: " + rpcid + " found in "
-        + buf + '=' + Bytes.pretty(buf);
-      LOG.error(msg);
-      // The problem here is that we don't know which Deferred corresponds to
-      // this RPC, since we don't have a valid ID.  So we're hopeless, we'll
-      // never be able to recover because responses are not framed, we don't
-      // know where the next response will start...  We have to give up here
-      // and throw this outside of our Netty handler, so Netty will call our
-      // exception handler where we'll close this channel, which will cause
-      // all RPCs in flight to be failed.
-      throw new NonRecoverableException(msg);
+      // TODO - account for the rpcid overflow
+      if (rpcid > -1 && rpcid <= this.rpcid.get()) {
+        if (LOG.isDebugEnabled()) {
+          LOG.debug("Received a response for rpcid: " + rpcid + 
+              " that is no longer in our inflight map on region client " + this + 
+              ". It may have been evicted. buf=" + Bytes.pretty(buf));
+        }
+        rpc_response_timedout.incrementAndGet();
+      } else {
+        if (LOG.isDebugEnabled()) {
+          LOG.debug("Received rpcid: " + rpcid + " that doesn't seem to be a "
+              + "valid ID on region client " + this + ". This packet may have "
+              + "been corrupted. buf=" + Bytes.pretty(buf));
+        }
+        rpc_response_unknown.incrementAndGet();
+      }
+      
+      // make sure to consume the RPC body so that we can decode the next
+      // RPC in the buffer if there is one.
+      buf.readerIndex(rdx + size + 4);
+      if (LOG.isDebugEnabled()) {
+        LOG.debug("Skipped timed out RPC ID " + rpcid + " of " + size + 
+            " bytes on " + this);
+      }
+      return null;
     }
+    
+    // TODO - if the RPC doesn't match we could search the map for the proper
+    // RPC. For now though, something went really pear shaped so we should
+    // toss an exception.
+    assert rpc.rpc_id == rpcid;
 
     final Object decoded;
     try {
@@ -1414,10 +1449,6 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
         e = new NonRecoverableException(msg, e);
       }
       rpc.callback(e);
-      {
-        final HBaseRpc removed = rpcs_inflight.remove(rpcid);
-        assert rpc == removed;
-      }
       throw e;
     }
 
@@ -1426,11 +1457,6 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
                 + ", response size=" + (buf.readerIndex() - rdx) + " bytes"
                 + ", " + actualReadableBytes() + " readable bytes left"
                 + ", rpc=" + rpc);
-    }
-
-    {
-      final HBaseRpc removed = rpcs_inflight.remove(rpcid);
-      assert rpc == removed;
     }
 
     if (decoded instanceof NotServingRegionException
@@ -1782,6 +1808,36 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
     }
   }
 
+  /**
+   * Package private method to allow the timeout timer or other methods 
+   * to remove an RPCfrom the inflight map. Note that the RPC ID has to be set 
+   * in the RPC for this to work. And if, somehow, we pop a different RPC from 
+   * the map then we'll make sure to callback the popped RPC
+   * @param rpc The RPC to remove from the map
+   * @param timedout Whether or not the RPC timedout
+   * @return The RPC that was removed
+   */
+  HBaseRpc removeRpc(final HBaseRpc rpc, final boolean timedout) {
+    final HBaseRpc old_rpc = rpcs_inflight.remove(rpc.rpc_id);
+    if (old_rpc != rpc) {
+      LOG.error("Removed the wrong RPC " + old_rpc + 
+          " when we meant to remove " + rpc);
+      if (old_rpc != null) {
+        old_rpc.callback(new NonRecoverableException(
+            "Removed the wrong RPC from client " + this));
+      }
+    }
+    if (timedout) {
+      rpcs_timedout.incrementAndGet();
+    }
+    return old_rpc;
+  }
+  
+  /** @return Package private method to fetch the associated HBase client */
+  HBaseClient getHBaseClient() {
+    return hbase_client;
+  }
+  
   public String toString() {
     final StringBuilder buf = new StringBuilder(13 + 10 + 6 + 64 + 16 + 1
                                                 + 9 + 2 + 17 + 2 + 1);

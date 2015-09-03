@@ -55,6 +55,7 @@ import org.hbase.async.generated.ClientPB.GetResponse;
 import org.hbase.async.generated.ClientPB.Result;
 import org.hbase.async.generated.RPCPB;
 import org.hbase.async.generated.RPCPB.CellBlockMeta;
+import org.jboss.netty.buffer.BigEndianHeapChannelBuffer;
 import org.jboss.netty.buffer.ChannelBuffer;
 import org.jboss.netty.buffer.ChannelBuffers;
 import org.jboss.netty.buffer.ReadOnlyChannelBuffer;
@@ -62,6 +63,7 @@ import org.jboss.netty.channel.ChannelHandlerContext;
 import org.jboss.netty.channel.Channels;
 import org.jboss.netty.channel.MessageEvent;
 import org.jboss.netty.handler.codec.replay.VoidEnum;
+import org.junit.Before;
 import org.junit.Test;
 import org.powermock.api.mockito.PowerMockito;
 import org.powermock.core.classloader.annotations.PrepareForTest;
@@ -86,13 +88,19 @@ public class TestRegionClientDecode extends BaseTestRegionClient {
   // backed by an array and we have methods that attemp to see if they can
   // perform zero copy operations.
   
+  @Before
+  public void beforeLocal() throws Exception {
+    when(hbase_client.getDefaultRpcTimeout()).thenReturn(60000);
+    timer.stop();
+  }
+  
   @Test
   public void goodGetRequest() throws Exception {
     final int id = 42;
     final ChannelBuffer buffer = buildGoodResponse(false, id);
     final GetRequest get = new GetRequest(TABLE, ROW);
     final Deferred<Object> deferred = get.getDeferred();
-    rpcs_inflight.put(id, get);
+    inflightTheRpc(id, get);
     
     assertNull(region_client.decode(ctx, chan, buffer, VOID));
     @SuppressWarnings("unchecked")
@@ -104,6 +112,9 @@ public class TestRegionClientDecode extends BaseTestRegionClient {
     assertArrayEquals(VALUE, kvs.get(0).value());
     assertEquals(TIMESTAMP, kvs.get(0).timestamp());
     verify(secure_rpc_helper, never()).handleResponse(buffer, chan);
+    assertEquals(1, timer.tasks.size());
+    assertEquals(60000, (long)timer.tasks.get(0).getValue());
+    verify(timer.timeouts.get(0), times(1)).cancel();
   }
   
   @Test
@@ -112,7 +123,7 @@ public class TestRegionClientDecode extends BaseTestRegionClient {
     final ChannelBuffer buffer = buildGoodResponse(true, id);
     final GetRequest get = new GetRequest(TABLE, ROW);
     final Deferred<Object> deferred = get.getDeferred();
-    rpcs_inflight.put(id, get);
+    inflightTheRpc(id, get);
     
     assertNull(region_client.decode(ctx, chan, buffer, VOID));
     @SuppressWarnings("unchecked")
@@ -124,6 +135,9 @@ public class TestRegionClientDecode extends BaseTestRegionClient {
     assertArrayEquals(VALUE, kvs.get(0).value());
     assertEquals(TIMESTAMP, kvs.get(0).timestamp());
     verify(secure_rpc_helper, never()).handleResponse(buffer, chan);
+    assertEquals(1, timer.tasks.size());
+    assertEquals(60000, (long)timer.tasks.get(0).getValue());
+    verify(timer.timeouts.get(0), times(1)).cancel();
   }
 
   @Test
@@ -133,7 +147,7 @@ public class TestRegionClientDecode extends BaseTestRegionClient {
     final ChannelBuffer buffer = buildGoodResponse(false, id);
     final GetRequest get = new GetRequest(TABLE, ROW);
     final Deferred<Object> deferred = get.getDeferred();
-    rpcs_inflight.put(id, get);
+    inflightTheRpc(id, get);
     
     assertNull(region_client.decode(ctx, chan, buffer, VOID));
     @SuppressWarnings("unchecked")
@@ -145,6 +159,9 @@ public class TestRegionClientDecode extends BaseTestRegionClient {
     assertArrayEquals(VALUE, kvs.get(0).value());
     assertEquals(TIMESTAMP, kvs.get(0).timestamp());
     verify(secure_rpc_helper, times(1)).handleResponse(buffer, chan);
+    assertEquals(1, timer.tasks.size());
+    assertEquals(60000, (long)timer.tasks.get(0).getValue());
+    verify(timer.timeouts.get(0), times(1)).cancel();
   }
   
   @Test
@@ -154,7 +171,7 @@ public class TestRegionClientDecode extends BaseTestRegionClient {
     final ChannelBuffer buffer = buildGoodResponse(true, id);
     final GetRequest get = new GetRequest(TABLE, ROW);
     final Deferred<Object> deferred = get.getDeferred();
-    rpcs_inflight.put(id, get);
+    inflightTheRpc(id, get);
     
     assertNull(region_client.decode(ctx, chan, buffer, VOID));
     @SuppressWarnings("unchecked")
@@ -166,6 +183,9 @@ public class TestRegionClientDecode extends BaseTestRegionClient {
     assertArrayEquals(VALUE, kvs.get(0).value());
     assertEquals(TIMESTAMP, kvs.get(0).timestamp());
     verify(secure_rpc_helper, times(1)).handleResponse(buffer, chan);
+    assertEquals(1, timer.tasks.size());
+    assertEquals(60000, (long)timer.tasks.get(0).getValue());
+    verify(timer.timeouts.get(0), times(1)).cancel();
   }
   
   @Test
@@ -175,20 +195,19 @@ public class TestRegionClientDecode extends BaseTestRegionClient {
     final ChannelBuffer buffer = buildGoodResponse(false, id);
     final GetRequest get = new GetRequest(TABLE, ROW);
     final Deferred<Object> deferred = get.getDeferred();
-    rpcs_inflight.put(id, get);
+    inflightTheRpc(id, get);
     
     when(secure_rpc_helper.handleResponse(buffer, chan)).thenReturn(null);
     
     assertNull(region_client.decode(ctx, chan, buffer, VOID));
     
-    Exception e = null;
     try {
       deferred.join(500);
-      fail("Expected to fail the join");
-    } catch (TimeoutException te) {
-      e = te;
-    }
-    assertNotNull(e);
+      fail("Expected a TimeoutException");
+    } catch (TimeoutException te) { }
+    assertEquals(1, timer.tasks.size());
+    assertEquals(60000, (long)timer.tasks.get(0).getValue());
+    verify(timer.timeouts.get(0), never()).cancel();
   }
   
   @Test
@@ -198,20 +217,19 @@ public class TestRegionClientDecode extends BaseTestRegionClient {
     final ChannelBuffer buffer = buildGoodResponse(true, id);
     final GetRequest get = new GetRequest(TABLE, ROW);
     final Deferred<Object> deferred = get.getDeferred();
-    rpcs_inflight.put(id, get);
+    inflightTheRpc(id, get);
     
     when(secure_rpc_helper.handleResponse(buffer, chan)).thenReturn(null);
     
     assertNull(region_client.decode(ctx, chan, buffer, VOID));
     
-    Exception e = null;
     try {
       deferred.join(500);
-      fail("Expected to fail the join");
-    } catch (TimeoutException te) {
-      e = te;
-    }
-    assertNotNull(e);
+      fail("Expected a TimeoutException");
+    } catch (TimeoutException te) { }
+    assertEquals(1, timer.tasks.size());
+    assertEquals(60000, (long)timer.tasks.get(0).getValue());
+    verify(timer.timeouts.get(0), never()).cancel();
   }
   
   @Test
@@ -222,28 +240,23 @@ public class TestRegionClientDecode extends BaseTestRegionClient {
     final int id = 42;
     final GetRequest get = new GetRequest(TABLE, ROW);
     final Deferred<Object> deferred = get.getDeferred();
-    rpcs_inflight.put(id, get);
+    inflightTheRpc(id, get);
     
     ChannelBuffer buffer = new ReadOnlyChannelBuffer(
         ChannelBuffers.wrappedBuffer(new byte[] { 0, 0, 0, 3, 2, 8, 42 }));
-    RuntimeException e = null;
     try {
       region_client.decode(ctx, chan, buffer, VOID);
       fail("Expected a NonRecoverableException");
-    } catch (NonRecoverableException ex) {
-      e = ex;
-    }
-    assertTrue(e instanceof NonRecoverableException);
+    } catch (NonRecoverableException ex) { }
     
-    e = null;
     try {
       deferred.join();
       fail("Expected the join to throw a NonRecoverableException");
-    } catch (NonRecoverableException ex) {
-      e = ex;
-    }
-    assertTrue(e instanceof NonRecoverableException);
-    assertEquals(0, rpcs_inflight.size());  
+    } catch (NonRecoverableException ex) { }
+    assertEquals(0, rpcs_inflight.size());
+    assertEquals(1, timer.tasks.size());
+    assertEquals(60000, (long)timer.tasks.get(0).getValue());
+    verify(timer.timeouts.get(0), times(1)).cancel();
   }
   
   @Test
@@ -254,40 +267,31 @@ public class TestRegionClientDecode extends BaseTestRegionClient {
     final int id = 42;
     final GetRequest get = new GetRequest(TABLE, ROW);
     final Deferred<Object> deferred = get.getDeferred();
-    rpcs_inflight.put(id, get);
+    inflightTheRpc(id, get);
     
     ChannelBuffer buffer = 
         ChannelBuffers.wrappedBuffer(new byte[] { 0, 0, 0, 3, 2, 8, 42 });
-    RuntimeException e = null;
     try {
       region_client.decode(ctx, chan, buffer, VOID);
       fail("Expected a NonRecoverableException");
-    } catch (NonRecoverableException ex) {
-      e = ex;
-    }
-    assertTrue(e instanceof NonRecoverableException);
+    } catch (NonRecoverableException ex) { }
     
-    e = null;
     try {
       deferred.join();
       fail("Expected the join to throw a NonRecoverableException");
-    } catch (NonRecoverableException ex) {
-      e = ex;
-    }
-    assertTrue(e instanceof NonRecoverableException);
-    assertEquals(0, rpcs_inflight.size());  
+    } catch (NonRecoverableException ex) { }
+    assertEquals(0, rpcs_inflight.size());
+    assertEquals(1, timer.tasks.size());
+    assertEquals(60000, (long)timer.tasks.get(0).getValue());
+    verify(timer.timeouts.get(0), times(1)).cancel();
   }
   
   @Test
   public void pbufDeserializeFailureWHBaseException() throws Exception {
-    // not entirely sure how this would happen, maybe if there was an exception
-    // encoded in the cell meta header or something?
     final int id = 42;
-    final GetRequest get = mock(GetRequest.class);
+    final GetRequest get = new GetRequest(TABLE, ROW);
     final Deferred<Object> deferred = get.getDeferred();
-    when(get.deserialize(any(ChannelBuffer.class), anyInt()))
-      .thenThrow(new TestingHBaseException("Boo!"));
-    rpcs_inflight.put(id, get);
+    inflightTheRpc(id, get);
     
     ChannelBuffer buffer = new ReadOnlyChannelBuffer(
         ChannelBuffers.wrappedBuffer(new byte[] { 0, 0, 0, 1, 2, 8, 42 }));
@@ -302,37 +306,94 @@ public class TestRegionClientDecode extends BaseTestRegionClient {
     
     e = null;
     try {
-      deferred.join();
+      deferred.join(100);
       fail("Expected the join to throw a HBaseException");
     } catch (HBaseException ex) {
       e = ex;
     }
     assertTrue(e instanceof HBaseException);
     assertEquals(0, rpcs_inflight.size());
+    assertEquals(1, timer.tasks.size());
+    assertEquals(60000, (long)timer.tasks.get(0).getValue());
+    verify(timer.timeouts.get(0), times(1)).cancel();
   }
   
   @Test
-  public void nsre() throws Exception {
+  public void notServingRegionException() throws Exception {
     final int id = 42;
-    final GetRequest get = PowerMockito.mock(GetRequest.class);
-    final NotServingRegionException nsre = 
-        new NotServingRegionException("Boo!", get);
-    when(get.deserialize(any(ChannelBuffer.class), anyInt()))
-      .thenReturn(nsre);
-    when(get.getRegion()).thenReturn(region);
-    rpcs_inflight.put(id, get);
+    final GetRequest get = new GetRequest(TABLE, ROW);
+    get.region = region;
+    inflightTheRpc(id, get);
     
-    ChannelBuffer buffer = new ReadOnlyChannelBuffer(
-        ChannelBuffers.wrappedBuffer(new byte[] { 0, 0, 0, 1, 2, 8, 42 }));
+    ChannelBuffer buffer = PBufResponses.generateException(id, 
+        "org.apache.hadoop.hbase.NotServingRegionException");
     assertNull(region_client.decode(ctx, chan, buffer, VOID));
 
     assertEquals(0, rpcs_inflight.size());
-    verify(hbase_client, times(1))
-      .handleNSRE(get, region.name(), nsre);
-    verify(get, never()).callback(anyObject());
-    verify(get, never()).getDeferred();
+    verify(hbase_client, times(1)).handleNSRE(any(HBaseRpc.class), 
+        any(byte[].class), any(RecoverableException.class));
+    assertEquals(1, timer.tasks.size());
+    assertEquals(60000, (long)timer.tasks.get(0).getValue());
+    verify(timer.timeouts.get(0), never()).cancel();
   }
+  
+  @Test
+  public void regionMovedException() throws Exception {
+    final int id = 42;
+    final GetRequest get = new GetRequest(TABLE, ROW);
+    get.region = region;
+    inflightTheRpc(id, get);
+    
+    ChannelBuffer buffer = PBufResponses.generateException(id, 
+        "org.apache.hadoop.hbase.exceptions.RegionMovedException");
+    assertNull(region_client.decode(ctx, chan, buffer, VOID));
 
+    assertEquals(0, rpcs_inflight.size());
+    verify(hbase_client, times(1)).handleNSRE(any(HBaseRpc.class), 
+        any(byte[].class), any(RecoverableException.class));
+    assertEquals(1, timer.tasks.size());
+    assertEquals(60000, (long)timer.tasks.get(0).getValue());
+    verify(timer.timeouts.get(0), never()).cancel();
+  }
+  
+  @Test
+  public void noSuchColumnFamilyException() throws Exception {
+    final int id = 42;
+    final GetRequest get = new GetRequest(TABLE, ROW);
+    get.region = region;
+    inflightTheRpc(id, get);
+    
+    ChannelBuffer buffer = PBufResponses.generateException(id, 
+        "org.apache.hadoop.hbase.regionserver.NoSuchColumnFamilyException");
+    assertNull(region_client.decode(ctx, chan, buffer, VOID));
+
+    assertEquals(0, rpcs_inflight.size());
+    verify(hbase_client, never()).handleNSRE(any(HBaseRpc.class), 
+        any(byte[].class), any(RecoverableException.class));
+    assertEquals(1, timer.tasks.size());
+    assertEquals(60000, (long)timer.tasks.get(0).getValue());
+    verify(timer.timeouts.get(0), times(1)).cancel();
+  }
+  
+  @Test
+  public void versionMismatchException() throws Exception {
+    final int id = 42;
+    final GetRequest get = new GetRequest(TABLE, ROW);
+    get.region = region;
+    inflightTheRpc(id, get);
+    
+    ChannelBuffer buffer = PBufResponses.generateException(id, 
+        "org.apache.hadoop.io.VersionMismatchException");
+    assertNull(region_client.decode(ctx, chan, buffer, VOID));
+
+    assertEquals(0, rpcs_inflight.size());
+    verify(hbase_client, never()).handleNSRE(any(HBaseRpc.class), 
+        any(byte[].class), any(RecoverableException.class));
+    assertEquals(1, timer.tasks.size());
+    assertEquals(60000, (long)timer.tasks.get(0).getValue());
+    verify(timer.timeouts.get(0), times(1)).cancel();
+  }
+  
   @Test
   public void replayed() throws Exception {
     resetMockClient();
@@ -344,18 +405,15 @@ public class TestRegionClientDecode extends BaseTestRegionClient {
     
     final GetRequest get = new GetRequest(TABLE, ROW);
     final Deferred<Object> deferred = get.getDeferred();
-    rpcs_inflight.put(id, get);
-    
-    final byte[][] chunks = new byte[3][];
-    chunks[0] = Arrays.copyOf(array, 3);
-    chunks[1] = Arrays.copyOfRange(array, 3, 10);
-    chunks[2] = Arrays.copyOfRange(array, 10, array.length);
+    inflightTheRpc(id, get);
     
     final MessageEvent event = mock(MessageEvent.class);
     when(event.getMessage())
-      .thenReturn(ChannelBuffers.wrappedBuffer(chunks[0]))
-      .thenReturn(ChannelBuffers.wrappedBuffer(chunks[1]))
-      .thenReturn(ChannelBuffers.wrappedBuffer(chunks[2]));
+      .thenReturn(ChannelBuffers.wrappedBuffer(Arrays.copyOf(array, 3)))
+      .thenReturn(ChannelBuffers.wrappedBuffer(
+          Arrays.copyOfRange(array, 3, 10)))
+      .thenReturn(ChannelBuffers.wrappedBuffer(
+          Arrays.copyOfRange(array, 10, array.length)));
     
     region_client.messageReceived(ctx, event);
     region_client.messageReceived(ctx, event);
@@ -370,36 +428,9 @@ public class TestRegionClientDecode extends BaseTestRegionClient {
     assertArrayEquals(VALUE, kvs.get(0).value());
     assertEquals(TIMESTAMP, kvs.get(0).timestamp());
     verify(secure_rpc_helper, never()).handleResponse(buffer, chan);
-  }
- 
-  @Test
-  public void noReplayNeeded() throws Exception {
-    resetMockClient();
-    
-    final int id = 42;
-    final ChannelBuffer buffer = buildGoodResponse(true, id);
-    final byte[] array = new byte[buffer.writerIndex()];
-    buffer.readBytes(array);
-    
-    final GetRequest get = new GetRequest(TABLE, ROW);
-    final Deferred<Object> deferred = get.getDeferred();
-    rpcs_inflight.put(id, get);
-    
-    final MessageEvent event = mock(MessageEvent.class);
-    when(event.getMessage())
-      .thenReturn(ChannelBuffers.wrappedBuffer(array));
-    
-    region_client.messageReceived(ctx, event);
-    
-    @SuppressWarnings("unchecked")
-    final List<KeyValue> kvs = (List<KeyValue>)deferred.join(100);
-    assertEquals(1, kvs.size());
-    assertArrayEquals(ROW, kvs.get(0).key());
-    assertArrayEquals(FAMILY, kvs.get(0).family());
-    assertArrayEquals(QUALIFIER, kvs.get(0).qualifier());
-    assertArrayEquals(VALUE, kvs.get(0).value());
-    assertEquals(TIMESTAMP, kvs.get(0).timestamp());
-    verify(secure_rpc_helper, never()).handleResponse(buffer, chan);
+    assertEquals(1, timer.tasks.size());
+    assertEquals(60000, (long)timer.tasks.get(0).getValue());
+    verify(timer.timeouts.get(0), times(1)).cancel();
   }
   
   @Test
@@ -413,38 +444,29 @@ public class TestRegionClientDecode extends BaseTestRegionClient {
     
     final GetRequest get = new GetRequest(TABLE, ROW);
     final Deferred<Object> deferred = get.getDeferred();
-    rpcs_inflight.put(id, get);
-    
-    final byte[][] chunks = new byte[2][];
-    chunks[0] = Arrays.copyOf(array, 3);
-    chunks[1] = Arrays.copyOfRange(array, 10, array.length);
+    inflightTheRpc(id, get);
     
     final MessageEvent event = mock(MessageEvent.class);
     when(event.getMessage())
-      .thenReturn(ChannelBuffers.wrappedBuffer(chunks[0]))
-      .thenReturn(ChannelBuffers.wrappedBuffer(chunks[1]));
+      .thenReturn(ChannelBuffers.wrappedBuffer(Arrays.copyOf(array, 3)))
+      .thenReturn(ChannelBuffers.wrappedBuffer(
+          Arrays.copyOfRange(array, 10, array.length)));
     
-    RuntimeException e = null;
+    
+    region_client.messageReceived(ctx, event);
     try {
       region_client.messageReceived(ctx, event);
-    } catch (RuntimeException ex) {
-      e = ex;
-    }
-    assertNull(e);
-
-    try {
-      region_client.messageReceived(ctx, event);
-    } catch (RuntimeException ex) {
-      e = ex;
-    }
-    assertTrue(e instanceof InvalidResponseException);
-
+      fail("Expected an InvalidResponseException");
+    } catch (InvalidResponseException ex) { }
+    
     try {
       deferred.join(100);
-    }  catch (RuntimeException ex) {
-      e = ex;
-    }
-    assertTrue(e instanceof TimeoutException);
+      fail("Expected an TimeoutException");
+    } catch (TimeoutException ex) { }
+    
+    assertEquals(1, timer.tasks.size());
+    assertEquals(60000, (long)timer.tasks.get(0).getValue());
+    verify(timer.timeouts.get(0), never()).cancel();
   }
 
   @Test
@@ -472,7 +494,7 @@ public class TestRegionClientDecode extends BaseTestRegionClient {
     
     final GetRequest get = new GetRequest(TABLE, ROW);
     final Deferred<Object> deferred = get.getDeferred();
-    rpcs_inflight.put(id, get);
+    inflightTheRpc(id, get);
     
     final byte[][] chunks = new byte[2][];
     chunks[0] = Arrays.copyOf(array, 3);
@@ -493,13 +515,13 @@ public class TestRegionClientDecode extends BaseTestRegionClient {
     region_client.messageReceived(ctx, event);
     region_client.messageReceived(ctx, event);
     
-    RuntimeException e = null;
     try {
       deferred.join(100);
-    } catch (RuntimeException ex) {
-      e = ex;
-    }
-    assertTrue(e instanceof TimeoutException);
+    } catch (TimeoutException ex) { }
+    
+    assertEquals(1, timer.tasks.size());
+    assertEquals(60000, (long)timer.tasks.get(0).getValue());
+    verify(timer.timeouts.get(0), never()).cancel();
   }
   
   @Test
@@ -510,15 +532,15 @@ public class TestRegionClientDecode extends BaseTestRegionClient {
     
     final GetRequest get1 = new GetRequest(TABLE, ROW);
     deferreds.add(get1.getDeferred());
-    rpcs_inflight.put(1, get1);
+    inflightTheRpc(1, get1);
     
     final GetRequest get2 = new GetRequest(TABLE, ROW);
     deferreds.add(get2.getDeferred());
-    rpcs_inflight.put(2, get2);
+    inflightTheRpc(2, get2);
     
     final GetRequest get3 = new GetRequest(TABLE, ROW);
     deferreds.add(get3.getDeferred());
-    rpcs_inflight.put(3, get3);
+    inflightTheRpc(3, get3);
     
     byte[] pbuf1 = buildGoodResponse(true, 1).array();
     byte[] pbuf2 = buildGoodResponse(true, 2).array();
@@ -567,6 +589,13 @@ public class TestRegionClientDecode extends BaseTestRegionClient {
       assertArrayEquals(VALUE, kvs.get(0).value());
       assertEquals(TIMESTAMP, kvs.get(0).timestamp());
     }
+    assertEquals(3, timer.tasks.size());
+    assertEquals(60000, (long)timer.tasks.get(0).getValue());
+    assertEquals(60000, (long)timer.tasks.get(1).getValue());
+    assertEquals(60000, (long)timer.tasks.get(2).getValue());
+    verify(timer.timeouts.get(0)).cancel();
+    verify(timer.timeouts.get(1)).cancel();
+    verify(timer.timeouts.get(2)).cancel();
   }
   
   @SuppressWarnings("unchecked")
@@ -578,15 +607,15 @@ public class TestRegionClientDecode extends BaseTestRegionClient {
     
     final GetRequest get1 = new GetRequest(TABLE, ROW);
     deferreds.add(get1.getDeferred());
-    rpcs_inflight.put(1, get1);
+    inflightTheRpc(1, get1);
     
     final GetRequest get2 = new GetRequest(TABLE, ROW);
     deferreds.add(get2.getDeferred());
-    rpcs_inflight.put(2, get2);
+    inflightTheRpc(2, get2);
     
     final GetRequest get3 = new GetRequest(TABLE, ROW);
     deferreds.add(get3.getDeferred());
-    rpcs_inflight.put(3, get3);
+    inflightTheRpc(3, get3);
     
     byte[] pbuf1 = buildGoodResponse(true, 1).array();
     byte[] pbuf2 = buildGoodResponse(true, 2).array();
@@ -625,14 +654,10 @@ public class TestRegionClientDecode extends BaseTestRegionClient {
     // because our corrupted RPC is missing a little bit of data at the end 
     // we will proceed to replay
     
-    RuntimeException ex = null;
     try {
       region_client.messageReceived(ctx, event);
       fail("Expected an InvalidResponseException");
-    } catch (RuntimeException e) {
-      ex = e;
-    }
-    assertTrue(ex instanceof InvalidResponseException);
+    } catch (InvalidResponseException e) { }
 
     // Make sure the first RPC was called back
     List<KeyValue> kvs = (List<KeyValue>)deferreds.get(0).join(100);
@@ -645,24 +670,24 @@ public class TestRegionClientDecode extends BaseTestRegionClient {
    
     // The second will toss the invalid RPC exception, causing the region client
     // to close.
-    ex = null;
     try {
       kvs = (List<KeyValue>)deferreds.get(1).join(100);
       fail("Expected a TimeoutException");
-    } catch (RuntimeException e) {
-      ex = e;
-    }
-    assertTrue(ex instanceof InvalidResponseException);
+    } catch (InvalidResponseException e) { }
     
     // and the third will never have been called
-    ex = null;
     try {
       kvs = (List<KeyValue>)deferreds.get(2).join(100);
       fail("Expected a TimeoutException");
-    } catch (RuntimeException e) {
-      ex = e;
-    }
-    assertTrue(ex instanceof TimeoutException);
+    } catch (TimeoutException e) { }
+    
+    assertEquals(3, timer.tasks.size());
+    assertEquals(60000, (long)timer.tasks.get(0).getValue());
+    assertEquals(60000, (long)timer.tasks.get(1).getValue());
+    assertEquals(60000, (long)timer.tasks.get(2).getValue());
+    verify(timer.timeouts.get(0)).cancel();
+    verify(timer.timeouts.get(1)).cancel();
+    verify(timer.timeouts.get(2), never()).cancel();
   }
 
   @Test
@@ -673,15 +698,15 @@ public class TestRegionClientDecode extends BaseTestRegionClient {
     
     final GetRequest get1 = new GetRequest(TABLE, ROW);
     deferreds.add(get1.getDeferred());
-    rpcs_inflight.put(1, get1);
+    inflightTheRpc(1, get1);
     
     final GetRequest get2 = new GetRequest(TABLE, ROW);
     deferreds.add(get2.getDeferred());
-    rpcs_inflight.put(2, get2);
+    inflightTheRpc(2, get2);
     
     final GetRequest get3 = new GetRequest(TABLE, ROW);
     deferreds.add(get3.getDeferred());
-    rpcs_inflight.put(3, get3);
+    inflightTheRpc(3, get3);
     
     byte[] pbuf1 = buildGoodResponse(true, 1).array();
     byte[] pbuf2 = buildGoodResponse(true, 2).array();
@@ -731,70 +756,13 @@ public class TestRegionClientDecode extends BaseTestRegionClient {
       assertArrayEquals(VALUE, kvs.get(0).value());
       assertEquals(TIMESTAMP, kvs.get(0).timestamp());
     }
-  }
-  
-  @Test
-  public void nsreArrayBacked() throws Exception {
-    final int id = 42;
-    final GetRequest get = PowerMockito.mock(GetRequest.class);
-    final NotServingRegionException nsre = 
-        new NotServingRegionException("Boo!", get);
-    when(get.deserialize(any(ChannelBuffer.class), anyInt()))
-      .thenReturn(nsre);
-    when(get.getRegion()).thenReturn(region);
-    rpcs_inflight.put(id, get);
-    
-    ChannelBuffer buffer = 
-        ChannelBuffers.wrappedBuffer(new byte[] { 0, 0, 0, 1, 2, 8, 42 });
-    assertNull(region_client.decode(ctx, chan, buffer, VOID));
-
-    assertEquals(0, rpcs_inflight.size());
-    verify(hbase_client, times(1))
-      .handleNSRE(get, region.name(), nsre);
-    verify(get, never()).callback(anyObject());
-    verify(get, never()).getDeferred();
-  }
-  
-  @Test
-  public void regionMovedException() throws Exception {
-    final int id = 42;
-    final GetRequest get = PowerMockito.mock(GetRequest.class);
-    final RegionMovedException rme = new RegionMovedException("Boo!", get);
-    when(get.deserialize(any(ChannelBuffer.class), anyInt()))
-      .thenReturn(rme);
-    when(get.getRegion()).thenReturn(region);
-    rpcs_inflight.put(id, get);
-    
-    ChannelBuffer buffer = new ReadOnlyChannelBuffer(
-        ChannelBuffers.wrappedBuffer(new byte[] { 0, 0, 0, 1, 2, 8, 42 }));
-    assertNull(region_client.decode(ctx, chan, buffer, VOID));
-
-    assertEquals(0, rpcs_inflight.size());
-    verify(hbase_client, times(1))
-      .handleNSRE(get, region.name(), rme);
-    verify(get, never()).callback(anyObject());
-    verify(get, never()).getDeferred();
-  }
-  
-  @Test
-  public void regionMovedExceptionArrayBacked() throws Exception {
-    final int id = 42;
-    final GetRequest get = PowerMockito.mock(GetRequest.class);
-    final RegionMovedException rme = new RegionMovedException("Boo!", get);
-    when(get.deserialize(any(ChannelBuffer.class), anyInt()))
-      .thenReturn(rme);
-    when(get.getRegion()).thenReturn(region);
-    rpcs_inflight.put(id, get);
-    
-    ChannelBuffer buffer = 
-        ChannelBuffers.wrappedBuffer(new byte[] { 0, 0, 0, 1, 2, 8, 42 });
-    assertNull(region_client.decode(ctx, chan, buffer, VOID));
-
-    assertEquals(0, rpcs_inflight.size());
-    verify(hbase_client, times(1))
-      .handleNSRE(get, region.name(), rme);
-    verify(get, never()).callback(anyObject());
-    verify(get, never()).getDeferred();
+    assertEquals(3, timer.tasks.size());
+    assertEquals(60000, (long)timer.tasks.get(0).getValue());
+    assertEquals(60000, (long)timer.tasks.get(1).getValue());
+    assertEquals(60000, (long)timer.tasks.get(2).getValue());
+    verify(timer.timeouts.get(0)).cancel();
+    verify(timer.timeouts.get(1)).cancel();
+    verify(timer.timeouts.get(2)).cancel();
   }
   
   @Test (expected = IndexOutOfBoundsException.class)
@@ -812,24 +780,16 @@ public class TestRegionClientDecode extends BaseTestRegionClient {
     // in the first 4 bytes is much larger than it should be
     ChannelBuffer buffer = new ReadOnlyChannelBuffer(
         ChannelBuffers.wrappedBuffer(new byte[] { 0, 0, 0, 42, 1 }));
-    RuntimeException e = null;
     try {
       region_client.decode(ctx, chan, buffer, VOID);
       fail("Expected an IndexOutOfBoundsException");
-    } catch (IndexOutOfBoundsException oob) {
-      e = oob;
-    }
-    assertTrue(e instanceof IndexOutOfBoundsException);
+    } catch (IndexOutOfBoundsException oob) { }
     
     buffer = ChannelBuffers.wrappedBuffer(new byte[] { 0, 0, 0, 42, 1 });
-    e = null;
     try {
       region_client.decode(ctx, chan, buffer, VOID);
       fail("Expected an IndexOutOfBoundsException");
-    } catch (IndexOutOfBoundsException oob) {
-      e = oob;
-    }
-    assertTrue(e instanceof IndexOutOfBoundsException);
+    } catch (IndexOutOfBoundsException oob) { }
   }
   
   @Test
@@ -838,24 +798,16 @@ public class TestRegionClientDecode extends BaseTestRegionClient {
     // in the first 4 bytes is much larger than it should be
     ChannelBuffer buffer = new ReadOnlyChannelBuffer(
         ChannelBuffers.wrappedBuffer(new byte[] { -1, -1, -1, -1, 1 }));
-    RuntimeException e = null;
     try {
       region_client.decode(ctx, chan, buffer, VOID);
       fail("Expected an IllegalArgumentException");
-    } catch (IllegalArgumentException ex) {
-      e = ex;
-    }
-    assertTrue(e instanceof IllegalArgumentException);
+    } catch (IllegalArgumentException ex) { }
     
     buffer = ChannelBuffers.wrappedBuffer(new byte[] { -1, -1, -1, -1, 1 });
-    e = null;
     try {
       region_client.decode(ctx, chan, buffer, VOID);
       fail("Expected an IllegalArgumentException");
-    } catch (IllegalArgumentException ex) {
-      e = ex;
-    }
-    assertTrue(e instanceof IllegalArgumentException);
+    } catch (IllegalArgumentException ex) { }
   }
   
   @Test
@@ -870,24 +822,16 @@ public class TestRegionClientDecode extends BaseTestRegionClient {
         any(ChannelBuffer.class), anyInt());
     ChannelBuffer buffer = new ReadOnlyChannelBuffer(
         ChannelBuffers.wrappedBuffer(new byte[] { 16, 0, 0, 0, 1 }));
-    RuntimeException e = null;
     try {
       region_client.decode(ctx, chan, buffer, VOID);
       fail("Expected an IllegalArgumentException");
-    } catch (IllegalArgumentException ex) {
-      e = ex;
-    }
-    assertTrue(e instanceof IllegalArgumentException);
+    } catch (IllegalArgumentException ex) { }
     
     buffer = ChannelBuffers.wrappedBuffer(new byte[] { 16, 0, 0, 0, 1 });
-    e = null;
     try {
       region_client.decode(ctx, chan, buffer, VOID);
       fail("Expected an IllegalArgumentException");
-    } catch (IllegalArgumentException ex) {
-      e = ex;
-    }
-    assertTrue(e instanceof IllegalArgumentException);
+    } catch (IllegalArgumentException ex) { }
   }
   
   @Test (expected = IndexOutOfBoundsException.class)
@@ -905,26 +849,18 @@ public class TestRegionClientDecode extends BaseTestRegionClient {
     // to readBytes on the non-array backed buffer
     ChannelBuffer buffer = new ReadOnlyChannelBuffer(
         ChannelBuffers.wrappedBuffer(new byte[] { 0, 0, 0, 1, 1 }));
-    RuntimeException e = null;
     try {
       region_client.decode(ctx, chan, buffer, VOID);
       fail("Expected an IndexOutOfBoundsException");
-    } catch (IndexOutOfBoundsException oob) {
-      e = oob;
-    }
-    assertTrue(e instanceof IndexOutOfBoundsException);
+    } catch (IndexOutOfBoundsException oob) { }
     
     buffer = ChannelBuffers.wrappedBuffer(new byte[] { 0, 0, 0, 1, 1 });
-    e = null;
     try {
       region_client.decode(ctx, chan, buffer, VOID);
       fail("Expected an IndexOutOfBoundsException");
-    } catch (IndexOutOfBoundsException oob) {
-      e = oob;
-    }
-    assertTrue(e instanceof IndexOutOfBoundsException);
+    } catch (IndexOutOfBoundsException oob) { }
   }
-
+  
   @Test
   public void rpcNotInMap() throws Exception {
     // doesn't matter if the rest of the message is missing, we fail as
@@ -932,72 +868,41 @@ public class TestRegionClientDecode extends BaseTestRegionClient {
     // the ID counter can rollover
     ChannelBuffer buffer = new ReadOnlyChannelBuffer(
         ChannelBuffers.wrappedBuffer(new byte[] { 0, 0, 0, 1, 2, 8, 42 }));
-    RuntimeException ex = null;
-    try {
-      region_client.decode(ctx, chan, buffer, VOID);
-      fail("Expected a NonRecoverableException");
-    } catch (RuntimeException e) {
-      ex = e;
-    }
-    assertTrue(ex instanceof NonRecoverableException);
+    region_client.decode(ctx, chan, buffer, VOID);
+    assertEquals(1, region_client.stats().rpcResponsesUnknown());
     
     buffer = new ReadOnlyChannelBuffer(
         ChannelBuffers.wrappedBuffer(
             new byte[] { 0, 0, 0, 1, 6, 8, -42, -1, -1, -1, 15 }));
-    ex = null;
-    try {
-      region_client.decode(ctx, chan, buffer, VOID);
-      fail("Expected a NonRecoverableException");
-    } catch (RuntimeException e) {
-      ex = e;
-    }
-    assertTrue(ex instanceof NonRecoverableException);
+    region_client.decode(ctx, chan, buffer, VOID);
+    assertEquals(2, region_client.stats().rpcResponsesUnknown());
     
     buffer = ChannelBuffers.wrappedBuffer(new byte[] { 0, 0, 0, 1, 2, 8, 42 });
-    ex = null;
-    try {
-      region_client.decode(ctx, chan, buffer, VOID);
-      fail("Expected a NonRecoverableException");
-    } catch (RuntimeException e) {
-      ex = e;
-    }
-    assertTrue(ex instanceof NonRecoverableException);
+    region_client.decode(ctx, chan, buffer, VOID);
+    assertEquals(3, region_client.stats().rpcResponsesUnknown());
     
     buffer = ChannelBuffers.wrappedBuffer(
         new byte[] { 0, 0, 0, 1, 6, 8, -42, -1, -1, -1, 15 });
-    ex = null;
-    try {
-      region_client.decode(ctx, chan, buffer, VOID);
-      fail("Expected a NonRecoverableException");
-    } catch (RuntimeException e) {
-      ex = e;
-    }
-    assertTrue(ex instanceof NonRecoverableException);
+    region_client.decode(ctx, chan, buffer, VOID);
+    assertEquals(4, region_client.stats().rpcResponsesUnknown());
   }
-
+  
   @Test
   public void noCallId() throws Exception {
     // passes the header parsing since it has a size of zero, but then we check
     // to see if it has a call ID and it won't.
     ChannelBuffer buffer = new ReadOnlyChannelBuffer(
         ChannelBuffers.wrappedBuffer(new byte[] { 0, 0, 0, 1, 0 }));
-    RuntimeException e = null;
     try {
       region_client.decode(ctx, chan, buffer, VOID);
       fail("Expected an NonRecoverableException");
-    } catch (NonRecoverableException ex) {
-      e = ex;
-    }
-    assertTrue(e instanceof NonRecoverableException);
+    } catch (NonRecoverableException ex) { }
     
     buffer = ChannelBuffers.wrappedBuffer(new byte[] { 0, 0, 0, 1, 0 });
     try {
       region_client.decode(ctx, chan, buffer, VOID);
       fail("Expected an NonRecoverableException");
-    } catch (NonRecoverableException ex) {
-      e = ex;
-    }
-    assertTrue(e instanceof NonRecoverableException);
+    } catch (NonRecoverableException ex) { }
   }
 
   @Test
@@ -1007,7 +912,7 @@ public class TestRegionClientDecode extends BaseTestRegionClient {
     final ChannelBuffer buffer = buildGoodResponse(true, id);
     final GetRequest get = new GetRequest(TABLE, ROW);
     final Deferred<Object> deferred = get.getDeferred();
-    rpcs_inflight.put(id, get);
+    inflightTheRpc(id, get);
     
     region_client.decode(null, chan, buffer, VOID);
     @SuppressWarnings("unchecked")
@@ -1018,6 +923,9 @@ public class TestRegionClientDecode extends BaseTestRegionClient {
     assertArrayEquals(QUALIFIER, kvs.get(0).qualifier());
     assertArrayEquals(VALUE, kvs.get(0).value());
     assertEquals(TIMESTAMP, kvs.get(0).timestamp());
+    assertEquals(1, timer.tasks.size());
+    assertEquals(60000, (long)timer.tasks.get(0).getValue());
+    verify(timer.timeouts.get(0), times(1)).cancel();
   }
   
   @Test
@@ -1027,7 +935,7 @@ public class TestRegionClientDecode extends BaseTestRegionClient {
     final ChannelBuffer buffer = buildGoodResponse(true, id);
     final GetRequest get = new GetRequest(TABLE, ROW);
     final Deferred<Object> deferred = get.getDeferred();
-    rpcs_inflight.put(id, get);
+    inflightTheRpc(id, get);
     
     region_client.decode(ctx, null, buffer, VOID);
     @SuppressWarnings("unchecked")
@@ -1038,6 +946,9 @@ public class TestRegionClientDecode extends BaseTestRegionClient {
     assertArrayEquals(QUALIFIER, kvs.get(0).qualifier());
     assertArrayEquals(VALUE, kvs.get(0).value());
     assertEquals(TIMESTAMP, kvs.get(0).timestamp());
+    assertEquals(1, timer.tasks.size());
+    assertEquals(60000, (long)timer.tasks.get(0).getValue());
+    verify(timer.timeouts.get(0), times(1)).cancel();
   }
   
   @Test (expected = IndexOutOfBoundsException.class)
@@ -1053,7 +964,168 @@ public class TestRegionClientDecode extends BaseTestRegionClient {
     // This should never happen, in theory
     region_client.decode(ctx, chan, null, VOID);
   }
+  
+  @Test
+  public void timedoutRpcThenGoodRpc() throws Exception {
+    resetMockClient();
+    
+    // this one has been timed out and we assume it was popped from the map
+    final GetRequest timedout = new GetRequest(TABLE, ROW);
+    timedout.setTimeout(1);
+    final Deferred<Object> deferred_to = timedout.getDeferred();
+    final ChannelBuffer buffer1 = buildGoodResponse(true, 1);
+    inflightTheRpc(1, timedout);
+    
+    assertEquals(1, rpcs_inflight.size());
+    assertEquals(1, timer.tasks.size());
+    assertEquals(1, (long)timer.tasks.get(0).getValue());
+    timer.tasks.get(0).getKey().run(null);
+    assertEquals(0, rpcs_inflight.size());
+    
+    try {
+      deferred_to.join(100);
+    } catch (RpcTimedOutException ex) { }
+    
+    final int id = 42;
+    final ChannelBuffer buffer2 = buildGoodResponse(true, id);
+    
+    final GetRequest get = new GetRequest(TABLE, ROW);
+    final Deferred<Object> deferred = get.getDeferred();
+    // only put the second RPC in the map
+    inflightTheRpc(id, get);
 
+    region_client.messageReceived(ctx, getMessage(buffer1));
+    region_client.messageReceived(ctx, getMessage(buffer2));
+    
+    @SuppressWarnings("unchecked")
+    final List<KeyValue> kvs = (List<KeyValue>)deferred.join(100);
+    assertEquals(1, kvs.size());
+    assertArrayEquals(ROW, kvs.get(0).key());
+    assertArrayEquals(FAMILY, kvs.get(0).family());
+    assertArrayEquals(QUALIFIER, kvs.get(0).qualifier());
+    assertArrayEquals(VALUE, kvs.get(0).value());
+    assertEquals(TIMESTAMP, kvs.get(0).timestamp());
+    assertEquals(1, region_client.stats().rpcsTimedout());
+    assertEquals(2, timer.tasks.size());
+    assertEquals(60000, (long)timer.tasks.get(1).getValue());
+    verify(timer.timeouts.get(0), times(1)).cancel();
+    verify(timer.timeouts.get(1), times(1)).cancel();
+  }
+  
+  @Test
+  public void combinedTimedoutRpcThenGoodRpc() throws Exception {
+    resetMockClient();
+    
+    final GetRequest timedout = new GetRequest(TABLE, ROW);
+    timedout.setTimeout(1);
+    final Deferred<Object> deferred_to = timedout.getDeferred();
+    inflightTheRpc(1, timedout);
+    assertEquals(1, rpcs_inflight.size());
+    assertEquals(1, timer.tasks.size());
+    assertEquals(1, (long)timer.tasks.get(0).getValue());
+    timer.tasks.get(0).getKey().run(null);
+    assertEquals(0, rpcs_inflight.size());
+    
+    final ChannelBuffer buffer1 = buildGoodResponse(true, 1);
+    final int id = 42;
+    final ChannelBuffer buffer2 = buildGoodResponse(true, id);
+    final ChannelBuffer combined = new BigEndianHeapChannelBuffer(
+        buffer1.writerIndex() + buffer2.writerIndex());
+    combined.writeBytes(buffer1);
+    combined.writeBytes(buffer2);
+    
+    final GetRequest get = new GetRequest(TABLE, ROW);
+    final Deferred<Object> deferred = get.getDeferred();
+    // only put the second RPC in the map
+    inflightTheRpc(id, get);
+
+    region_client.messageReceived(ctx, getMessage(combined));
+    
+    try {
+      deferred_to.join(100);
+    } catch (RpcTimedOutException ex) { }
+    
+    @SuppressWarnings("unchecked")
+    final List<KeyValue> kvs = (List<KeyValue>)deferred.join(100);
+    assertEquals(1, kvs.size());
+    assertArrayEquals(ROW, kvs.get(0).key());
+    assertArrayEquals(FAMILY, kvs.get(0).family());
+    assertArrayEquals(QUALIFIER, kvs.get(0).qualifier());
+    assertArrayEquals(VALUE, kvs.get(0).value());
+    assertEquals(TIMESTAMP, kvs.get(0).timestamp());
+    assertEquals(1, region_client.stats().rpcsTimedout());
+    assertEquals(2, timer.tasks.size());
+    assertEquals(60000, (long)timer.tasks.get(1).getValue());
+    verify(timer.timeouts.get(0), times(1)).cancel();
+    verify(timer.timeouts.get(1), times(1)).cancel();
+  }
+  
+  @Test
+  public void chunkedLateRpcThenGoodRpc() throws Exception {
+    resetMockClient();
+    
+    final GetRequest timedout = new GetRequest(TABLE, ROW);
+    timedout.setTimeout(1);
+    final Deferred<Object> deferred_to = timedout.getDeferred();
+    inflightTheRpc(1, timedout);
+    assertEquals(1, rpcs_inflight.size());
+    assertEquals(1, timer.tasks.size());
+    assertEquals(1, (long)timer.tasks.get(0).getValue());
+    timer.tasks.get(0).getKey().run(null);
+    assertEquals(0, rpcs_inflight.size());
+    
+    final ChannelBuffer buffer1 = buildGoodResponse(true, 1);
+    final int id = 42;
+    final ChannelBuffer buffer2 = buildGoodResponse(true, id);
+    final ChannelBuffer combined = new BigEndianHeapChannelBuffer(
+        buffer1.writerIndex() + buffer2.writerIndex());
+    combined.writeBytes(buffer1);
+    combined.writeBytes(buffer2);
+    
+    final byte[] bytes = new byte[combined.readableBytes()];
+    combined.readBytes(bytes);
+    
+    final GetRequest get = new GetRequest(TABLE, ROW);
+    final Deferred<Object> deferred = get.getDeferred();
+    // only put the second RPC in the map
+    inflightTheRpc(id, get);
+
+    region_client.messageReceived(ctx, getMessage(
+        Arrays.copyOfRange(bytes, 0, 48)));
+    region_client.messageReceived(ctx, getMessage(
+        Arrays.copyOfRange(bytes, 48, bytes.length)));
+    
+    try {
+      deferred_to.join(100);
+    } catch (RpcTimedOutException ex) { }
+    
+    @SuppressWarnings("unchecked")
+    final List<KeyValue> kvs = (List<KeyValue>)deferred.join(100);
+    assertEquals(1, kvs.size());
+    assertArrayEquals(ROW, kvs.get(0).key());
+    assertArrayEquals(FAMILY, kvs.get(0).family());
+    assertArrayEquals(QUALIFIER, kvs.get(0).qualifier());
+    assertArrayEquals(VALUE, kvs.get(0).value());
+    assertEquals(TIMESTAMP, kvs.get(0).timestamp());
+    assertEquals(1, region_client.stats().rpcsTimedout());
+    assertEquals(2, timer.tasks.size());
+    assertEquals(60000, (long)timer.tasks.get(1).getValue());
+    verify(timer.timeouts.get(0), times(1)).cancel();
+    verify(timer.timeouts.get(1), times(1)).cancel();
+  }
+  
+  /**
+   * Puts the RPC in the map with the given ID and tells the RPC that this
+   * region client is handling it
+   * @param id The ID to use
+   * @param rpc The RPC
+   */
+  private void inflightTheRpc(final int id, final HBaseRpc rpc) {
+    rpcs_inflight.put(id, rpc);
+    rpc.rpc_id = id;
+    rpc.enqueueTimeout(region_client);
+  }
+  
   /**
    * Creates a simple GetRequest response with some dummy data and a single 
    * column in a row. The request lacks cell meta data.
@@ -1131,4 +1203,25 @@ public class TestRegionClientDecode extends BaseTestRegionClient {
         region_client, "rpcs_inflight");
   }
   
+  /**
+   * Generate a mock MessageEvent from a byte array
+   * @param data The data to pass on
+   * @return The event to hand to messageReceived(
+   */
+  static MessageEvent getMessage(final byte[] data) {
+    final ChannelBuffer buf = ChannelBuffers.wrappedBuffer(data);
+    return getMessage(buf);
+  }
+  
+  /**
+   * Generate a mock MessageEvent from a ChannelBuffer
+   * @param buf The buffer to pass on
+   * @return The event to hand to messageReceived(
+   */
+  static MessageEvent getMessage(final ChannelBuffer buf) {
+    final MessageEvent event = mock(MessageEvent.class);
+    when(event.getMessage()).thenReturn(buf);
+    return event;
+  }
+
 }

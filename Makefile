@@ -108,6 +108,7 @@ asynchbase_SOURCES := \
 	src/RegionOfflineException.java	\
 	src/RegionMovedException.java	\
 	src/RemoteException.java	\
+	src/RpcTimedOutException.java	\
 	src/RowFilter.java	\
 	src/RowLock.java	\
 	src/RowLockRequest.java	\
@@ -157,6 +158,7 @@ unittest_SRC := \
 	test/TestGetRequest.java	\
 	test/TestHBaseClient.java	\
 	test/TestHBaseClientLocateRegion.java	\
+	test/TestHBaseRpc.java	\
 	test/TestMETALookup.java	\
 	test/TestMultiAction.java	\
 	test/TestNSREs.java	\

@@ -34,14 +34,14 @@ import static org.powermock.api.mockito.PowerMockito.mock;
 
 import java.util.Map;
 
+import org.hbase.async.BaseTestHBaseClient.FakeTimer;
 import org.hbase.async.generated.RPCPB;
 import org.jboss.netty.buffer.ChannelBuffer;
+import org.jboss.netty.buffer.HeapChannelBufferFactory;
 import org.jboss.netty.channel.Channel;
-import org.jboss.netty.channel.ChannelConfig;
 import org.jboss.netty.channel.ChannelHandlerContext;
 import org.jboss.netty.channel.ChannelStateEvent;
 import org.jboss.netty.channel.Channels;
-import org.jboss.netty.channel.DefaultChannelConfig;
 import org.junit.Before;
 import org.junit.runner.RunWith;
 import org.mockito.Mockito;
@@ -81,22 +81,27 @@ public class BaseTestRegionClient {
   protected Config config;
   protected Map<Integer, HBaseRpc> rpcs_inflight;
   protected SecureRpcHelper secure_rpc_helper;
+  protected FakeTimer timer;
   protected RegionClient region_client;
   
   @Before
   public void before() throws Exception {
     config = new Config();
     hbase_client = mock(HBaseClient.class);
+    timer = new FakeTimer();
     when(hbase_client.getConfig()).thenReturn(config);
+    when(hbase_client.getTimer()).thenReturn(timer);
+    when(hbase_client.getRpcTimeoutTimer()).thenReturn(timer);
+    when(hbase_client.getDefaultRpcTimeout()).thenReturn(60000);
     
     chan = mock(Channel.class, Mockito.RETURNS_DEEP_STUBS);
     ctx = mock(ChannelHandlerContext.class);
     cse = mock(ChannelStateEvent.class);
     secure_rpc_helper = mock(SecureRpcHelper.class);
     
-    final ChannelConfig channel_config = new DefaultChannelConfig();
-    when(chan.getConfig()).thenReturn(channel_config);
     when(ctx.getChannel()).thenReturn(chan);
+    final HeapChannelBufferFactory factory = new HeapChannelBufferFactory();
+    when(chan.getConfig().getBufferFactory()).thenReturn(factory);
     
     PowerMockito.doAnswer(new Answer<RegionClient>(){
       @Override
@@ -113,8 +118,7 @@ public class BaseTestRegionClient {
     Whitebox.setInternalState(region_client, "chan", chan);
     Whitebox.setInternalState(region_client, "server_version", 
         RegionClient.SERVER_VERSION_095_OR_ABOVE);
-    rpcs_inflight = Whitebox.getInternalState(
-        region_client, "rpcs_inflight");
+    rpcs_inflight = Whitebox.getInternalState(region_client, "rpcs_inflight");
   }
   
   /**

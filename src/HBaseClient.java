@@ -242,6 +242,12 @@ public final class HBaseClient {
    * TODO(tsuna): Get it through the ctor to share it with others.
    */
   private final HashedWheelTimer timer;
+  
+  /** A separate timer thread used for processing RPC timeout callbacks. We
+   * keep it separate as a bad HBase server can cause a timeout storm and we 
+   * don't want to block any flushes and operations on other region servers.
+   */
+  private final HashedWheelTimer rpc_timeout_timer;
 
   /**
    * Factory through which we will create all its channels / sockets.
@@ -389,6 +395,9 @@ public final class HBaseClient {
   final static AtomicInteger WORKER_THREAD_ID = new AtomicInteger();
   final static AtomicInteger TIMER_THREAD_ID = new AtomicInteger();
   
+  /** Default RPC timeout in milliseconds from the config */
+  private final int rpc_timeout;
+  
   // ------------------------ //
   // Client usage statistics. //
   // ------------------------ //
@@ -507,7 +516,9 @@ public final class HBaseClient {
     this.channel_factory = channel_factory;
     zkclient = new ZKClient(quorum_spec, base_path);
     config = new Config();
+    rpc_timeout = config.getInt("hbase.rpc.timeout");
     timer = newTimer(config, "HBaseClient");
+    rpc_timeout_timer = newTimer(config, "RPC Timeout Timer");
   }
   
   /**
@@ -559,7 +570,9 @@ public final class HBaseClient {
     zkclient = new ZKClient(config.getString("hbase.zookeeper.quorum"), 
         config.getString("hbase.zookeeper.znode.parent"));
     this.config = config;
+    rpc_timeout = config.getInt("hbase.rpc.timeout");
     timer = newTimer(config, "HBaseClient");
+    rpc_timeout_timer = newTimer(config, "RPC Timeout Timer");
   }
   
   /**
@@ -899,6 +912,12 @@ public final class HBaseClient {
     return config.flushInterval();
   }
 
+  /** @returns the default RPC timeout period in milliseconds
+   * @since 1.7 */
+  public int getDefaultRpcTimeout() {
+    return rpc_timeout;
+  }
+  
   /**
    * Returns the capacity of the increment buffer.
    * <p>
@@ -951,6 +970,7 @@ public final class HBaseClient {
       public Object call(final Object arg) {
         LOG.debug("Releasing all remaining resources");
         timer.stop();
+        rpc_timeout_timer.stop();
         new ShutdownThread().start();
         return arg;
       }
@@ -1966,6 +1986,11 @@ public final class HBaseClient {
     return Deferred.fromError(e);
   }
 
+  /** @return the rpc timeout timer */
+  HashedWheelTimer getRpcTimeoutTimer() {
+    return rpc_timeout_timer;
+  }
+  
   // --------------------------------------------------- //
   // Code that find regions (in our cache or using RPCs) //
   // --------------------------------------------------- //

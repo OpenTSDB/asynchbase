@@ -275,11 +275,6 @@ public class TestRegionClient extends BaseTestRegionClient {
     verifyPrivate(rclient).invoke("helloRpc", chan, header);
   }
   
-  @Test
-  public void sendRpc() throws Exception {
-      // TODO
-  }
-  
   @Test (expected=NonRecoverableException.class)
   public void decodeHbase95orAboveNoCallId() throws Exception {
     RegionClient rclient = mock(RegionClient.class);

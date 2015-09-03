@@ -36,6 +36,7 @@ import java.nio.charset.Charset;
 import java.util.AbstractMap;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -302,8 +303,10 @@ public class BaseTestHBaseClient {
    * various tasks is logged.
    */
   static final class FakeTimer extends HashedWheelTimer {
-    final ArrayList<Map.Entry<TimerTask, Long>> tasks = 
+    final List<Map.Entry<TimerTask, Long>> tasks = 
         new ArrayList<Map.Entry<TimerTask, Long>>();
+    final ArrayList<Timeout> timeouts = new ArrayList<Timeout>();
+    boolean run = true;
     
     @Override
     public Timeout newTimeout(final TimerTask task,
@@ -311,8 +314,12 @@ public class BaseTestHBaseClient {
                               final TimeUnit unit) {
       try {
         tasks.add(new AbstractMap.SimpleEntry<TimerTask, Long>(task, delay));
-        task.run(null);  // Argument never used in this code base.
-        return null;     // Return value never used in this code base.
+        if (run) {
+          task.run(null);  // Argument never used in this code base.
+        }
+        final Timeout timeout = mock(Timeout.class);
+        timeouts.add(timeout);
+        return timeout;     // Return value never used in this code base.
       } catch (RuntimeException e) {
         throw e;
       } catch (Exception e) {
@@ -322,7 +329,8 @@ public class BaseTestHBaseClient {
 
     @Override
     public Set<Timeout> stop() {
-      return null;  // Never called during tests.
+      run = false;
+      return new HashSet<Timeout>(timeouts);
     }
   }
 
