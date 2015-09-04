@@ -107,6 +107,7 @@ asynchbase_SOURCES := \
 	src/RegionInfo.java	\
 	src/RegionOfflineException.java	\
 	src/RegionMovedException.java	\
+	src/RegionOpeningException.java	\
 	src/RemoteException.java	\
 	src/RpcTimedOutException.java	\
 	src/RowFilter.java	\
