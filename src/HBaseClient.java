@@ -56,6 +56,8 @@ import org.apache.zookeeper.Watcher;
 import org.apache.zookeeper.ZooKeeper;
 import org.apache.zookeeper.data.Stat;
 import org.jboss.netty.channel.ChannelEvent;
+import org.jboss.netty.channel.ChannelHandler;
+import org.jboss.netty.channel.ChannelHandlerContext;
 import org.jboss.netty.channel.ChannelStateEvent;
 import org.jboss.netty.channel.DefaultChannelPipeline;
 import org.jboss.netty.channel.socket.ClientSocketChannelFactory;
@@ -65,6 +67,10 @@ import org.jboss.netty.channel.socket.nio.NioChannelConfig;
 import org.jboss.netty.channel.socket.nio.NioClientBossPool;
 import org.jboss.netty.channel.socket.nio.NioClientSocketChannelFactory;
 import org.jboss.netty.channel.socket.nio.NioWorkerPool;
+import org.jboss.netty.handler.timeout.IdleState;
+import org.jboss.netty.handler.timeout.IdleStateAwareChannelHandler;
+import org.jboss.netty.handler.timeout.IdleStateEvent;
+import org.jboss.netty.handler.timeout.IdleStateHandler;
 import org.jboss.netty.util.HashedWheelTimer;
 import org.jboss.netty.util.ThreadNameDeterminer;
 import org.jboss.netty.util.Timeout;
@@ -462,6 +468,9 @@ public final class HBaseClient {
 
   /** Number of {@link AtomicIncrementRequest} sent.  */
   private final Counter num_atomic_increments = new Counter();
+  
+  /** Number of region clients closed due to being idle.  */
+  private final Counter idle_connections_closed = new Counter();
 
   /**
    * Constructor.
@@ -714,7 +723,8 @@ public final class HBaseClient {
       pending_rpcs,
       pending_batched_rpcs,
       dead_region_clients,
-      region_clients.size()
+      region_clients.size(),
+      idle_connections_closed.get()
     );
   }
 
@@ -2910,7 +2920,12 @@ public final class HBaseClient {
      */
     private boolean disconnected = false;
 
+    /** A handler to close the connection if we haven't used it in some time */
+    private final ChannelHandler timeout_handler;
+    
     RegionClientPipeline() {
+      timeout_handler = new IdleStateHandler(timer, 0, 0, 
+          config.getInt("hbase.hbase.ipc.client.connection.idle_timeout"));
     }
 
     /**
@@ -2920,6 +2935,8 @@ public final class HBaseClient {
      */
     RegionClient init() {
       final RegionClient client = new RegionClient(HBaseClient.this);
+      super.addLast("idle_handler", this.timeout_handler);
+      super.addLast("idle_cleanup", new RegionClientIdleStateHandler());
       super.addLast("handler", client);
       return client;
     }
@@ -2948,6 +2965,10 @@ public final class HBaseClient {
       if (disconnected) {
         return;
       }
+      if (LOG.isDebugEnabled()) {
+        LOG.debug("Channel " + state_event.getChannel().toString() + 
+            "'s state changed: " + state_event);
+      }
       switch (state_event.getState()) {
         case OPEN:
           if (state_event.getValue() == Boolean.FALSE) {
@@ -2963,6 +2984,8 @@ public final class HBaseClient {
           return;  // Not an event we're interested in, ignore it.
       }
 
+      LOG.info("Channel " + state_event.getChannel().toString() + 
+          " is disconnecting: " + state_event);
       disconnected = true;  // So we don't clean up the same client twice.
       try {
         final RegionClient client = super.get(RegionClient.class);
@@ -2989,6 +3012,31 @@ public final class HBaseClient {
 
   }
 
+  /**
+   * Handles the cases where sockets are either idle or leaked due to
+   * connections closed from HBase or no data flowing downstream.
+   */
+  private final class RegionClientIdleStateHandler
+          extends IdleStateAwareChannelHandler {
+
+    /** Empty constructor */
+    public RegionClientIdleStateHandler() {
+    }
+
+    @Override
+    public void channelIdle(ChannelHandlerContext ctx, IdleStateEvent e)
+            throws Exception {
+      if(e.getState() == IdleState.ALL_IDLE) {
+        idle_connections_closed.increment();
+        LOG.info("Closing idle connection to HBase region server: " 
+            + e.getChannel());
+        // RegionClientPipeline's disconnect method will handle cleaning up
+        // any outstanding RPCs and removing the client from caches
+        e.getChannel().close();
+      }
+    }
+  }
+  
   /**
    * Performs a slow search of the IP used by the given client.
    * <p>

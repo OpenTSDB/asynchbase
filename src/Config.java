@@ -308,6 +308,8 @@ public class Config {
     default_map.put("hbase.timer.ticks_per_wheel", "512");
     default_map.put("hbase.security.auth.enable", "false");
     default_map.put("hbase.zookeeper.getroot.retry_delay", "1000");
+    default_map.put("hbase.hbase.ipc.client.connection.idle_timeout", "300");
+    
     /**
      * How many different counters do we want to keep in memory for buffering.
      * Each entry requires storing the table name, row key, family name and

@@ -62,6 +62,7 @@ public final class ClientStats {
   private final long pending_batched_rpcs;
   private final int dead_region_clients;
   private final int region_clients;
+  private final long idle_connections_closed;
 
   /** Package-private constructor.  */
   ClientStats(final long num_connections_created,
@@ -85,7 +86,8 @@ public final class ClientStats {
               final long pending_rpcs,
               final long pending_batched_rpcs,
               final int dead_region_clients,
-              final int region_clients) {
+              final int region_clients,
+              final long idle_connections_closed) {
     // JAVA Y U NO HAVE CASE CLASS LIKE SCALA?!  FFFFFUUUUUUU!!
     this.num_connections_created = num_connections_created;
     this.root_lookups = root_lookups;
@@ -109,6 +111,7 @@ public final class ClientStats {
     this.pending_batched_rpcs = pending_batched_rpcs;
     this.dead_region_clients = dead_region_clients;
     this.region_clients = region_clients;
+    this.idle_connections_closed = idle_connections_closed;
   }
 
   /** Number of connections created to connect to RegionServers.  */
@@ -116,6 +119,17 @@ public final class ClientStats {
     return num_connections_created;
   }
 
+  /**
+   * Returns the number of connections to region servers that were closed
+   * due to being idle past the "hbase.hbase.ipc.client.connection.idle_timeout"
+   * value. 
+   * @return The number of idle connections over time
+   * @since 1.7
+   */
+  public long idleConnectionsClosed() {
+    return idle_connections_closed;
+  }
+  
   /**
    * Returns how many lookups in {@code -ROOT-} were performed.
    * <p>
