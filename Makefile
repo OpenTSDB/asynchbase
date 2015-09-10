@@ -105,6 +105,7 @@ asynchbase_SOURCES := \
 	src/RegionClient.java	\
 	src/RegionClientStats.java	\
 	src/RegionInfo.java	\
+	src/RegionLocation.java	\
 	src/RegionOfflineException.java	\
 	src/RegionMovedException.java	\
 	src/RegionOpeningException.java	\

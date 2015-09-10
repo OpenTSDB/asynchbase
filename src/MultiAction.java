@@ -529,13 +529,15 @@ final class MultiAction extends HBaseRpc implements HBaseRpc.IsEdit {
   @Override
   Object deserialize(final ChannelBuffer buf, final int cell_size) {
     final MultiResponse resp = readProtobuf(buf, MultiResponse.PARSER);
+    final int responses = resp.getRegionActionResultCount();
     final int nrpcs = batch.size();
     final Object[] resps = new Object[nrpcs];
     int n = 0;  // Index in `batch'.
     int r = 0;  // Index in `regionActionResult' in the PB.
     ArrayList<KeyValue> kvs = null;
     int kv_index = 0;
-    while (n < nrpcs) {
+    
+    while (n < nrpcs && r < responses) {
       final RegionActionResult results = resp.getRegionActionResult(r++);
       final int nresults = results.getResultOrExceptionCount();
       if (results.hasException()) {
@@ -627,14 +629,20 @@ final class MultiAction extends HBaseRpc implements HBaseRpc.IsEdit {
           } else {
             result = SUCCESS;  
           }
-        }        
+        }
         resps[n++] = result;
       }
     }
     if (n != nrpcs) {
-      throw new InvalidResponseException("Expected " + nrpcs
-                                         + " results but got " + n,
-                                         resp);
+      // handle trailing appends that don't have a response.
+      while (n < nrpcs && batch.get(n) instanceof AppendRequest && 
+          !((AppendRequest)batch.get(n)).returnResult()) {
+        resps[n++] = SUCCESS;
+      }
+      if (n != nrpcs) {
+        throw new InvalidResponseException("Expected " + nrpcs
+                                           + " results but got " + n, resp);
+      }
     }
     return new Response(resps);
   }

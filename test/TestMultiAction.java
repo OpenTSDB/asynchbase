@@ -32,6 +32,7 @@ import static org.junit.Assert.fail;
 import static org.mockito.Mockito.mock;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 
 import org.hbase.async.generated.ClientPB.MultiResponse;
@@ -46,7 +47,11 @@ import org.powermock.modules.junit4.PowerMockRunner;
 @RunWith(PowerMockRunner.class)
 @PrepareForTest({ RowLock.class })
 public class TestMultiAction extends BaseTestHBaseClient {
-
+  protected static final RegionInfo region2 = 
+      mkregion("table", "table,A,1234567890");
+  protected static final RegionInfo region3 = 
+      mkregion("table", "table,B,1234567890");
+  
   @Test
   public void add() throws Exception {
     PutRequest put1 = new PutRequest(TABLE, KEY, FAMILY, QUALIFIER, VALUE);
@@ -285,7 +290,7 @@ public class TestMultiAction extends BaseTestHBaseClient {
   }
   
   /** This shouldn't happen either. HBase should respond to ALL RPCs */
-  @Test (expected = IndexOutOfBoundsException.class)
+  @Test (expected = InvalidResponseException.class)
   public void deserializeExtraRpc() throws Exception {
     final List<ResultOrException> results = new ArrayList<ResultOrException>(2);
     results.add(PBufResponses.generateEmptyResult(0));
@@ -586,6 +591,41 @@ public class TestMultiAction extends BaseTestHBaseClient {
   }
 
   @Test
+  public void deserializePutsAndAppendsTrailingAppends() throws Exception {
+    final List<ResultOrException> results = new ArrayList<ResultOrException>(1);
+    results.add(PBufResponses.generateEmptyResult(0));
+    results.add(PBufResponses.generateEmptyResult(2));
+    final RegionActionResult rar1 = PBufResponses.generateRegionActionResult(results);
+    
+    final List<RegionActionResult> rars = new ArrayList<RegionActionResult>(2);
+    rars.add(rar1);
+    MultiAction multi = new MultiAction();
+    
+    PutRequest rpc1 = new PutRequest(TABLE, KEY, FAMILY, QUALIFIER, VALUE);
+    rpc1.region = region;
+    AppendRequest rpc2 = new AppendRequest(TABLE, KEY, FAMILY, QUALIFIER, VALUE);
+    rpc2.region = region;
+    PutRequest rpc3 = new PutRequest(TABLE, KEY, FAMILY, QUALIFIER, VALUE);
+    rpc3.region = region;
+    AppendRequest rpc4 = new AppendRequest(TABLE, KEY, FAMILY, QUALIFIER, VALUE);
+    rpc4.region = region;
+    multi.add(rpc1);
+    multi.add(rpc2);
+    multi.add(rpc3);
+    multi.add(rpc4);
+    
+    final MultiAction.Response decoded = 
+        (MultiAction.Response)multi.deserialize(
+            PBufResponses.encodeResponse(
+                PBufResponses.generateMultiActionResponseFromRars(rars)), 0);
+    assertEquals(4, decoded.size());
+    assertTrue(decoded.result(0) == MultiAction.SUCCESS);
+    assertTrue(decoded.result(1) == MultiAction.SUCCESS);
+    assertTrue(decoded.result(3) == MultiAction.SUCCESS);
+    assertTrue(decoded.result(3) == MultiAction.SUCCESS);
+  }
+  
+  @Test
   public void deserializeActionException() throws Exception {
     final Builder rar = RegionActionResult.newBuilder();
     rar.setException(PBufResponses.buildException(new RuntimeException("Boo!")));
@@ -697,6 +737,96 @@ public class TestMultiAction extends BaseTestHBaseClient {
     assertTrue(e.getMessage().contains("Boo!"));
   }
 
+  @Test
+  public void deserializeMultiRegionOneFailed() throws Exception {
+    final List<ResultOrException> results = new ArrayList<ResultOrException>(2);
+    results.add(PBufResponses.generateEmptyResult(0));
+    results.add(PBufResponses.generateEmptyResult(1));
+    
+    final RegionActionResult rar1 = PBufResponses.generateRegionActionResult(results);
+    final Builder rar2 = RegionActionResult.newBuilder();
+      rar2.setException(PBufResponses.buildException(new RuntimeException("Boo!")));
+    
+    final List<RegionActionResult> rars = new ArrayList<RegionActionResult>(2);
+    rars.add(rar1);
+    rars.add(rar2.build());
+    
+    MultiAction multi = new MultiAction();
+    PutRequest put1 = new PutRequest(TABLE, KEY, FAMILY, QUALIFIER, VALUE);
+    put1.region = region2;
+    PutRequest put2 = new PutRequest(TABLE, KEY, FAMILY, QUALIFIER, VALUE);
+    put2.region = region;
+    PutRequest put3 = new PutRequest(TABLE, KEY, FAMILY, QUALIFIER, VALUE);
+    put3.region = region2;
+    PutRequest put4 = new PutRequest(TABLE, KEY, FAMILY, QUALIFIER, VALUE);
+    put4.region = region;
+    multi.add(put1);
+    multi.add(put2);
+    multi.add(put3);
+    multi.add(put4);
+    Collections.sort(multi.batch(), MultiAction.SORT_BY_REGION);
+    
+    final MultiAction.Response decoded = 
+        (MultiAction.Response)multi.deserialize(
+            PBufResponses.encodeResponse(
+                PBufResponses.generateMultiActionResponseFromRars(rars)), 0);
+    assertEquals(4, decoded.size());
+    assertTrue(decoded.result(0) == MultiAction.SUCCESS);
+    assertTrue(decoded.result(1) == MultiAction.SUCCESS);
+    assertTrue(decoded.result(2) instanceof RuntimeException);
+    RuntimeException e = (RuntimeException)decoded.result(2);
+    assertTrue(e.getMessage().contains("Boo!"));
+    assertTrue(decoded.result(3) instanceof RuntimeException);
+    e = (RuntimeException)decoded.result(3);
+    assertTrue(e.getMessage().contains("Boo!"));
+  }
+  
+  @Test
+  public void deserializeMultiRegionTwoFailed() throws Exception {
+    final List<ResultOrException> results = new ArrayList<ResultOrException>(1);
+    results.add(PBufResponses.generateEmptyResult(0));
+    final RegionActionResult rar1 = PBufResponses.generateRegionActionResult(results);
+    final Builder rar2 = RegionActionResult.newBuilder();
+    rar2.setException(PBufResponses.buildException(new RuntimeException("Boo!")));
+    results.clear();
+    results.add(PBufResponses.generateEmptyResult(3));
+    final RegionActionResult rar3 = PBufResponses.generateRegionActionResult(results);
+    
+    final List<RegionActionResult> rars = new ArrayList<RegionActionResult>(2);
+    rars.add(rar1);
+    rars.add(rar2.build());
+    rars.add(rar3);
+    MultiAction multi = new MultiAction();
+    
+    PutRequest put1 = new PutRequest(TABLE, KEY, FAMILY, QUALIFIER, VALUE);
+    put1.region = region;
+    PutRequest put2 = new PutRequest(TABLE, KEY, FAMILY, QUALIFIER, VALUE);
+    put2.region = region2;
+    PutRequest put3 = new PutRequest(TABLE, KEY, FAMILY, QUALIFIER, VALUE);
+    put3.region = region2;
+    PutRequest put4 = new PutRequest(TABLE, KEY, FAMILY, QUALIFIER, VALUE);
+    put4.region = region3;
+    multi.add(put1);
+    multi.add(put2);
+    multi.add(put3);
+    multi.add(put4);
+    Collections.sort(multi.batch(), MultiAction.SORT_BY_REGION);
+    
+    final MultiAction.Response decoded = 
+        (MultiAction.Response)multi.deserialize(
+            PBufResponses.encodeResponse(
+                PBufResponses.generateMultiActionResponseFromRars(rars)), 0);
+    assertEquals(4, decoded.size());
+    assertTrue(decoded.result(0) == MultiAction.SUCCESS);
+    assertTrue(decoded.result(1) instanceof RuntimeException);
+    RuntimeException e = (RuntimeException)decoded.result(1);
+    assertTrue(e.getMessage().contains("Boo!"));
+    assertTrue(decoded.result(2) instanceof RuntimeException);
+    e = (RuntimeException)decoded.result(2);
+    assertTrue(e.getMessage().contains("Boo!"));
+    assertTrue(decoded.result(3) == MultiAction.SUCCESS);
+  }
+  
   // TODO - enable and fix this to test cell sizing the code works on a split
   // minicluster.
   // TODO - test deserializing with a cell size.

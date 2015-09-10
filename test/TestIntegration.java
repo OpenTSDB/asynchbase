@@ -34,7 +34,6 @@ import java.io.OutputStream;
 import java.util.ArrayList;
 import java.util.Collection;
 
-import org.hbase.async.KeyOnlyFilter;
 import org.slf4j.Logger;
 import org.junit.After;
 import org.junit.Before;
@@ -259,6 +258,7 @@ final public class TestIntegration {
   @Test
   public void appendOnceNoReturnRead() throws Exception {
     client.setFlushInterval(FAST_FLUSH);
+    truncateTable(table);
     final double write_time = System.currentTimeMillis();
     final AppendRequest append = new AppendRequest(table, "a", family, "q", "val");
     final GetRequest get = new GetRequest(table, "a", family, "q");
@@ -281,12 +281,59 @@ final public class TestIntegration {
   @Test
   public void appendTwiceNoReturnRead() throws Exception {
     client.setFlushInterval(FAST_FLUSH);
+    truncateTable(table);
     final double write_time = System.currentTimeMillis();
     final AppendRequest append = new AppendRequest(table, "a2", family, "q", "val");
     final AppendRequest append2 = new AppendRequest(table, "a2", family, "q", "2ndv");
     final GetRequest get = new GetRequest(table, "a2", family, "q");
     assertNull(client.append(append).join());
     assertNull(client.append(append2).join());
+    final ArrayList<KeyValue> kvs = client.get(get).join();
+    assertSizeIs(1, kvs);
+    final KeyValue kv = kvs.get(0);
+    assertEq("a2", kv.key());
+    assertEq(family, kv.family());
+    assertEq("q", kv.qualifier());
+    assertEq("val2ndv", kv.value());
+    final double kvts = kv.timestamp();
+    assertEquals(write_time, kvts, 5000.0);  // Within five seconds.
+  }
+  
+  @Test
+  public void appendTwiceBatchedNoReturnRead() throws Exception {
+    truncateTable(table);
+    final double write_time = System.currentTimeMillis();
+    final AppendRequest append = new AppendRequest(table, "a2", family, "q", "val");
+    final AppendRequest append2 = new AppendRequest(table, "a2", family, "q", "2ndv");
+    final GetRequest get = new GetRequest(table, "a2", family, "q");
+    final ArrayList<Deferred<Object>> deferreds = new ArrayList<Deferred<Object>>(2);
+    deferreds.add(client.append(append));
+    deferreds.add(client.append(append2));
+    Deferred.group(deferreds).join();
+    final ArrayList<KeyValue> kvs = client.get(get).join();
+    assertSizeIs(1, kvs);
+    final KeyValue kv = kvs.get(0);
+    assertEq("a2", kv.key());
+    assertEq(family, kv.family());
+    assertEq("q", kv.qualifier());
+    assertEq("val2ndv", kv.value());
+    final double kvts = kv.timestamp();
+    assertEquals(write_time, kvts, 5000.0);  // Within five seconds.
+  }
+  
+  @Test
+  public void appendTwiceBatchedReturnRead() throws Exception {
+    truncateTable(table);
+    final double write_time = System.currentTimeMillis();
+    final AppendRequest append = new AppendRequest(table, "a2", family, "q", "val");
+    append.returnResult(true);
+    final AppendRequest append2 = new AppendRequest(table, "a2", family, "q", "2ndv");
+    append2.returnResult(true);
+    final GetRequest get = new GetRequest(table, "a2", family, "q");
+    final ArrayList<Deferred<Object>> deferreds = new ArrayList<Deferred<Object>>(2);
+    deferreds.add(client.append(append));
+    deferreds.add(client.append(append2));
+    Deferred.group(deferreds).join();
     final ArrayList<KeyValue> kvs = client.get(get).join();
     assertSizeIs(1, kvs);
     final KeyValue kv = kvs.get(0);

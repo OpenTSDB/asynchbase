@@ -44,7 +44,7 @@ import static org.hbase.async.HBaseClient.EMPTY_ARRAY;
 /**
  * Stores basic information about a region.
  */
-final class RegionInfo implements Comparable<RegionInfo> {
+public final class RegionInfo implements Comparable<RegionInfo> {
 
   private static final Logger LOG = LoggerFactory.getLogger(RegionInfo.class);
 
