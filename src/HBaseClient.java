@@ -1793,15 +1793,41 @@ public final class HBaseClient {
   public Deferred<Object> prefetchMeta(final byte[] table,
                                        final byte[] start,
                                        final byte[] stop) {
+    return findTableRegions(table, start, stop, true, false);
+  }
+  
+  /**
+   * Scans the meta table for regions belonging to the given table.
+   * It can be used to prefetch the region information and/or return the actual
+   * regions to the user.
+   * <p>
+   * NOTE: If the requested table is the meta or root table, the result will be
+   * null.
+   * @param table The name of the table whose metadata you intend to scan.
+   * @param start The start of the row key range to search metadata for.
+   * @param stop The end of the row key range to search metadata for.
+   * @param cache Whether or not to cache the region information and open
+   * region server connections where applicable.
+   * @param return_locations Whether or not to return the region information
+   * in the deferred result.
+   * @return A deferred to wait on for completion. If {@link return_locations}
+   * is true, the results will be a list of {@link RegionLocation} objects.
+   * If false, the result will be null on a successful scan.
+   */
+  private Deferred<Object> findTableRegions(final byte[] table,
+                                        final byte[] start,
+                                        final byte[] stop, 
+                                        final boolean cache,
+                                        final boolean return_locations) {
     // We're going to scan .META. for the table between the row keys and filter
     // out all but the latest entries on the client side.  Whatever remains
     // will be inserted into the region cache.
-
-    // But we don't want to do this for .META. or -ROOT-.
-    if (Bytes.equals(table, META) || Bytes.equals(table, ROOT)) {
+    // But we don't want to do this for hbase:meta, .META. or -ROOT-.
+    if (Bytes.equals(table, HBASE96_META) || Bytes.equals(table, META) 
+        || Bytes.equals(table, ROOT)) {
       return Deferred.fromResult(null);
     }
-
+    
     // Create the scan bounds.
     final byte[] meta_start = createRegionSearchKey(table, start);
     // In this case, we want the scan to start immediately at the
@@ -1821,7 +1847,7 @@ public final class HBaseClient {
     } else {
       meta_stop = createRegionSearchKey(table, stop);
     }
-
+    
     if (rootregion == null) {
       // If we don't know where the root region is, we don't yet know whether
       // there is even a -ROOT- region at all (pre HBase 0.95).  So we can't
@@ -1829,42 +1855,56 @@ public final class HBaseClient {
       // meta is named ".META." or "hbase:meta".  So instead we first check
       // whether the table exists, which will force us to do a first meta
       // lookup (and therefore figure out what the name of meta is).
-      class RetryPrefetch implements Callback<Object, Object> {
+      class Retry implements Callback<Object, Object> {
+        @Override
         public Object call(final Object unused) {
-          return prefetchMeta(table, start, stop);
+          return findTableRegions(table, start, stop, cache, return_locations);
         }
+        @Override
         public String toString() {
-          return "retry prefetchMeta(" + Bytes.pretty(table) + ", "
+          return "retry (" + Bytes.pretty(table) + ", "
             + Bytes.pretty(start) + ", " + Bytes.pretty(stop) + ")";
         }
       }
-      return ensureTableExists(table).addCallback(new RetryPrefetch());
+      return ensureTableExists(table).addCallback(new Retry());
     }
+    
+    final List<RegionLocation> regions = 
+        return_locations ? new ArrayList<RegionLocation>() : null;
 
     final Scanner meta_scanner = newScanner(has_root ? META : HBASE96_META);
     meta_scanner.setStartKey(meta_start);
     meta_scanner.setStopKey(meta_stop);
-
-    class PrefetchMeta
+    
+    class MetaScanner
       implements Callback<Object, ArrayList<ArrayList<KeyValue>>> {
+      @Override
       public Object call(final ArrayList<ArrayList<KeyValue>> results) {
         if (results != null && !results.isEmpty()) {
           for (final ArrayList<KeyValue> row : results) {
-            discoverRegion(row);
+            if (return_locations) {
+              final RegionLocation region_location = toRegionLocation(row);
+              if (region_location != null) {
+                regions.add(region_location);
+              }
+            }
+            if (cache) {
+              discoverRegion(row);
+            }
           }
           return meta_scanner.nextRows().addCallback(this);
         }
-        return null;
+        return regions;
       }
-
+      @Override
       public String toString() {
-        return "prefetchMeta scanner=" + meta_scanner;
+        return "MetaScanner scanner=" + meta_scanner;
       }
     }
 
-    return meta_scanner.nextRows().addCallback(new PrefetchMeta());
+    return meta_scanner.nextRows().addCallback(new MetaScanner());
   }
-
+  
   /**
    * Sends an RPC targeted at a particular region to the right RegionServer.
    * <p>
@@ -2019,8 +2059,17 @@ public final class HBaseClient {
     return Deferred.fromError(e);
   }
 
-  private RegionLocation toRegionLocation(ArrayList<KeyValue> meta_row) {
-
+  /**
+   * A method, similar to {@link #discoverRegion} that parses the meta row
+   * but returns a region location object safe for use by users.
+   * @param meta_row The row to parse. May be empty but cannot be null
+   * @return A {@link RegionLocation} object with info about the region.
+   * @throws BrokenMetaException if the row is unparseable
+   * @throws TableNotFoundException if the row was empty
+   */
+  private RegionLocation toRegionLocation(final ArrayList<KeyValue> meta_row) {
+    // TODO - there's a fair bit of duplication here with the discoverRegion()
+    // code. Try cleaning it up.
     if (meta_row.isEmpty()) {
       throw new TableNotFoundException();
     }
@@ -2028,16 +2077,12 @@ public final class HBaseClient {
     int port = -1;
     RegionInfo region = null;
     byte[] start_key = null;
-
+    
     for (final KeyValue kv : meta_row) {
       final byte[] qualifier = kv.qualifier();
       if (Arrays.equals(REGIONINFO, qualifier)) {
         final byte[][] tmp = new byte[1][];  // Yes, this is ugly.
         region = RegionInfo.fromKeyValue(kv, tmp);
-        if (knownToBeNSREd(region)) {
-          invalidateRegionCache(region.name(), true, "has marked it as split.");
-          return null;
-        }
         start_key = tmp[0];
       } else if (Arrays.equals(SERVER, qualifier)
               && kv.value() != EMPTY_ARRAY) {  // Empty during NSRE.
@@ -2068,94 +2113,57 @@ public final class HBaseClient {
       throw new BrokenMetaException(null, "It didn't contain any"
               + " `info:regioninfo' cell:  " + meta_row);
     }
-
-    final byte[] region_name = region.name();
-    if (host == null) {
-      // When there's no `info:server' cell, it typically means that the
-      // location of this region is about to be updated in META, so we
-      // consider this as an NSRE.
-      invalidateRegionCache(region_name, true, "no longer has it assigned.");
-      return null;
-    }
+    
     return new RegionLocation(region, start_key, host, port);
   }
-
+  
+  /**
+   * Searches the meta table for all of the regions associated with the given
+   * table. This method does not use the cache, rather it will scan HBase every
+   * time you use it.
+   * The fetch does not populate the local region cache with the discovered
+   * regions. To do so, use {@link prefetchMeta}.
+   * @param table The table to search for
+   * @return A defererred that will contain a non-null list of region locations.
+   * The list may be empty or the result may contain an exception.
+   * @since 1.7
+   */
+  public Deferred<List<RegionLocation>> locateRegions(final String table) {
+    return locateRegions(table.getBytes());
+  }
+  
+  /**
+   * Searches the meta table for all of the regions associated with the given
+   * table. This method does not use the cache, rather it will scan HBase every
+   * time you use it.
+   * The fetch does not populate the local region cache with the discovered
+   * regions. To do so, use {@link prefetchMeta}.
+   * @param table The table to search for
+   * @return A defererred that will contain a non-null list of region locations.
+   * The list may be empty or the result may contain an exception.
+   * @since 1.7
+   */
   public Deferred<List<RegionLocation>> locateRegions(final byte[] table) {
-
-    // But we don't want to do this for hbase:meta, .META. or -ROOT-.
-    if (Bytes.equals(table, HBASE96_META) || Bytes.equals(table, META) || Bytes.equals(table, ROOT)) {
-      return Deferred.fromResult(null);
-    }
-
-    final byte[] start = EMPTY_ARRAY;
-    final byte[] stop = EMPTY_ARRAY;
-
-    // Create the scan bounds.
-    final byte[] meta_start = createRegionSearchKey(table, start);
-    // In this case, we want the scan to start immediately at the
-    // first entry, but createRegionSearchKey finds the last entry.
-    meta_start[meta_start.length - 1] = 0;
-
-    // The stop bound is trickier.  If the user wants the whole table,
-    // expressed by passing EMPTY_ARRAY, then we need to append a null
-    // byte to the table name (thus catching all rows in the desired
-    // table, but excluding those from others.)  If the user specifies
-    // an explicit stop key, we must leave the table name alone.
-    final byte[] meta_stop;
-    if (stop.length == 0) {
-      meta_stop = createRegionSearchKey(table, stop); // will return "table,,:"
-      meta_stop[table.length] = 0;  // now have "table\0,:"
-      meta_stop[meta_stop.length - 1] = ',';  // now have "table\0,,"
-    } else {
-      meta_stop = createRegionSearchKey(table, stop);
-    }
-
-    if (rootregion == null) {
-      // If we don't know where the root region is, we don't yet know whether
-      // there is even a -ROOT- region at all (pre HBase 0.95).  So we can't
-      // start scanning meta right away, because we don't yet know whether
-      // meta is named ".META." or "hbase:meta".  So instead we first check
-      // whether the table exists, which will force us to do a first meta
-      // lookup (and therefore figure out what the name of meta is).
-      class RetryLocateRegions implements Callback<Deferred<List<RegionLocation>>, Object> {
-        public Deferred<List<RegionLocation>> call(final Object unused) {
-          return locateRegions(table);
+    class TypeCB implements Callback<Deferred<List<RegionLocation>>, Object> {
+      @SuppressWarnings("unchecked")
+      @Override
+      public Deferred<List<RegionLocation>> call(final Object results) 
+          throws Exception {
+        if (results == null) {
+          return Deferred.fromResult(null);
         }
-        public String toString() {
-          return "Retry locateRegions (" + Bytes.pretty(table) + ", "
-                  + Bytes.pretty(start) + ", " + Bytes.pretty(stop) + ")";
+        if (results instanceof Exception) {
+          return Deferred.fromError((Exception) results);
         }
+        return Deferred.fromResult((List<RegionLocation>)results);
       }
-      return ensureTableExists(table).addCallbackDeferring(new RetryLocateRegions());
-    }
-
-    final Scanner meta_scanner = newScanner(has_root ? META : HBASE96_META);
-    meta_scanner.setStartKey(meta_start);
-    meta_scanner.setStopKey(meta_stop);
-
-    final List<RegionLocation> result = new ArrayList<RegionLocation>();
-
-    class LocateRegionsContinue
-            implements Callback<Deferred<List<RegionLocation>>, ArrayList<ArrayList<KeyValue>>> {
-      public Deferred<List<RegionLocation>> call(final ArrayList<ArrayList<KeyValue>> results) {
-        if (results != null && !results.isEmpty()) {
-          for (ArrayList<KeyValue> meta_row : results) {
-            RegionLocation region_location = toRegionLocation(meta_row);
-            if (region_location != null) {
-              result.add(region_location);
-            }
-          }
-          return meta_scanner.nextRows().addCallbackDeferring(this);
-        }
-        return Deferred.fromResult(result);
-      }
-
+      @Override
       public String toString() {
-        return "LocateRegionsContinue scanner=" + meta_scanner;
+        return "locateRegions type converter CB";
       }
     }
-
-    return meta_scanner.nextRows().addCallbackDeferring(new LocateRegionsContinue());
+    return findTableRegions(table, EMPTY_ARRAY, EMPTY_ARRAY, false, true)
+        .addCallbackDeferring(new TypeCB());
   }
 
   /** @return the rpc timeout timer */
