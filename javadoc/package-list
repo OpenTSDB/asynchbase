@@ -1,0 +1,3 @@
+org.hbase.async
+org.hbase.async.auth
+org.hbase.async.jsr166e
