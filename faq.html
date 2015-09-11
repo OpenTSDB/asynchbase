@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    
+    <title>FAQ - AsyncHBase - An asynchronous client for Apache HBase</title>
+    
+    <!-- Bootstrap core CSS -->
+    <link href="css/bootstrap.min.css" rel="stylesheet">
+    <link href="css/asynchbase-bootstrap.css" rel="stylesheet">
+
+    <!-- Custom styles for this template -->
+    <link href="css/custom.css" rel="stylesheet">
+
+    <script type="text/javascript">
+      var _gaq = _gaq || [];
+      _gaq.push(['_setAccount', 'UA-18339382-1']);
+      _gaq.push(['_setDomainName', 'none']);
+      _gaq.push(['_setAllowLinker', true]);
+      _gaq.push(['_trackPageview']);
+      (function() {
+        var ga = document.createElement('script'); ga.type = 'text/javascript'; ga.async = true;
+        ga.src = ('https:' == document.location.protocol ? 'https://ssl' : 'http://www') + '.google-analytics.com/ga.js';
+        var s = document.getElementsByTagName('script')[0]; s.parentNode.insertBefore(ga, s);
+      })();
+    </script>
+  </head>
+
+  <body>
+    <a href="https://github.com/OpenTSDB/asynchbase">
+      <img style="position: absolute; top: 0; right: 0; border: 0;" src="https://camo.githubusercontent.com/38ef81f8aca64bb9a64448d0d70f1308ef5341ab/68747470733a2f2f73332e616d617a6f6e6177732e636f6d2f6769746875622f726962626f6e732f666f726b6d655f72696768745f6461726b626c75655f3132313632312e706e67" alt="Fork me on GitHub" data-canonical-src="https://s3.amazonaws.com/github/ribbons/forkme_right_darkblue_121621.png">
+    </a>
+     <div class="container">
+       <h1><a href="http://opentsdb.github.io/asynchbase/"></a></h1>
+       
+     <div class="navbar navbar-default">
+        <div class="container-fluid">
+          <div class="navbar-header">
+            <ul class="nav navbar-nav">
+              <li><a href="index.html">Home</a></li>
+              <!--<li><a href="overview.html">Overview</a></li>-->
+              <li><a href="https://github.com/OpenTSDB/asynchbase/releases">Download</a></li>
+              <li><a href="https://github.com/OpenTSDB/asynchbase">Source</a></li>
+              <li><a href="javadoc/index.html">Java Docs</a></li>
+              <li><a href="faq.html">FAQ</a></li>
+            </ul>
+          </div>
+        </div>
+      </div><script src="misc/toc.js" type="text/javascript"></script>
+<section id="FAQ">
+<div id="toc"></div>
+
+<a name="compatability"></a><h2>Compatability</h2>
+<h4>Can I drop in AsyncHBase in place of the HTable client?</h4>
+Unfortunately, no. The APIs are fairly different, e.g. every call is asynchronous
+in this client and you either have to wait for a response or use a callback chain
+to process it.
+
+<h4>Will this work with version <em>X</em> of HBase?</h4>
+Probably. One of the nicest features of AsyncHBase is that you don't have to
+upgrade the JAR every time you upgrade HBase. The client is compatible with
+HBase from versions 0.92 to 0.94 and 0.96 to 1.0. Be sure to test the client
+with HBase before upgrading in case something does change with the HBase protocols.
+
+<h4>Can I use this with a secured HBase cluster?</h4>
+As of version 1.7 you can connect to a cluster protected with Kerberos or simple
+passwords.
+
+<h4>Will AsyncHBase work with HBase from vendor <em>X</em>?</h4>
+Again, probably. We've tested it with the vanilla HBase from Apache as well as 
+various versions of Cloudera and Hortonworks. 
+
+<h4>Can I connect to a cloud hosted HBase cluster?</h4>
+Probably, as long as the hosted HBase isn't heavily customized with proprietary 
+security or other changes.
+<p>
+<b>NOTE:</b> At this time AsyncHBase is not compatible with Google's cloud
+Big Table. Some folks are working on a similar async client.
+
+<h4>What are some of the major differences between HTable and AsyncHBase?</h4>
+<ul>
+<li>Only one instance of the HBaseClient is needed per HBase cluster.</li>
+<li>RPCs have "Request" appended to their name, e.g. 
+"Get" is now "GetRequest".</li>
+<li>Mutations like the PutRequest or AppendRequest are batched and
+periodically flushed by default. That means if the JVM crashes, some
+mutations may not have been committed to HBase.</li>
+<li>At this time AsyncHBase does not support co-processors.</li>
+<li>Some filters may not be supported (yet, help us add them!)</li>
+<li>Batch mutations are not, directly, supported yet.</li>
+<li>A number of exceptions thrown by the client are different.</li>
+<li>AsyncHBase has finer grained control over RPC behavior.</li>
+<li>... um, AsyncHBase is asynchronous?</li>
+</ul>
+
+<a name="meta"></a><h2>Meta</h2>
+
+<h4>Why write AsyncHBase?</h4>
+The HTable client included with HBase follow a synchronous model that makes
+using it fairly straight forward but in doing so, makes inefficient use of
+threads. While it's slowly including more asynchronous methods, the API
+doesn't allow quite as fine-grain control over RPC behavior as AsyncHBase.
+With fewer threads and using an event driven model, AsyncHBase can write and
+read faster while using fewer resources. 
+
+<h4>How to contribute to AsyncHBase?</h4>
+The easiest way is to <a href="http://help.github.com/fork-a-repo/">fork</a>
+the project on <a href="https://github.com/OpenTSDB/asynchbase">GitHub</a>.
+Make whatever changes you want to your own fork, then send a
+<a href="http://help.github.com/send-pull-requests/">pull request</a>.
+You can also send your patches to the
+<a href="http://groups.google.com/group/asynchbase">mailing list</a>.
+Be prepared to go through a couple iterations as the code is being reviewed
+before getting accepted in the main repository.  If you are familiar with
+how the Linux kernel is developed, then this is pretty similar.
+
+<h4>Who commits to AsyncHBase?</h4>
+Anyone can commit to AsyncHBase, provided that the changes are accepted
+in the main repository after getting reviewed.  There is no notion of
+"commit access", or no list of committers.
+
+<h4>Why does AsyncHBase use the LGPL?</h4>
+One of the most frequent "holy war" that plague open-source communities is
+that of what licenses to use, which ones are better or "more free" than others.
+OpenTSDB uses the <a href="http://www.gnu.org/licenses/lgpl.html">GNU LGPLv2.1+</a>
+for maximum compatibility with its dependencies and other licenses, and
+because its author thinks that the LGPL strikes the right balance between the
+goals of free software and the legal restrictions often present in corporate
+environments.
+<p>
+Let's stress the following points:
+<ul>
+<li>The LGPL is <em>not</em> the GPL.  Although based on the same text, the
+way it extends the GPL has significant consequences.  Do not confuse the two.</li>
+<li>The <a href="http://www.gnu.org/licenses/lgpl-java.html">LGPL is perfectly
+compatible with Java</a>.  The myth that the LGPL does not work as intended
+with Java is, well, just a myth, albeit a widespread one.</li>
+<li>The LGPL allows you to use the code in proprietary software, provided that
+you don't <em>redistribute a modified version</em> of the LGPL'ed code.</li>
+<li>If you want to redistribute a modified version of the code, then your
+changes must be released under the LGPL.</li>
+<li>The LGPL is perfectly compatible with the
+<a href="http://www.apache.org/licenses/LICENSE-2.0">ASF2</a> license.
+Many people are misled to believe that there is an incompatibility because the
+Apache Software Foundation (ASF) decided to not allow inclusion of LGPL'ed
+code in its own projects.  This choice only applies to the projects managed by
+the ASF itself and doesn't stem from any license incompatibility.</li>
+</ul>
+With this out of the way, we hope that those afraid of the 3 letters "GPL"
+will acknowledge the importance of using the LGPL in OpenTSDB and will
+overcome their fear of the license.
+<br/>
+<small>Disclaimer: This page doesn't provide any formal legal advice.
+Information given here is given in good faith.  If you have any doubt, talk to
+a lawyer first.  In the text above "LGPL" or "GPL" refers to the version 2.1 of
+the license, or (at your option) any later version.</small>
+
+<h4>Who supports AsyncHBase?</h4>
+<a href="http://www.stumbleupon.jobs">StumbleUpon</a> supported the initial
+development of AsyncHBase as well as its open-source release. 
+<p>
+<a href="http://www.yahoo.com">Yahoo</a> is a heavy user and contributor to
+AsyncHBase.
+<p>
+YourKit is kindly supporting open source projects with its full-featured Java
+Profiler.  YourKit, LLC is the creator of innovative and intelligent tools for
+profiling Java and .NET applications. Take a look at YourKit's leading
+software products:
+<a href="http://www.yourkit.com/java/profiler/index.jsp">YourKit Java Profiler</a>
+and
+<a href="http://www.yourkit.com/.net/profiler/index.jsp">YourKit .NET Profiler</a>.
+
+
+</section>
+      <hr>
+      <div class="footer">
+        <p><a href="https://groups.google.com/forum/#!forum/asynchbase"><i class="glyphicon glyphicon-envelope"></i> Mailing List</a>  | <i class="glyphicon glyphicon-user"></i> IRC: Freenode #opentsdb  |  &copy; 2010 - 2015 The AsyncHBase Authors | Travis CI Status: <img src="https://api.travis-ci.org/OpenTSDB/asynchbase.svg">
+      </div>
+    </div> <!-- /container -->
+    <!-- jQuery (necessary for Bootstrap's JavaScript plugins) -->
+    <script src="https://ajax.googleapis.com/ajax/libs/jquery/1.11.0/jquery.min.js"></script>
+    <!-- Include all compiled plugins (below), or include individual files as needed -->
+    <script src="js/bootstrap.min.js"></script>
+  </body>
+</html>

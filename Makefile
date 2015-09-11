@@ -1,5 +1,6 @@
 SITE_HTML = \
   index.html	\
+  faq.html	\
 
 CONTENT_DIR = content
 CONTENT_HEADER = $(CONTENT_DIR)/header
