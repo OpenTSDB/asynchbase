@@ -32,14 +32,11 @@ import java.util.Collections;
 import java.util.Comparator;
 
 import org.jboss.netty.buffer.ChannelBuffer;
-
 import org.hbase.async.generated.ClientPB.Action;
 import org.hbase.async.generated.ClientPB.MultiRequest;
 import org.hbase.async.generated.ClientPB.MultiResponse;
-import org.hbase.async.generated.ClientPB.MutationProto;
 import org.hbase.async.generated.ClientPB.RegionAction;
 import org.hbase.async.generated.ClientPB.RegionActionResult;
-import org.hbase.async.generated.ClientPB.Result;
 import org.hbase.async.generated.ClientPB.ResultOrException;
 import org.hbase.async.generated.HBasePB.NameBytesPair;
 
@@ -112,12 +109,17 @@ final class MultiAction extends HBaseRpc implements HBaseRpc.IsEdit {
    * <p>
    * @param rpc The RPC to add in this batch.
    * Any edit added <b>must not</b> specify an explicit row lock.
+   * @throws IllegalArgumentException if the region was missing from the RPC
    */
   public void add(final BatchableRpc rpc) {
     if (rpc.lockid != RowLock.NO_LOCK) {
       throw new AssertionError("Should never happen!  We don't do multi-put"
         + " with RowLocks but we've been given an edit that has one!"
         + "  edit=" + rpc + ", this=" + this);
+    }
+    if (rpc.region == null || rpc.region.name() == null) {
+      throw new IllegalArgumentException("RPC " + rpc + 
+          " is missing the region or region name");
     }
     batch.add(rpc);
   }
@@ -526,13 +528,16 @@ final class MultiAction extends HBaseRpc implements HBaseRpc.IsEdit {
 
   @Override
   Object deserialize(final ChannelBuffer buf, final int cell_size) {
-    HBaseRpc.ensureNoCell(cell_size);
     final MultiResponse resp = readProtobuf(buf, MultiResponse.PARSER);
+    final int responses = resp.getRegionActionResultCount();
     final int nrpcs = batch.size();
     final Object[] resps = new Object[nrpcs];
     int n = 0;  // Index in `batch'.
     int r = 0;  // Index in `regionActionResult' in the PB.
-    while (n < nrpcs) {
+    ArrayList<KeyValue> kvs = null;
+    int kv_index = 0;
+    
+    while (n < nrpcs && r < responses) {
       final RegionActionResult results = resp.getRegionActionResult(r++);
       final int nresults = results.getResultOrExceptionCount();
       if (results.hasException()) {
@@ -560,14 +565,48 @@ final class MultiAction extends HBaseRpc implements HBaseRpc.IsEdit {
         }
         n = last_edit;
         continue;  // This batch failed, move on.
+      } else if (nresults == 0) {
+        /* WTF HBase? Why return nulls for appends when we don't ask for a 
+         * response instead of at least returning an empty result like the 
+         * puts? */
+        if (!(batch.get(n) instanceof AppendRequest)) {
+          throw new InvalidResponseException("No responses for a multiAction set"
+              + " and the first RPC " + batch.get(n) 
+              + " was not an append request", results);
+        }
+        int last_edit = n + 1; // +1 because we have at least 1 edit.
+        final byte[] region_name = batch.get(n).getRegion().name();
+        while (last_edit < nrpcs
+               && Bytes.equals(region_name,
+                               batch.get(last_edit).getRegion().name())) {
+          last_edit++;
+        }
+        for (int j = n; j < last_edit; j++) {
+          resps[j] = SUCCESS;
+        }
+        n = last_edit;
+        continue;  // All the appends for this batch are successful
       }  // else: parse out the individual results:
+      
+      
       for (int j = 0; j < nresults; j++) {
         final ResultOrException roe = results.getResultOrException(j);
         final int index = roe.getIndex();
         if (index != n) {
-          throw new InvalidResponseException("Expected result #" + n
-                                             + " but got result #" + index,
-                                             results);
+          // More append fun! If we interleaved appends with puts or appends 
+          // with and without result returns, we need to skip over appends
+          // without results as they're not counted in {@code nresults}
+          while (batch.get(n) instanceof AppendRequest && 
+              !((AppendRequest)batch.get(n)).returnResult()) {
+            resps[n++] = SUCCESS;
+          }
+          if (index != n) {
+            // if we STILL don't match up on our indices then something is
+            // foobar so toss an exception
+            throw new InvalidResponseException("Expected result #" + n
+                                               + " but got result #" + index,
+                                               results);
+          }
         }
         final Object result;
         if (roe.hasException()) {
@@ -575,18 +614,35 @@ final class MultiAction extends HBaseRpc implements HBaseRpc.IsEdit {
           // This RPC failed, get what the exception was.
           result = RegionClient.decodeExceptionPair(batch.get(n), pair);
         } else {
-          // We currently don't care what the result was: if it wasn't an
-          // error, it was a success, period.  For a put/delete the result
-          // would be empty anyway.
-          result = SUCCESS;
+          // TODO - handle other types of RPCs if we start allowing them in
+          // a batch
+          if (batch.get(n) instanceof AppendRequest) {
+            final AppendRequest append_request = (AppendRequest)(batch.get(n));
+            if (kvs == null) { // only do this once
+              kvs = GetRequest.convertResult(roe.getResult(), buf, cell_size);
+            }
+            if (append_request.returnResult()) {
+              result = kvs.get(kv_index++);
+            } else {
+              result = SUCCESS;
+            }
+          } else {
+            result = SUCCESS;  
+          }
         }
         resps[n++] = result;
       }
     }
     if (n != nrpcs) {
-      throw new InvalidResponseException("Expected " + nrpcs
-                                         + " results but got " + n,
-                                         resp);
+      // handle trailing appends that don't have a response.
+      while (n < nrpcs && batch.get(n) instanceof AppendRequest && 
+          !((AppendRequest)batch.get(n)).returnResult()) {
+        resps[n++] = SUCCESS;
+      }
+      if (n != nrpcs) {
+        throw new InvalidResponseException("Expected " + nrpcs
+                                           + " results but got " + n, resp);
+      }
     }
     return new Response(resps);
   }
@@ -606,6 +662,11 @@ final class MultiAction extends HBaseRpc implements HBaseRpc.IsEdit {
       this.resps = resps;
     }
 
+    /** @return The number of objects in the response */
+    public int size() {
+      return resps.length;
+    }
+    
     /**
      * Returns the result number #i embodied in this response.
      * @throws IndexOutOfBoundsException if i is greater than batch.size()
@@ -794,7 +855,7 @@ final class MultiAction extends HBaseRpc implements HBaseRpc.IsEdit {
 
   }
 
-  /** Singleton class returned to indicate success of a multi-put.  */
+  /** Singleton class returned to indicate success of a multi-put or append.  */
   private static final class MultiActionSuccess {
 
     private MultiActionSuccess() {
@@ -806,6 +867,7 @@ final class MultiAction extends HBaseRpc implements HBaseRpc.IsEdit {
 
   }
 
-  private static final MultiActionSuccess SUCCESS = new MultiActionSuccess();
+  /** Indicates the results of the mutation were successful */
+  static final MultiActionSuccess SUCCESS = new MultiActionSuccess();
 
 }

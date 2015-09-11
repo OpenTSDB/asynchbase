@@ -30,7 +30,7 @@ package org.hbase.async;
  * Exception thrown when we attempted to use a region that wasn't serving from
  * that particular RegionServer.  It probably moved somewhere else.
  */
-public final class NotServingRegionException extends RecoverableException
+public class NotServingRegionException extends RecoverableException
 implements HasFailedRpcException {
 
   static final String REMOTE_CLASS =

@@ -24,7 +24,7 @@
  * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
  * POSSIBILITY OF SUCH DAMAGE.
  */
-package org.hbase.async.test;
+package org.hbase.async;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -39,12 +39,13 @@ import org.hbase.async.RowLock;
 import org.hbase.async.RowLockRequest;
 import org.hbase.async.Scanner;
 import org.slf4j.Logger;
-
-import org.hbase.async.test.Common;
+import org.hbase.async.Common;
+import org.junit.Ignore;
 
 /**
  * Simple command-line interface to quickly test async HBase.
  */
+@Ignore // ignore for test runners
 final class Test {
 
   private static final Logger LOG = Common.logger(Test.class);

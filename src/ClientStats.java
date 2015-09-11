@@ -52,10 +52,17 @@ public final class ClientStats {
   private final long num_scanners_opened;
   private final long num_scans;
   private final long num_puts;
+  private final long num_appends;
   private final long num_row_locks;
   private final long num_deletes;
   private final long num_atomic_increments;
   private final CacheStats increment_buffer_stats;
+  private final long inflight_rpcs;
+  private final long pending_rpcs;
+  private final long pending_batched_rpcs;
+  private final int dead_region_clients;
+  private final int region_clients;
+  private final long idle_connections_closed;
 
   /** Package-private constructor.  */
   ClientStats(final long num_connections_created,
@@ -70,10 +77,17 @@ public final class ClientStats {
               final long num_scanners_opened,
               final long num_scans,
               final long num_puts,
+              final long num_appends,
               final long num_row_locks,
               final long num_deletes,
               final long num_atomic_increments,
-              final CacheStats increment_buffer_stats) {
+              final CacheStats increment_buffer_stats,
+              final long rpcs_inflight,
+              final long pending_rpcs,
+              final long pending_batched_rpcs,
+              final int dead_region_clients,
+              final int region_clients,
+              final long idle_connections_closed) {
     // JAVA Y U NO HAVE CASE CLASS LIKE SCALA?!  FFFFFUUUUUUU!!
     this.num_connections_created = num_connections_created;
     this.root_lookups = root_lookups;
@@ -87,10 +101,17 @@ public final class ClientStats {
     this.num_scanners_opened = num_scanners_opened;
     this.num_scans = num_scans;
     this.num_puts = num_puts;
+    this.num_appends = num_appends;
     this.num_row_locks = num_row_locks;
     this.num_deletes = num_deletes;
     this.num_atomic_increments = num_atomic_increments;
     this.increment_buffer_stats = increment_buffer_stats;
+    this.inflight_rpcs = rpcs_inflight;
+    this.pending_rpcs = pending_rpcs;
+    this.pending_batched_rpcs = pending_batched_rpcs;
+    this.dead_region_clients = dead_region_clients;
+    this.region_clients = region_clients;
+    this.idle_connections_closed = idle_connections_closed;
   }
 
   /** Number of connections created to connect to RegionServers.  */
@@ -98,6 +119,17 @@ public final class ClientStats {
     return num_connections_created;
   }
 
+  /**
+   * Returns the number of connections to region servers that were closed
+   * due to being idle past the "hbase.hbase.ipc.client.connection.idle_timeout"
+   * value. 
+   * @return The number of idle connections over time
+   * @since 1.7
+   */
+  public long idleConnectionsClosed() {
+    return idle_connections_closed;
+  }
+  
   /**
    * Returns how many lookups in {@code -ROOT-} were performed.
    * <p>
@@ -233,6 +265,17 @@ public final class ClientStats {
     return num_puts;
   }
 
+  /**
+   * Number calls to {@link HBaseClient#append}.
+   * <p>
+   * Note that this doesn't necessarily reflect the number of RPCs sent to
+   * HBase due to batching (see {@link HBaseClient#setFlushInterval}).
+   * @see #numBatchedRpcSent
+   */
+  public long appends() {
+    return num_appends;
+  }
+  
   /** Number calls to {@link HBaseClient#lockRow}.  */
   public long rowLocks() {
     return num_row_locks;
@@ -263,6 +306,57 @@ public final class ClientStats {
     return num_atomic_increments;
   }
 
+  /**
+   * Represents the number of RPCs that have been sent to the region client
+   * and are currently waiting for a response. If this value increases then the
+   * region server is likely overloaded.
+   * @return the number of RPCs sent to region client waiting for response.
+   * @since 1.7
+   */
+  public long inflightRPCs() {
+    return inflight_rpcs;
+  }
+  
+  /**
+   * The number of RPCs that are queued up and ready to be sent to the region
+   * server. When an RPC is sent, this number should be decremented and 
+   * {@code inflightRPCs} incremented.
+   * @return the number of RPCs queued and ready to be sent to region server.
+   * @since 1.7
+   */
+  public long pendingRPCs() {
+    return pending_rpcs;
+  }
+  
+  /**
+   * The number of batched RPCs waiting to be sent to the server.
+   * @return the number of batched RPCs waiting to be sent to server.
+   * @since 1.7
+   */
+  public long pendingBatchedRPCs() {
+    return pending_batched_rpcs;
+  }
+  
+  /**
+   * The number of region clients that have lost their connection to the region
+   * server.
+   * @return the number of region clients that have lost connection to region
+   * server.
+   * @since 1.7
+   */
+  public int deadRegionClients() {
+    return dead_region_clients;
+  }
+  
+  /**
+   * The number of instantiated region clients.
+   * @return the number of instantiated region clients.
+   * @since 1.7
+   */
+  public int regionClients() {
+    return region_clients;
+  }
+  
   /** Returns statistics from the buffer used to coalesce increments.  */
   public CacheStats incrementBufferStats() {
     return increment_buffer_stats;

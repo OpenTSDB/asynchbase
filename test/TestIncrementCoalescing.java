@@ -24,7 +24,7 @@
  * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
  * POSSIBILITY OF SUCH DAMAGE.
  */
-package org.hbase.async.test;
+package org.hbase.async;
 
 import java.util.ArrayList;
 import java.util.Random;
@@ -32,7 +32,6 @@ import java.util.Random;
 import com.google.common.cache.CacheStats;
 
 import org.slf4j.Logger;
-
 import org.hbase.async.AtomicIncrementRequest;
 import org.hbase.async.Bytes;
 import org.hbase.async.DeleteRequest;
@@ -42,13 +41,15 @@ import org.hbase.async.Scanner;
 
 import com.stumbleupon.async.Callback;
 
-import org.hbase.async.test.Common;
+import org.hbase.async.Common;
+import org.junit.Ignore;
 
 /**
  * Integration test for increment coalescing.
  *
  * Requires a locally running HBase cluster.
  */
+@Ignore // ignore for test runners
 final class TestIncrementCoalescing {
 
   private static final Logger LOG =

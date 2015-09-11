@@ -27,6 +27,7 @@
 package org.hbase.async;
 
 import java.io.IOException;
+import java.util.concurrent.TimeUnit;
 
 import com.google.protobuf.AbstractMessageLite;
 import com.google.protobuf.CodedOutputStream;
@@ -36,6 +37,10 @@ import com.google.protobuf.Parser;
 import org.jboss.netty.buffer.ChannelBuffer;
 import org.jboss.netty.buffer.ChannelBuffers;
 import org.jboss.netty.util.CharsetUtil;
+import org.jboss.netty.util.Timeout;
+import org.jboss.netty.util.TimerTask;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import com.stumbleupon.async.Deferred;
 
@@ -55,7 +60,8 @@ import com.stumbleupon.async.Deferred;
  * holding a reference to) the byte array, which is frequently the case.
  */
 public abstract class HBaseRpc {
-
+  private static final Logger LOG = LoggerFactory.getLogger(HBaseRpc.class);
+  
   /**
    * An RPC from which you can get a table name.
    * @since 1.1
@@ -65,6 +71,7 @@ public abstract class HBaseRpc {
      * Returns the name of the table this RPC is for.
      * <p>
      * <strong>DO NOT MODIFY THE CONTENTS OF THE ARRAY RETURNED.</strong>
+     * @return the name of the table this RPC is for.
      */
     public byte[] table();
   }
@@ -78,6 +85,7 @@ public abstract class HBaseRpc {
      * Returns the row key this RPC is for.
      * <p>
      * <strong>DO NOT MODIFY THE CONTENTS OF THE ARRAY RETURNED.</strong>
+     * @return the row key this RPC is for.
      */
     public byte[] key();
   }
@@ -91,6 +99,7 @@ public abstract class HBaseRpc {
      * Returns the family this RPC is for.
      * <p>
      * <strong>DO NOT MODIFY THE CONTENTS OF THE ARRAY RETURNED.</strong>
+     * @return the family this RPC is for.
      */
     public byte[] family();
   }
@@ -104,6 +113,7 @@ public abstract class HBaseRpc {
      * Returns the column qualifier this RPC is for.
      * <p>
      * <strong>DO NOT MODIFY THE CONTENTS OF THE ARRAY RETURNED.</strong>
+     * @return the column qualifier this RPC is for.
      */
     public byte[] qualifier();
   }
@@ -117,6 +127,7 @@ public abstract class HBaseRpc {
      * Returns the column qualifiers this RPC is for.
      * <p>
      * <strong>DO NOT MODIFY THE CONTENTS OF THE ARRAY RETURNED.</strong>
+     * @return the column qualifiers this RPC is for.
      */
     public byte[][] qualifiers();
   }
@@ -130,6 +141,7 @@ public abstract class HBaseRpc {
      * Returns the value contained in this RPC.
      * <p>
      * <strong>DO NOT MODIFY THE CONTENTS OF THE ARRAY RETURNED.</strong>
+     * @return the value contained in this RPC.
      */
     public byte[] value();
   }
@@ -143,6 +155,7 @@ public abstract class HBaseRpc {
      * Returns the values contained in this RPC.
      * <p>
      * <strong>DO NOT MODIFY THE CONTENTS OF THE ARRAY RETURNED.</strong>
+     * @return the values contained in this RPC.
      */
     public byte[][] values();
   }
@@ -152,7 +165,10 @@ public abstract class HBaseRpc {
    * @since 1.2
    */
   public interface HasTimestamp {
-    /** Returns the strictly positive timestamp contained in this RPC.  */
+    /**
+     * Returns the strictly positive timestamp contained in this RPC.
+     * @return the strictly positive timestamp contained in this RPC.
+     */
     public long timestamp();
   }
 
@@ -164,7 +180,16 @@ public abstract class HBaseRpc {
     /** RPC method name to use with HBase 0.95+.  */
     static final byte[] MUTATE = { 'M', 'u', 't', 'a', 't', 'e' };
   }
+  private boolean trace_rpc;
 
+  public boolean isTraceRPC() {
+    return trace_rpc;
+  }
+
+  public void setTraceRPC(boolean trace_rpc) {
+    this.trace_rpc = trace_rpc;
+  }
+  
   /*
    * This class, although it's part of the public API, is mostly here to make
    * it easier for this library to manipulate the HBase RPC protocol.
@@ -398,19 +423,44 @@ public abstract class HBaseRpc {
    */
   byte attempt;  // package-private for RegionClient and HBaseClient only.
 
+  /** An optional timeout in milliseconds for the RPC. -1 means use the 
+   * default from the config. 0 means don't timeout. */
+  private int timeout = -1;
+  
+  /** If the RPC has a timeout set this will be set on submission to the 
+   * timer thread. */
+  Timeout timeout_handle; // package-private for RegionClient and HBaseClient only.
+  
+  /** Task set if a timeout has been requested. The task will be executed only
+   * if the RPC did timeout, then we mark {@link #has_timedout} as true and
+   * remove the RPC from the region client as well as calling it back with
+   * a {@link RpcTimedoutException}
+   */
+  private TimerTask timeout_task;
+  
+  /** Whether or not this RPC has timed out already */
+  private boolean has_timedout;
+  
   /**
    * If true, this RPC should fail-fast as soon as we know we have a problem.
    */
   boolean failfast = false;
 
+  /** The ID of this RPC as set by the last region client that handled it */
+  int rpc_id;
+  
+  /** A reference to the last region client that handled this RPC */
+  private RegionClient region_client;
+  
   /**
-   * Set whether or not the RPC not be retried upon encountering a problem.
+   * Set whether the RPC not be retried upon encountering a problem.
    * <p>
    * RPCs can be retried for various legitimate reasons (e.g. NSRE due to a
    * region moving), but under certain failure circumstances (such as a node
    * going down) we want to give up and be alerted as soon as possible.
    * @param failfast If {@code true}, this RPC should fail-fast as soon as
    * we know we have a problem.
+   * @return whether the RPC not be retried upon encountering a problem.
    * @since 1.5
    */
   public final boolean setFailfast(final boolean failfast) {
@@ -418,7 +468,8 @@ public abstract class HBaseRpc {
   }
 
   /**
-   * Returns whether or not the RPC not be retried upon encountering a problem.
+   * Returns whether the RPC not be retried upon encountering a problem.
+   * @return whether the RPC not be retried upon encountering a problem.
    * @see #setFailfast
    * @since 1.5
    */
@@ -426,6 +477,19 @@ public abstract class HBaseRpc {
     return failfast;
   }
 
+  /**
+   * If true, this RPC should fail-fast as soon as we know we have a problem.
+   */
+  boolean probe = false;
+
+  public boolean isProbe() {
+    return probe;
+  }
+
+  public void setProbe(boolean probe) {
+    this.probe = probe;
+  }
+  
   /**
    * Package private constructor for RPCs that aren't for any region.
    */
@@ -446,6 +510,34 @@ public abstract class HBaseRpc {
     this.key = key;
   }
 
+  /**
+   * A timeout, in milliseconds, to set for this RPC. If the RPC cannot be 
+   * sent and processed by HBase within this period then a 
+   * {@link RpcTimedOutException} will be returned in the deferred.
+   * <b>
+   * If no timeout is set, then "hbase.rpc.timeout" will be used by default.
+   * However if a value of "0" is supplied as the timeout, then the RPC will
+   * not be timed out.
+   * @param timeout The timeout in milliseconds.
+   * @throws IllegalArgumentException if the value is less than zero
+   * @since 1.7
+   */
+  public void setTimeout(final int timeout) {
+    if (timeout < 0) {
+      throw new IllegalArgumentException("The timeout cannot be negative");
+    }
+    this.timeout = timeout;
+  }
+  
+  /** An optional timeout for the RPC in milliseconds.
+   * Note that the initial value is -1, meaning the RPC will use the default
+   * value configured in hbase.rpc.timeout.
+   * @return The timeout value in milliseconds.
+   */
+  public int getTimeout() {
+    return timeout;
+  }
+  
   // ---------------------- //
   // Package private stuff. //
   // ---------------------- //
@@ -488,6 +580,100 @@ public abstract class HBaseRpc {
   }
 
   /**
+   * A timeout task that is schedule as soon as the RPC is about to go out on
+   * the wire. If this is called then the RPC has timed out and we return a
+   * {@link RpcTimedOutException} to the user. This class is also responsible
+   * for removing the RPC from the proper region client map and incrementing 
+   * it's timeout counter.
+   * <p>
+   * If this run method throws an exception or the Deferred callback does, then
+   * it will be caught and logged by Netty's timer executor.
+   */
+  private final class TimeoutTask implements TimerTask { 
+    @Override
+    public void run(final Timeout time_out) throws Exception {
+      synchronized (HBaseRpc.this) {
+        if (has_timedout) {
+          throw new IllegalStateException(
+              "This RPC has already timed out " + HBaseRpc.this);
+        }
+        has_timedout = true;
+      }
+      
+      if (timeout_handle == null) {
+        LOG.error("Received a timeout handle " + time_out 
+            + " but this RPC did not have one " + this);
+      }
+      if (time_out != timeout_handle) {
+        LOG.error("Receieved a timeout handle " + time_out + 
+            " that doesn't match our own " + this);
+      }
+      if (region_client == null) {
+        LOG.error("Somehow the region client was null when timing out RPC " 
+            + this);
+      } else {
+        region_client.removeRpc(HBaseRpc.this, true);
+      }
+      
+      callback(new RpcTimedOutException("RPC ID [" + rpc_id + 
+          "] timed out waiting for response from HBase on region client [" + 
+          region_client + " ] for over " + timeout + "ms"));
+      timeout_task = null;
+      timeout_handle = null;
+    }
+  }
+  
+  /**
+   * Schedules the RPC with the HBaseClient rpc timeout timer with the given
+   * timeout interval. If the timeout is set to zero then no timeout is 
+   * scheduled.
+   * If the RPC has already been timed out then we won't allow another attempt.
+   * If the timer has shutdown (due to the client shutting down) then we 
+   * don't do anything and let the region client expire the RPCs in it's queue.
+   * @param region_client The region client that sent the RPC over the wire.
+   * @throws IllegalStateException if the RPC has already timed out.
+   */
+  void enqueueTimeout(final RegionClient region_client) {
+    // TODO - it's possible that we may actually retry a timed out RPC in which
+    // case we want to allow this.
+    if (has_timedout) {
+      throw new IllegalStateException("This RPC has already timed out " + this);
+    }
+    if (timeout == -1) {
+      timeout = region_client.getHBaseClient().getDefaultRpcTimeout();
+    }
+    if (timeout > 0) {
+      this.region_client = region_client;
+      if (timeout_task == null) {
+        // we can re-use the task if this RPC is sent to another region server
+        timeout_task = new TimeoutTask();
+      }
+      try {
+        if (timeout_handle != null) {
+          LOG.warn("RPC " + this + " had a previous timeout task");
+        }
+        timeout_handle = region_client.getHBaseClient().getRpcTimeoutTimer()
+            .newTimeout(timeout_task, timeout, TimeUnit.MILLISECONDS);
+      } catch (IllegalStateException e) {
+        // This can happen if the timer fires just before shutdown()
+        // is called from another thread, and due to how threads get
+        // scheduled we tried to schedule a timeout after timer.stop().
+        // Region clients will handle the RPCs on shutdown so we don't need 
+        // to here.
+        LOG.warn("Failed to schedule RPC timeout: " + this
+                 + "  Ignore this if we're shutting down.", e);
+        timeout_handle = null;
+      }
+    }
+  }
+  
+  /** @return Whether or not this particular RPC has timed out and should not
+   * be retried */
+  final synchronized boolean hasTimedOut() {
+    return has_timedout;
+  }
+  
+  /**
    * Package private way of making an RPC complete by giving it its result.
    * If this RPC has no {@link Deferred} associated to it, nothing will
    * happen.  This may happen if the RPC was already called back.
@@ -497,6 +683,12 @@ public abstract class HBaseRpc {
    * RPC to be in-flight (guaranteeing this may be hard in error cases).
    */
   final void callback(final Object result) {
+    if (timeout_handle != null) {
+      timeout_handle.cancel();
+      timeout_task = null;
+      timeout_handle = null;
+    }
+    
     final Deferred<Object> d = deferred;
     if (d == null) {
       return;
@@ -531,7 +723,9 @@ public abstract class HBaseRpc {
     } else {
       region.toStringbuf(buf);
     }
-    buf.append(", attempt=").append(attempt);
+    buf.append(", attempt=").append(attempt)
+       .append(", timeout=").append(timeout)
+       .append(", hasTimedout=").append(has_timedout);
     buf.append(')');
     return buf.toString();
   }
@@ -792,7 +986,7 @@ public abstract class HBaseRpc {
    * assumed that TCP checksums would be sufficient (they're not).
    */
   static final long MAX_BYTE_ARRAY_MASK =
-    0xFFFFFFFFF0000000L;  // => max = 256MB
+    0xFFFFFFFFF0000000L;  // => max = 256MB == 268435455
 
   /**
    * Verifies that the given length looks like a reasonable array length.
@@ -901,6 +1095,7 @@ public abstract class HBaseRpc {
     if (buf.hasArray()) {  // Zero copy.
       payload = buf.array();
       offset = buf.arrayOffset() + buf.readerIndex();
+      buf.readerIndex(buf.readerIndex() + length);
     } else {  // We have to copy the entire payload out of the buffer :(
       payload = new byte[length];
       buf.readBytes(payload);
@@ -911,6 +1106,7 @@ public abstract class HBaseRpc {
     } catch (InvalidProtocolBufferException e) {
       final String msg = "Invalid RPC response: length=" + length
         + ", payload=" + Bytes.pretty(payload);
+      LOG.error("Invalid RPC from buffer: " + buf);
       throw new InvalidResponseException(msg, e);
     }
   }

@@ -33,13 +33,17 @@ import java.net.SocketAddress;
 import java.net.UnknownHostException;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collection;
 import java.util.HashMap;
 import java.util.Iterator;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentSkipListMap;
 import java.util.concurrent.Executor;
 import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicInteger;
+
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
 
 import com.google.common.cache.LoadingCache;
@@ -51,20 +55,27 @@ import org.apache.zookeeper.WatchedEvent;
 import org.apache.zookeeper.Watcher;
 import org.apache.zookeeper.ZooKeeper;
 import org.apache.zookeeper.data.Stat;
-
 import org.jboss.netty.channel.ChannelEvent;
-import org.jboss.netty.channel.ChannelPipeline;
+import org.jboss.netty.channel.ChannelHandler;
+import org.jboss.netty.channel.ChannelHandlerContext;
 import org.jboss.netty.channel.ChannelStateEvent;
 import org.jboss.netty.channel.DefaultChannelPipeline;
 import org.jboss.netty.channel.socket.ClientSocketChannelFactory;
 import org.jboss.netty.channel.socket.SocketChannel;
 import org.jboss.netty.channel.socket.SocketChannelConfig;
+import org.jboss.netty.channel.socket.nio.NioChannelConfig;
+import org.jboss.netty.channel.socket.nio.NioClientBossPool;
 import org.jboss.netty.channel.socket.nio.NioClientSocketChannelFactory;
+import org.jboss.netty.channel.socket.nio.NioWorkerPool;
+import org.jboss.netty.handler.timeout.IdleState;
+import org.jboss.netty.handler.timeout.IdleStateAwareChannelHandler;
+import org.jboss.netty.handler.timeout.IdleStateEvent;
+import org.jboss.netty.handler.timeout.IdleStateHandler;
 import org.jboss.netty.util.HashedWheelTimer;
+import org.jboss.netty.util.ThreadNameDeterminer;
 import org.jboss.netty.util.Timeout;
 import org.jboss.netty.util.Timer;
 import org.jboss.netty.util.TimerTask;
-
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -185,7 +196,6 @@ public final class HBaseClient {
    *      network blip.
    *    - If the -ROOT- region is unavailable when we start, we should
    *      put a watch in ZK instead of polling it every second.
-   * - Handling RPC timeouts.
    * - Stats:
    *     - QPS per RPC type.
    *     - Latency histogram per RPC type (requires open-sourcing the SU Java
@@ -207,20 +217,20 @@ public final class HBaseClient {
   /** A byte array containing a single zero byte.  */
   private static final byte[] ZERO_ARRAY = new byte[] { 0 };
 
-  private static final byte[] ROOT = new byte[] { '-', 'R', 'O', 'O', 'T', '-' };
-  private static final byte[] ROOT_REGION = new byte[] { '-', 'R', 'O', 'O', 'T', '-', ',', ',', '0' };
-  private static final byte[] META = new byte[] { '.', 'M', 'E', 'T', 'A', '.' };
-  static final byte[] INFO = new byte[] { 'i', 'n', 'f', 'o' };
-  private static final byte[] REGIONINFO = new byte[] { 'r', 'e', 'g', 'i', 'o', 'n', 'i', 'n', 'f', 'o' };
-  private static final byte[] SERVER = new byte[] { 's', 'e', 'r', 'v', 'e', 'r' };
+  protected static final byte[] ROOT = new byte[] { '-', 'R', 'O', 'O', 'T', '-' };
+  protected static final byte[] ROOT_REGION = new byte[] { '-', 'R', 'O', 'O', 'T', '-', ',', ',', '0' };
+  protected static final byte[] META = new byte[] { '.', 'M', 'E', 'T', 'A', '.' };
+  protected static final byte[] INFO = new byte[] { 'i', 'n', 'f', 'o' };
+  protected static final byte[] REGIONINFO = new byte[] { 'r', 'e', 'g', 'i', 'o', 'n', 'i', 'n', 'f', 'o' };
+  protected static final byte[] SERVER = new byte[] { 's', 'e', 'r', 'v', 'e', 'r' };
   /** HBase 0.95 and up: .META. is now hbase:meta */
-  private static final byte[] HBASE96_META =
+  protected static final byte[] HBASE96_META =
     new byte[] { 'h', 'b', 'a', 's', 'e', ':', 'm', 'e', 't', 'a' };
   /** New for HBase 0.95 and up: the name of META is fixed.  */
-  private static final byte[] META_REGION_NAME =
+  protected static final byte[] META_REGION_NAME =
     new byte[] { 'h', 'b', 'a', 's', 'e', ':', 'm', 'e', 't', 'a', ',', ',', '1' };
   /** New for HBase 0.95 and up: the region info for META is fixed.  */
-  private static final RegionInfo META_REGION =
+  protected static final RegionInfo META_REGION =
     new RegionInfo(HBASE96_META, META_REGION_NAME, EMPTY_ARRAY);
 
   /**
@@ -236,27 +246,28 @@ public final class HBaseClient {
   /**
    * Timer we use to handle all our timeouts.
    * TODO(tsuna): Get it through the ctor to share it with others.
-   * TODO(tsuna): Make the tick duration configurable?
    */
-  private final HashedWheelTimer timer = new HashedWheelTimer(20, MILLISECONDS);
+  private final HashedWheelTimer timer;
+  
+  /** A separate timer thread used for processing RPC timeout callbacks. We
+   * keep it separate as a bad HBase server can cause a timeout storm and we 
+   * don't want to block any flushes and operations on other region servers.
+   */
+  private final HashedWheelTimer rpc_timeout_timer;
 
   /** Up to how many milliseconds can we buffer an edit on the client side.  */
-  private volatile short flush_interval = 1000;  // ms
-
+  private volatile short flush_interval;
+  
+  /** How many different counters do we want to keep in memory for buffering. */
+  private volatile int increment_buffer_size;
+  
   /**
-   * How many different counters do we want to keep in memory for buffering.
-   * Each entry requires storing the table name, row key, family name and
-   * column qualifier, plus 4 small objects.
-   *
-   * Assuming an average table name of 10 bytes, average key of 20 bytes,
-   * average family name of 10 bytes and average qualifier of 8 bytes, this
-   * would require 65535 * (10 + 20 + 10 + 8 + 4 * 32) / 1024 / 1024 = 11MB
-   * of RAM, which isn't too excessive for a default value.  Of course this
-   * might bite people with large keys or qualifiers, but then it's normal
-   * to expect they'd tune this value to cater to their unusual requirements.
+   * Low and high watermarks when buffering RPCs due to an NSRE.
+   * @see #handleNSRE
    */
-  private volatile int increment_buffer_size = 65535;
-
+  private short nsre_low_watermark;
+  private short nsre_high_watermark;
+  
   /**
    * Factory through which we will create all its channels / sockets.
    */
@@ -395,6 +406,17 @@ public final class HBaseClient {
    */
   private volatile LoadingCache<BufferedIncrement, BufferedIncrement.Amount> increment_buffer;
 
+  /** The configuration for this client */
+  private final Config config;
+  
+  /** Integers for thread naming */
+  final static AtomicInteger BOSS_THREAD_ID = new AtomicInteger();
+  final static AtomicInteger WORKER_THREAD_ID = new AtomicInteger();
+  final static AtomicInteger TIMER_THREAD_ID = new AtomicInteger();
+  
+  /** Default RPC timeout in milliseconds from the config */
+  private final int rpc_timeout;
+  
   // ------------------------ //
   // Client usage statistics. //
   // ------------------------ //
@@ -435,6 +457,9 @@ public final class HBaseClient {
   /** Number calls to {@link #put}.  */
   private final Counter num_puts = new Counter();
 
+  /** Number calls to {@link #append}.  */
+  private final Counter num_appends = new Counter();
+  
   /** Number calls to {@link #lockRow}.  */
   private final Counter num_row_locks = new Counter();
 
@@ -443,6 +468,9 @@ public final class HBaseClient {
 
   /** Number of {@link AtomicIncrementRequest} sent.  */
   private final Counter num_atomic_increments = new Counter();
+  
+  /** Number of region clients closed due to being idle.  */
+  private final Counter idle_connections_closed = new Counter();
 
   /**
    * Constructor.
@@ -461,13 +489,7 @@ public final class HBaseClient {
    * -ROOT- region.
    */
   public HBaseClient(final String quorum_spec, final String base_path) {
-    this(quorum_spec, base_path, defaultChannelFactory());
-  }
-
-  /** Creates a default channel factory in case we haven't been given one.  */
-  private static NioClientSocketChannelFactory defaultChannelFactory() {
-    final Executor executor = Executors.newCachedThreadPool();
-    return new NioClientSocketChannelFactory(executor, executor);
+    this(quorum_spec, base_path, defaultChannelFactory(new Config()));
   }
 
   /**
@@ -497,18 +519,6 @@ public final class HBaseClient {
     this(quorum_spec, base_path, new CustomChannelFactory(executor));
   }
 
-  /** A custom channel factory that doesn't shutdown its executor.  */
-  private static final class CustomChannelFactory
-    extends NioClientSocketChannelFactory {
-      CustomChannelFactory(final Executor executor) {
-        super(executor, executor);
-      }
-      @Override
-      public void releaseExternalResources() {
-        // Do nothing, we don't want to shut down the executor.
-      }
-  }
-
   /**
    * Constructor for advanced users with special needs.
    * <p>
@@ -527,6 +537,143 @@ public final class HBaseClient {
                      final ClientSocketChannelFactory channel_factory) {
     this.channel_factory = channel_factory;
     zkclient = new ZKClient(quorum_spec, base_path);
+    config = new Config();
+    rpc_timeout = config.getInt("hbase.rpc.timeout");
+    timer = newTimer(config, "HBaseClient");
+    rpc_timeout_timer = newTimer(config, "RPC Timeout Timer");
+    flush_interval = config.getShort("hbase.rpcs.buffered_flush_interval");
+    increment_buffer_size = config.getInt("hbase.increments.buffer_size");
+    nsre_low_watermark = config.getShort("hbase.nsre.low_watermark");
+    nsre_high_watermark = config.getShort("hbase.nsre.high_watermark");
+  }
+  
+  /**
+   * Constructor accepting a configuration object with at least the 
+   * "asynchbase.zk.quorum" specified in the format {@code "host1,host2,host3"}.
+   * @param config A configuration object
+   * @since 1.7
+   */
+  public HBaseClient(final Config config) {
+    this(config, defaultChannelFactory(config));
+  }
+  
+  /**
+   * Constructor accepting a configuration object with at least the 
+   * "asynchbase.zk.quorum" specified in the format {@code "host1,host2,host3"}
+   * and an executor thread pool.
+   * @param config A configuration object
+   * @param The executor from which to obtain threads for NIO
+   * operations.  It is <strong>strongly</strong> encouraged to use a
+   * {@link Executors#newCachedThreadPool} or something equivalent unless
+   * you're sure to understand how Netty creates and uses threads.
+   * Using a fixed-size thread pool will not work the way you expect.
+   * <p>
+   * Note that calling {@link #shutdown} on this client will <b>NOT</b>
+   * shut down the executor.
+   * @see NioClientSocketChannelFactory
+   * @since 1.7
+   */
+  public HBaseClient(final Config config, final Executor executor) {
+    this(config, new CustomChannelFactory(executor));
+  }
+  
+  /**
+   * Constructor accepting a configuration object with at least the 
+   * "hbase.zookeeper.quorum" specified in the format {@code "host1,host2,host3"}
+   * and a custom channel factory for advanced users.
+   * <p>
+   * Most users don't need to use this constructor.
+   * @param config A configuration object
+   * @param channel_factory A custom factory to use to create sockets.
+   * <p>
+   * Note that calling {@link #shutdown} on this client will also cause the
+   * shutdown and release of the factory and its underlying thread pool.
+   * @since 1.7
+   */
+  public HBaseClient(final Config config, 
+      final ClientSocketChannelFactory channel_factory) {
+    this.channel_factory = channel_factory;
+    zkclient = new ZKClient(config.getString("hbase.zookeeper.quorum"), 
+        config.getString("hbase.zookeeper.znode.parent"));
+    this.config = config;
+    rpc_timeout = config.getInt("hbase.rpc.timeout");
+    timer = newTimer(config, "HBaseClient");
+    rpc_timeout_timer = newTimer(config, "RPC Timeout Timer");
+    flush_interval = config.getShort("hbase.rpcs.buffered_flush_interval");
+    increment_buffer_size = config.getInt("hbase.increments.buffer_size");
+    nsre_low_watermark = config.getShort("hbase.nsre.low_watermark");
+    nsre_high_watermark = config.getShort("hbase.nsre.high_watermark");
+  }
+  
+  /**
+   * Package private timer constructor that provides a useful name for the
+   * timer thread.
+   * @param config The config object used to pull out the tick interval
+   * @param name A name to stash in the timer
+   * @return A timer
+   */
+  static HashedWheelTimer newTimer(final Config config, final String name) {
+    class TimerThreadNamer implements ThreadNameDeterminer {
+      @Override
+      public String determineThreadName(String currentThreadName,
+          String proposedThreadName) throws Exception {
+        return "AsyncHBase Timer " + name + " #" + TIMER_THREAD_ID.incrementAndGet();
+      }
+    }
+    if (config == null) {
+      return new HashedWheelTimer(Executors.defaultThreadFactory(), 
+          new TimerThreadNamer(), 100, MILLISECONDS, 512);
+    }
+    return new HashedWheelTimer(Executors.defaultThreadFactory(), 
+        new TimerThreadNamer(), config.getShort("hbase.timer.tick"), 
+        MILLISECONDS, config.getInt("hbase.timer.ticks_per_wheel"));
+  }
+  
+  /** Creates a default channel factory in case we haven't been given one. 
+   * The factory will use Netty defaults and provide thread naming rules for
+   * easier debugging.
+   * @param config The config to pull settings from 
+   */
+  private static NioClientSocketChannelFactory defaultChannelFactory(
+      final Config config) {
+    class BossThreadNamer implements ThreadNameDeterminer {
+      @Override
+      public String determineThreadName(String currentThreadName,
+          String proposedThreadName) throws Exception {
+        return "AsyncHBase I/O Boss #" + BOSS_THREAD_ID.incrementAndGet();
+      }
+    }
+    
+    class WorkerThreadNamer implements ThreadNameDeterminer {
+      @Override
+      public String determineThreadName(String currentThreadName,
+          String proposedThreadName) throws Exception {
+        return "AsyncHBase I/O Worker #" + WORKER_THREAD_ID.incrementAndGet();
+      }
+    }
+    
+    final Executor executor = Executors.newCachedThreadPool();
+    final NioClientBossPool boss_pool = 
+        new NioClientBossPool(executor, 1, newTimer(config, "Boss Pool"), 
+            new BossThreadNamer());
+    final int num_workers = config.hasProperty("hbase.workers.size") ? 
+        config.getInt("hbase.workers.size") : 
+          Runtime.getRuntime().availableProcessors() * 2;
+    final NioWorkerPool worker_pool = new NioWorkerPool(executor, 
+        num_workers, new WorkerThreadNamer());
+    return new NioClientSocketChannelFactory(boss_pool, worker_pool);
+  }
+
+  /** A custom channel factory that doesn't shutdown its executor.  */
+  private static final class CustomChannelFactory
+    extends NioClientSocketChannelFactory {
+      CustomChannelFactory(final Executor executor) {
+        super(executor, executor);
+      }
+      @Override
+      public void releaseExternalResources() {
+        // Do nothing, we don't want to shut down the executor.
+      }
   }
 
   /**
@@ -536,6 +683,24 @@ public final class HBaseClient {
   public ClientStats stats() {
     final LoadingCache<BufferedIncrement, BufferedIncrement.Amount> cache =
       increment_buffer;
+    
+    long inflight_rpcs = 0;
+    long pending_rpcs = 0;
+    long pending_batched_rpcs = 0;
+    int dead_region_clients = 0;
+    
+    final Collection<RegionClient> region_clients = client2regions.keySet();
+    
+    for (final RegionClient rc : region_clients) {
+      final RegionClientStats stats = rc.stats();
+      inflight_rpcs += stats.inflightRPCs();
+      pending_rpcs += stats.pendingRPCs();
+      pending_batched_rpcs += stats.pendingBatchedRPCs();
+      if (stats.isDead()) {
+        dead_region_clients++;
+      }
+    }
+    
     return new ClientStats(
       num_connections_created.get(),
       root_lookups.get(),
@@ -549,13 +714,35 @@ public final class HBaseClient {
       num_scanners_opened.get(),
       num_scans.get(),
       num_puts.get(),
+      num_appends.get(),
       num_row_locks.get(),
       num_deletes.get(),
       num_atomic_increments.get(),
-      cache != null ? cache.stats() : BufferedIncrement.ZERO_STATS
+      cache != null ? cache.stats() : BufferedIncrement.ZERO_STATS,
+      inflight_rpcs,
+      pending_rpcs,
+      pending_batched_rpcs,
+      dead_region_clients,
+      region_clients.size(),
+      idle_connections_closed.get()
     );
   }
 
+  /**
+   * Returns a list of region client stats objects for debugging.
+   * @return A list of region client statistics
+   * @since 1.7
+   */
+  public List<RegionClientStats> regionStats() {
+    final Collection<RegionClient> region_clients = client2regions.keySet();
+    final List<RegionClientStats> stats = 
+        new ArrayList<RegionClientStats>(region_clients.size());
+    for (final RegionClient rc : region_clients) {
+      stats.add(rc.stats());
+    }
+    return stats;
+  }
+  
   /**
    * Flushes to HBase any buffered client-side write operation.
    * <p>
@@ -651,8 +838,10 @@ public final class HBaseClient {
     if (flush_interval < 0) {
       throw new IllegalArgumentException("Negative: " + flush_interval);
     }
-    final short prev = this.flush_interval;
-    this.flush_interval = flush_interval;
+    final short prev = config.getShort("hbase.rpcs.buffered_flush_interval");
+    config.overrideConfig("hbase.rpcs.buffered_flush_interval", 
+        Short.toString(flush_interval));
+    this.flush_interval = flush_interval; 
     return prev;
   }
 
@@ -683,10 +872,12 @@ public final class HBaseClient {
     if (increment_buffer_size < 0) {
       throw new IllegalArgumentException("Negative: " + increment_buffer_size);
     }
-    final int current = this.increment_buffer_size;
+    final int current = config.getInt("hbase.increments.buffer_size");
     if (current == increment_buffer_size) {
       return current;
     }
+    config.overrideConfig("hbase.increments.buffer_size", 
+        Integer.toString(increment_buffer_size));
     this.increment_buffer_size = increment_buffer_size;
     final LoadingCache<BufferedIncrement, BufferedIncrement.Amount> prev =
       increment_buffer;  // Volatile-read.
@@ -714,6 +905,15 @@ public final class HBaseClient {
     return timer;
   }
 
+  /**
+   * Return the configuration object for this client
+   * @return The config object for this client
+   * @since 1.7
+   */
+  public Config getConfig() {
+    return config;
+  }
+  
   /**
    * Schedules a new timeout.
    * @param task The task to execute when the timer times out.
@@ -745,6 +945,12 @@ public final class HBaseClient {
     return flush_interval;
   }
 
+  /** @returns the default RPC timeout period in milliseconds
+   * @since 1.7 */
+  public int getDefaultRpcTimeout() {
+    return rpc_timeout;
+  }
+  
   /**
    * Returns the capacity of the increment buffer.
    * <p>
@@ -797,6 +1003,7 @@ public final class HBaseClient {
       public Object call(final Object arg) {
         LOG.debug("Releasing all remaining resources");
         timer.stop();
+        rpc_timeout_timer.stop();
         new ShutdownThread().start();
         return arg;
       }
@@ -1333,7 +1540,7 @@ public final class HBaseClient {
    * {@code put} once the {@link Deferred} of this one completes successfully.
    * @param request The {@code put} request.
    * @return A deferred object that indicates the completion of the request.
-   * The {@link Object} has not special meaning and can be {@code null}
+   * The {@link Object} has no special meaning and can be {@code null}
    * (think of it as {@code Deferred<Void>}).  But you probably want to attach
    * at least an errback to this {@code Deferred} to handle failures.
    * TODO(tsuna): Document failures clients are expected to handle themselves.
@@ -1343,6 +1550,25 @@ public final class HBaseClient {
     return sendRpcToRegion(request);
   }
 
+  /**
+   * Appends data to (or creates) one or more columns in HBase.
+   * <p>
+   * Note that this provides no guarantee as to the order in which subsequent
+   * {@code append} requests are going to be applied to the column(s).  If you 
+   * need ordering, you must enforce it manually yourself by starting the next
+   * {@code append} once the {@link Deferred} of this one completes successfully.
+   * @param request The {@code append} request.
+   * @return A deferred object that indicates the completion of the request and
+   * may contain data from the column(s).
+   * The {@link Object} has not special meaning and can be {@code null}
+   * (think of it as {@code Deferred<Void>}).  But you probably want to attach
+   * at least an errback to this {@code Deferred} to handle failures.
+   */
+  public Deferred<Object> append(final AppendRequest request) {
+    num_appends.increment();
+    return sendRpcToRegion(request);
+  }
+  
   /**
    * Atomic Compare-And-Set (CAS) on a single cell.
    * <p>
@@ -1567,15 +1793,41 @@ public final class HBaseClient {
   public Deferred<Object> prefetchMeta(final byte[] table,
                                        final byte[] start,
                                        final byte[] stop) {
+    return findTableRegions(table, start, stop, true, false);
+  }
+  
+  /**
+   * Scans the meta table for regions belonging to the given table.
+   * It can be used to prefetch the region information and/or return the actual
+   * regions to the user.
+   * <p>
+   * NOTE: If the requested table is the meta or root table, the result will be
+   * null.
+   * @param table The name of the table whose metadata you intend to scan.
+   * @param start The start of the row key range to search metadata for.
+   * @param stop The end of the row key range to search metadata for.
+   * @param cache Whether or not to cache the region information and open
+   * region server connections where applicable.
+   * @param return_locations Whether or not to return the region information
+   * in the deferred result.
+   * @return A deferred to wait on for completion. If {@link return_locations}
+   * is true, the results will be a list of {@link RegionLocation} objects.
+   * If false, the result will be null on a successful scan.
+   */
+  private Deferred<Object> findTableRegions(final byte[] table,
+                                        final byte[] start,
+                                        final byte[] stop, 
+                                        final boolean cache,
+                                        final boolean return_locations) {
     // We're going to scan .META. for the table between the row keys and filter
     // out all but the latest entries on the client side.  Whatever remains
     // will be inserted into the region cache.
-
-    // But we don't want to do this for .META. or -ROOT-.
-    if (Bytes.equals(table, META) || Bytes.equals(table, ROOT)) {
+    // But we don't want to do this for hbase:meta, .META. or -ROOT-.
+    if (Bytes.equals(table, HBASE96_META) || Bytes.equals(table, META) 
+        || Bytes.equals(table, ROOT)) {
       return Deferred.fromResult(null);
     }
-
+    
     // Create the scan bounds.
     final byte[] meta_start = createRegionSearchKey(table, start);
     // In this case, we want the scan to start immediately at the
@@ -1595,7 +1847,7 @@ public final class HBaseClient {
     } else {
       meta_stop = createRegionSearchKey(table, stop);
     }
-
+    
     if (rootregion == null) {
       // If we don't know where the root region is, we don't yet know whether
       // there is even a -ROOT- region at all (pre HBase 0.95).  So we can't
@@ -1603,42 +1855,56 @@ public final class HBaseClient {
       // meta is named ".META." or "hbase:meta".  So instead we first check
       // whether the table exists, which will force us to do a first meta
       // lookup (and therefore figure out what the name of meta is).
-      class RetryPrefetch implements Callback<Object, Object> {
+      class Retry implements Callback<Object, Object> {
+        @Override
         public Object call(final Object unused) {
-          return prefetchMeta(table, start, stop);
+          return findTableRegions(table, start, stop, cache, return_locations);
         }
+        @Override
         public String toString() {
-          return "retry prefetchMeta(" + Bytes.pretty(table) + ", "
+          return "retry (" + Bytes.pretty(table) + ", "
             + Bytes.pretty(start) + ", " + Bytes.pretty(stop) + ")";
         }
       }
-      return ensureTableExists(table).addCallback(new RetryPrefetch());
+      return ensureTableExists(table).addCallback(new Retry());
     }
+    
+    final List<RegionLocation> regions = 
+        return_locations ? new ArrayList<RegionLocation>() : null;
 
     final Scanner meta_scanner = newScanner(has_root ? META : HBASE96_META);
     meta_scanner.setStartKey(meta_start);
     meta_scanner.setStopKey(meta_stop);
-
-    class PrefetchMeta
+    
+    class MetaScanner
       implements Callback<Object, ArrayList<ArrayList<KeyValue>>> {
+      @Override
       public Object call(final ArrayList<ArrayList<KeyValue>> results) {
         if (results != null && !results.isEmpty()) {
           for (final ArrayList<KeyValue> row : results) {
-            discoverRegion(row);
+            if (return_locations) {
+              final RegionLocation region_location = toRegionLocation(row);
+              if (region_location != null) {
+                regions.add(region_location);
+              }
+            }
+            if (cache) {
+              discoverRegion(row);
+            }
           }
           return meta_scanner.nextRows().addCallback(this);
         }
-        return null;
+        return regions;
       }
-
+      @Override
       public String toString() {
-        return "prefetchMeta scanner=" + meta_scanner;
+        return "MetaScanner scanner=" + meta_scanner;
       }
     }
 
-    return meta_scanner.nextRows().addCallback(new PrefetchMeta());
+    return meta_scanner.nextRows().addCallback(new MetaScanner());
   }
-
+  
   /**
    * Sends an RPC targeted at a particular region to the right RegionServer.
    * <p>
@@ -1699,7 +1965,7 @@ public final class HBaseClient {
         return d;
       }
     }
-    return locateRegion(table, key).addBothDeferring(new RetryRpc());
+    return locateRegion(request, table, key).addBothDeferring(new RetryRpc());
   }
 
   /**
@@ -1769,8 +2035,8 @@ public final class HBaseClient {
    * @throws NonRecoverableException if the request has had too many attempts
    * already.
    */
-  static boolean cannotRetryRequest(final HBaseRpc rpc) {
-    return rpc.attempt > 10;  // XXX Don't hardcode.
+  boolean cannotRetryRequest(final HBaseRpc rpc) {
+    return rpc.attempt > config.getInt("hbase.client.retries.number");
   }
 
   /**
@@ -1793,6 +2059,118 @@ public final class HBaseClient {
     return Deferred.fromError(e);
   }
 
+  /**
+   * A method, similar to {@link #discoverRegion} that parses the meta row
+   * but returns a region location object safe for use by users.
+   * @param meta_row The row to parse. May be empty but cannot be null
+   * @return A {@link RegionLocation} object with info about the region.
+   * @throws BrokenMetaException if the row is unparseable
+   * @throws TableNotFoundException if the row was empty
+   */
+  private RegionLocation toRegionLocation(final ArrayList<KeyValue> meta_row) {
+    // TODO - there's a fair bit of duplication here with the discoverRegion()
+    // code. Try cleaning it up.
+    if (meta_row.isEmpty()) {
+      throw new TableNotFoundException();
+    }
+    String host = null;
+    int port = -1;
+    RegionInfo region = null;
+    byte[] start_key = null;
+    
+    for (final KeyValue kv : meta_row) {
+      final byte[] qualifier = kv.qualifier();
+      if (Arrays.equals(REGIONINFO, qualifier)) {
+        final byte[][] tmp = new byte[1][];  // Yes, this is ugly.
+        region = RegionInfo.fromKeyValue(kv, tmp);
+        start_key = tmp[0];
+      } else if (Arrays.equals(SERVER, qualifier)
+              && kv.value() != EMPTY_ARRAY) {  // Empty during NSRE.
+        final byte[] hostport = kv.value();
+        int colon = hostport.length - 1;
+        for (/**/; colon > 0 /* Can't be at the beginning */; colon--) {
+          if (hostport[colon] == ':') {
+            break;
+          }
+        }
+        if (colon == 0) {
+          throw BrokenMetaException.badKV(region, "an `info:server' cell"
+                  + " doesn't contain `:' to separate the `host:port'"
+                  + Bytes.pretty(hostport), kv);
+        }
+        host = getIP(new String(hostport, 0, colon));
+        try {
+          port = parsePortNumber(new String(hostport, colon + 1,
+                  hostport.length - colon - 1));
+        } catch (NumberFormatException e) {
+          throw BrokenMetaException.badKV(region, "an `info:server' cell"
+                  + " contains an invalid port: " + e.getMessage() + " in "
+                  + Bytes.pretty(hostport), kv);
+        }
+      }
+    }
+    if (start_key == null) {
+      throw new BrokenMetaException(null, "It didn't contain any"
+              + " `info:regioninfo' cell:  " + meta_row);
+    }
+    
+    return new RegionLocation(region, start_key, host, port);
+  }
+  
+  /**
+   * Searches the meta table for all of the regions associated with the given
+   * table. This method does not use the cache, rather it will scan HBase every
+   * time you use it.
+   * The fetch does not populate the local region cache with the discovered
+   * regions. To do so, use {@link prefetchMeta}.
+   * @param table The table to search for
+   * @return A defererred that will contain a non-null list of region locations.
+   * The list may be empty or the result may contain an exception.
+   * @since 1.7
+   */
+  public Deferred<List<RegionLocation>> locateRegions(final String table) {
+    return locateRegions(table.getBytes());
+  }
+  
+  /**
+   * Searches the meta table for all of the regions associated with the given
+   * table. This method does not use the cache, rather it will scan HBase every
+   * time you use it.
+   * The fetch does not populate the local region cache with the discovered
+   * regions. To do so, use {@link prefetchMeta}.
+   * @param table The table to search for
+   * @return A defererred that will contain a non-null list of region locations.
+   * The list may be empty or the result may contain an exception.
+   * @since 1.7
+   */
+  public Deferred<List<RegionLocation>> locateRegions(final byte[] table) {
+    class TypeCB implements Callback<Deferred<List<RegionLocation>>, Object> {
+      @SuppressWarnings("unchecked")
+      @Override
+      public Deferred<List<RegionLocation>> call(final Object results) 
+          throws Exception {
+        if (results == null) {
+          return Deferred.fromResult(null);
+        }
+        if (results instanceof Exception) {
+          return Deferred.fromError((Exception) results);
+        }
+        return Deferred.fromResult((List<RegionLocation>)results);
+      }
+      @Override
+      public String toString() {
+        return "locateRegions type converter CB";
+      }
+    }
+    return findTableRegions(table, EMPTY_ARRAY, EMPTY_ARRAY, false, true)
+        .addCallbackDeferring(new TypeCB());
+  }
+
+  /** @return the rpc timeout timer */
+  HashedWheelTimer getRpcTimeoutTimer() {
+    return rpc_timeout_timer;
+  }
+  
   // --------------------------------------------------- //
   // Code that find regions (in our cache or using RPCs) //
   // --------------------------------------------------- //
@@ -1802,13 +2180,15 @@ public final class HBaseClient {
    * <p>
    * This does a lookup in the .META. / -ROOT- table(s), no cache is used.
    * If you want to use a cache, call {@link #getRegion} instead.
+   * @param request The RPC that's hunting for a region
    * @param table The table to which the row belongs.
    * @param key The row key for which we want to locate the region.
    * @return A deferred called back when the lookup completes.  The deferred
    * carries an unspecified result.
    * @see #discoverRegion
    */
-  private Deferred<Object> locateRegion(final byte[] table, final byte[] key) {
+  private Deferred<Object> locateRegion(final HBaseRpc request, 
+      final byte[] table, final byte[] key) {
     final boolean is_meta = Bytes.equals(table, META);
     final boolean is_root = !is_meta && Bytes.equals(table, ROOT);
     // We don't know in which region this row key is.  Let's look it up.
@@ -1840,9 +2220,17 @@ public final class HBaseClient {
             return Deferred.fromResult(null);  // Looks like no lookup needed.
           }
         }
-        final Deferred<Object> d =
-          client.getClosestRowBefore(meta_region, meta_name, meta_key, INFO)
-          .addCallback(meta_lookup_done);
+        Deferred<Object> d = null;
+        try {
+          d = client.getClosestRowBefore(meta_region, meta_name, meta_key, INFO)
+            .addCallback(meta_lookup_done);
+        } catch (RuntimeException e) {
+          LOG.error("Unexpected exception while performing meta lookup", e);
+          if (has_permit) {
+            client.releaseMetaLookupPermit();
+          }
+          throw e;
+        }
         if (has_permit) {
           final class ReleaseMetaLookupPermit implements Callback<Object, Object> {
             public Object call(final Object arg) {
@@ -1859,7 +2247,7 @@ public final class HBaseClient {
           meta_lookups_wo_permit.increment();
         }
         // This errback needs to run *after* the callback above.
-        return d.addErrback(newLocateRegionErrback(table, key));
+        return d.addErrback(newLocateRegionErrback(request, table, key));
       }
     }
 
@@ -1882,7 +2270,7 @@ public final class HBaseClient {
     return rootregion.getClosestRowBefore(root_region, ROOT, root_key, INFO)
       .addCallback(root_lookup_done)
       // This errback needs to run *after* the callback above.
-      .addErrback(newLocateRegionErrback(table, key));
+      .addErrback(newLocateRegionErrback(request, table, key));
   }
 
   /** Callback executed when a lookup in META completes.  */
@@ -1915,22 +2303,24 @@ public final class HBaseClient {
    * a {@link TableNotFoundException} is thrown (because the low-level code
    * doesn't know about tables, it only knows about regions, but for proper
    * error reporting users need the name of the table that wasn't found).
+   * @param request The RPC that is hunting for a region
    * @param table The table to which the row belongs.
    * @param key The row key for which we want to locate the region.
    */
-  private Callback<Object, Exception> newLocateRegionErrback(final byte[] table,
-                                                             final byte[] key) {
+  private Callback<Object, Exception> newLocateRegionErrback(
+      final HBaseRpc request, final byte[] table, final byte[] key) {
     return new Callback<Object, Exception>() {
       public Object call(final Exception e) {
         if (e instanceof TableNotFoundException) {
           return new TableNotFoundException(table);  // Populate the name.
         } else if (e instanceof RecoverableException) {
-          // Retry to locate the region.  TODO(tsuna): exponential backoff?
-          // XXX this can cause an endless retry loop (particularly if the
-          // address of -ROOT- in ZK is stale when we start, this code is
-          // going to retry in an almost-tight loop until the znode is
-          // updated).
-          return locateRegion(table, key);
+          // Retry to locate the region if we haven't tried too many times.  
+          // TODO(tsuna): exponential backoff?
+          if (cannotRetryRequest(request)) {
+            return tooManyAttempts(request, null);
+          }
+          request.attempt++;
+          return locateRegion(request, table, key);
         }
         return e;
       }
@@ -2101,7 +2491,7 @@ public final class HBaseClient {
       // regions_cache with the daughter regions of the split.
     }
     if (start_key == null) {
-      throw new BrokenMetaException(null, "It didn't contain any"
+      throw new BrokenMetaException("It didn't contain any"
         + " `info:regioninfo' cell:  " + meta_row);
     }
 
@@ -2125,6 +2515,7 @@ public final class HBaseClient {
       return client;            // discover this region, we lost the race.
     }
     RegionInfo oldregion;
+    final ArrayList<RegionInfo> regions;
     int nregions;
     // If we get a ConnectException immediately when trying to connect to the
     // RegionServer, Netty delivers a CLOSED ChannelStateEvent from a "boss"
@@ -2146,11 +2537,25 @@ public final class HBaseClient {
       // 3. Update the reverse mapping created in step 1.
       // This is done last because it's only used to gracefully handle
       // disconnections and isn't used for serving.
-      final ArrayList<RegionInfo> regions = client2regions.get(client);
-      synchronized (regions) {
-        regions.add(region);
-        nregions = regions.size();
+      regions = client2regions.get(client);
+      if (regions != null) {
+        synchronized (regions) {
+          regions.add(region);
+          nregions = regions.size();
+        }
+      } else {
+        // Lost a race, and other thread removed the client. It happens when
+        // the channel of this client is disconnected as soon as a client tries
+        // to connect a dead region server.
+        nregions = 0;
       }
+    }
+    if (nregions == 0 || regions != client2regions.get(client)) {
+      // Lost a race.
+      // TODO: Resolve the race condition among {@link #ip2client},
+      // {@link #client2regions}, {@link #region2client}, {@link #rootregion},
+      // and {@link #regions_cache}.
+      return null;
     }
 
     // Don't interleave logging with the operations above, in order to attempt
@@ -2235,14 +2640,6 @@ public final class HBaseClient {
   private static boolean knownToBeNSREd(final RegionInfo region) {
     return region.table() == EMPTY_ARRAY;
   }
-
-  /**
-   * Low and high watermarks when buffering RPCs due to an NSRE.
-   * @see #handleNSRE
-   * XXX TODO(tsuna): Don't hardcode.
-   */
-  private static final short NSRE_LOW_WATERMARK  =  1000;
-  private static final short NSRE_HIGH_WATERMARK = 10000;
 
   /** Log a message for every N RPCs we buffer due to an NSRE.  */
   private static final short NSRE_LOG_EVERY      =   500;
@@ -2377,8 +2774,8 @@ public final class HBaseClient {
         // If `rpc' is the first element in nsred_rpcs, it's our "probe" RPC,
         // in which case we must not add it to the array again.
         else if ((exists_rpc = nsred_rpcs.get(0)) != rpc) {
-          if (size < NSRE_HIGH_WATERMARK) {
-            if (size == NSRE_LOW_WATERMARK) {
+          if (size < nsre_high_watermark) {
+            if (size == nsre_low_watermark) {
               nsred_rpcs.add(null);  // "Skip" one slot.
             } else if (can_retry_rpc) {
               reject = false;
@@ -2397,10 +2794,10 @@ public final class HBaseClient {
 
       // Stop here if this is a known NSRE and `rpc' is not our probe RPC.
       if (known_nsre && exists_rpc != rpc) {
-        if (size != NSRE_HIGH_WATERMARK && size % NSRE_LOG_EVERY == 0) {
+        if (size != nsre_high_watermark && size % NSRE_LOG_EVERY == 0) {
           final String msg = "There are now " + size
             + " RPCs pending due to NSRE on " + Bytes.pretty(region_name);
-          if (size + NSRE_LOG_EVERY < NSRE_HIGH_WATERMARK) {
+          if (size + NSRE_LOG_EVERY < nsre_high_watermark) {
             LOG.info(msg);  // First message logged at INFO level.
           } else {
             LOG.warn(msg);  // Last message logged with increased severity.
@@ -2475,8 +2872,13 @@ public final class HBaseClient {
 
         synchronized (rpcs) {
           if (LOG.isDebugEnabled()) {
-            LOG.debug("Retrying " + rpcs.size() + " RPCs now that the NSRE on "
-                      + Bytes.pretty(region_name) + " seems to have cleared");
+            if (arg instanceof Exception) {
+              LOG.debug("Retrying " + rpcs.size() + " RPCs on NSREd region "
+                  + Bytes.pretty(region_name));
+            } else {
+              LOG.debug("Retrying " + rpcs.size() + " RPCs now that the NSRE on "
+                  + Bytes.pretty(region_name) + " seems to have cleared");
+            }
           }
           final Iterator<HBaseRpc> i = rpcs.iterator();
           if (i.hasNext()) {
@@ -2541,7 +2943,7 @@ public final class HBaseClient {
    * Some arbitrary junk that is unlikely to appear in a real row key.
    * @see probeKey
    */
-  private static byte[] PROBE_SUFFIX = {
+  protected static byte[] PROBE_SUFFIX = {
     ':', 'A', 's', 'y', 'n', 'c', 'H', 'B', 'a', 's', 'e',
     '~', 'p', 'r', 'o', 'b', 'e', '~', '<', ';', '_', '<',
   };
@@ -2608,13 +3010,35 @@ public final class HBaseClient {
     client2regions.put(client, new ArrayList<RegionInfo>());
     num_connections_created.increment();
     // Configure and connect the channel without locking ip2client.
-    final SocketChannelConfig config = chan.getConfig();
-    config.setConnectTimeoutMillis(5000);
-    config.setTcpNoDelay(true);
+    final SocketChannelConfig socket_config = chan.getConfig();
+    socket_config.setConnectTimeoutMillis(
+        config.getInt("hbase.ipc.client.socket.timeout.connect"));
+    socket_config.setTcpNoDelay(
+        config.getBoolean("hbase.ipc.client.tcpnodelay"));
     // Unfortunately there is no way to override the keep-alive timeout in
     // Java since the JRE doesn't expose any way to call setsockopt() with
     // TCP_KEEPIDLE.  And of course the default timeout is >2h.  Sigh.
-    config.setKeepAlive(true);
+    socket_config.setKeepAlive(
+        config.getBoolean("hbase.ipc.client.tcpkeepalive"));
+    
+    // socket overrides using system defaults instead of setting them in a conf
+    if (config.hasProperty("hbase.ipc.client.socket.write.high_watermark")) {
+      ((NioChannelConfig)config).setWriteBufferHighWaterMark(
+          config.getInt("hbase.ipc.client.socket.write.high_watermark"));
+    }
+    if (config.hasProperty("hbase.ipc.client.socket.write.low_watermark")) {
+      ((NioChannelConfig)config).setWriteBufferLowWaterMark(
+          config.getInt("hbase.ipc.client.socket.write.low_watermark"));
+    }
+    if (config.hasProperty("hbase.ipc.client.socket.sendBufferSize")) {
+      socket_config.setOption("sendBufferSize", 
+          config.getInt("hbase.ipc.client.socket.sendBufferSize"));
+    }
+    if (config.hasProperty("hbase.ipc.client.socket.receiveBufferSize")) {
+      socket_config.setOption("receiveBufferSize", 
+          config.getInt("hbase.ipc.client.socket.receiveBufferSize"));
+    }
+    
     chan.connect(new InetSocketAddress(host, port));  // Won't block.
     return client;
   }
@@ -2643,7 +3067,12 @@ public final class HBaseClient {
      */
     private boolean disconnected = false;
 
+    /** A handler to close the connection if we haven't used it in some time */
+    private final ChannelHandler timeout_handler;
+    
     RegionClientPipeline() {
+      timeout_handler = new IdleStateHandler(timer, 0, 0, 
+          config.getInt("hbase.hbase.ipc.client.connection.idle_timeout"));
     }
 
     /**
@@ -2653,6 +3082,8 @@ public final class HBaseClient {
      */
     RegionClient init() {
       final RegionClient client = new RegionClient(HBaseClient.this);
+      super.addLast("idle_handler", this.timeout_handler);
+      super.addLast("idle_cleanup", new RegionClientIdleStateHandler());
       super.addLast("handler", client);
       return client;
     }
@@ -2681,6 +3112,10 @@ public final class HBaseClient {
       if (disconnected) {
         return;
       }
+      if (LOG.isDebugEnabled()) {
+        LOG.debug("Channel " + state_event.getChannel().toString() + 
+            "'s state changed: " + state_event);
+      }
       switch (state_event.getState()) {
         case OPEN:
           if (state_event.getValue() == Boolean.FALSE) {
@@ -2696,6 +3131,8 @@ public final class HBaseClient {
           return;  // Not an event we're interested in, ignore it.
       }
 
+      LOG.info("Channel " + state_event.getChannel().toString() + 
+          " is disconnecting: " + state_event);
       disconnected = true;  // So we don't clean up the same client twice.
       try {
         final RegionClient client = super.get(RegionClient.class);
@@ -2722,6 +3159,31 @@ public final class HBaseClient {
 
   }
 
+  /**
+   * Handles the cases where sockets are either idle or leaked due to
+   * connections closed from HBase or no data flowing downstream.
+   */
+  private final class RegionClientIdleStateHandler
+          extends IdleStateAwareChannelHandler {
+
+    /** Empty constructor */
+    public RegionClientIdleStateHandler() {
+    }
+
+    @Override
+    public void channelIdle(ChannelHandlerContext ctx, IdleStateEvent e)
+            throws Exception {
+      if(e.getState() == IdleState.ALL_IDLE) {
+        idle_connections_closed.increment();
+        LOG.info("Closing idle connection to HBase region server: " 
+            + e.getChannel());
+        // RegionClientPipeline's disconnect method will handle cleaning up
+        // any outstanding RPCs and removing the client from caches
+        e.getChannel().close();
+      }
+    }
+  }
+  
   /**
    * Performs a slow search of the IP used by the given client.
    * <p>
@@ -2888,7 +3350,7 @@ public final class HBaseClient {
    * cumbersome so I don't expect anyone to do this, which is why we manage
    * our own instance.
    */
-  private final class ZKClient implements Watcher {
+  protected final class ZKClient implements Watcher {
 
     /** The specification of the quorum, e.g. "host1,host2,host3"  */
     private final String quorum_spec;
@@ -3026,7 +3488,8 @@ public final class HBaseClient {
           if (zk != null) {  // Already connected.
             return;
           }
-          zk = new ZooKeeper(quorum_spec, 5000, this);
+          zk = new ZooKeeper(quorum_spec, 
+              config.getInt("hbase.zookeeper.session.timeout"), this);
         }
       } catch (UnknownHostException e) {
         // No need to retry, we usually cannot recover from this.
@@ -3081,7 +3544,8 @@ public final class HBaseClient {
               connectZK();  // unless we need to connect first.
             }
           }
-        }, 1000 /* milliseconds */);
+        }, config.getInt("hbase.zookeeper.getroot.retry_delay") 
+          /* milliseconds */);
     }
 
     /**
@@ -3094,7 +3558,7 @@ public final class HBaseClient {
        * HBASE-3065 (r1151751) prepends meta-data in ZooKeeper files.
        * The meta-data always starts with this magic byte.
        */
-      private static final byte MAGIC = (byte) 0xFF;
+      protected static final byte MAGIC = (byte) 0xFF;
 
       private static final byte UNKNOWN = 0;  // Callback still pending.
       private static final byte FOUND = 1;    // We found the znode.
@@ -3186,7 +3650,7 @@ public final class HBaseClient {
 
       /** Returns a new client for the RS found in the root-region-server.  */
       @SuppressWarnings("fallthrough")
-      private RegionClient handleRootZnode(final byte[] data) {
+      protected RegionClient handleRootZnode(final byte[] data) {
         // There are 3 cases.  Older versions of HBase encode the location
         // of the root region as "host:port", 0.91 uses "host,port,startcode"
         // and newer versions of 0.91 use "<metadata>host,port,startcode"
@@ -3260,7 +3724,7 @@ public final class HBaseClient {
        * Returns a new client for the RS found in the meta-region-server.
        * This is used in HBase 0.95 and up.
        */
-      private RegionClient handleMetaZnode(final byte[] data) {
+      protected RegionClient handleMetaZnode(final byte[] data) {
         if (data[0] != MAGIC) {
           LOG.error("Malformed META region meta-data in " + Bytes.pretty(data)
                     + ", invalid leading magic number: " + data[0]);

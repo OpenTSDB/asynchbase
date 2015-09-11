@@ -29,8 +29,9 @@ package org.hbase.async;
 import java.util.ArrayList;
 
 import org.jboss.netty.buffer.ChannelBuffer;
-
 import org.hbase.async.generated.ClientPB;
+import org.hbase.async.generated.FilterPB;
+import org.hbase.async.generated.HBasePB.TimeRange;
 
 /**
  * Reads something from HBase.
@@ -62,6 +63,15 @@ public final class GetRequest extends HBaseRpc
    * boolean indicating whether the row exists or not).
    */
   private int versions = 1 << 1;
+
+  /** Minimum {@link KeyValue} cell timestamp.  */
+  private long min_timestamp = 0;
+
+  /** Maximum {@link KeyValue} cell timestamp.  */
+  private long max_timestamp = Long.MAX_VALUE;
+
+  /** Filter to apply on the scanner.  */
+  private ScanFilter filter;
 
   /** When set in the `versions' field, this is an Exist RPC. */
   private static final int EXIST_FLAG = 0x1;
@@ -293,6 +303,134 @@ public final class GetRequest extends HBaseRpc
     return versions >>> 1;
   }
 
+  /**
+   * Sets the minimum timestamp to scan (inclusive).
+   * <p>
+   * {@link KeyValue}s that have a timestamp strictly less than this one
+   * will not be returned by the scanner.  HBase has internal optimizations to
+   * avoid loading in memory data filtered out in some cases.
+   * @param timestamp The minimum timestamp to scan (inclusive).
+ * @return
+   * @throws IllegalArgumentException if {@code timestamp < 0}.
+   * @throws IllegalArgumentException if {@code timestamp > getMaxTimestamp()}.
+   * @see #setTimeRange
+   * @since 1.7
+   */
+  public GetRequest setMinTimestamp(final long timestamp) {
+    if (timestamp < 0) {
+      throw new IllegalArgumentException("Negative timestamp: " + timestamp);
+    } else if (timestamp > max_timestamp) {
+      throw new IllegalArgumentException("New minimum timestamp (" + timestamp
+                                         + ") is greater than the maximum"
+                                         + " timestamp: " + max_timestamp);
+    }
+    min_timestamp = timestamp;
+    return this;
+  }
+
+  /**
+   * Returns the minimum timestamp to scan (inclusive).
+   * @return A positive integer.
+   * @since 1.7
+   */
+  public long getMinTimestamp() {
+    return min_timestamp;
+  }
+
+  /**
+   * Sets the maximum timestamp to scan (exclusive).
+   * <p>
+   * {@link KeyValue}s that have a timestamp greater than or equal to this one
+   * will not be returned by the scanner.  HBase has internal optimizations to
+   * avoid loading in memory data filtered out in some cases.
+   * @param timestamp The maximum timestamp to scan (exclusive).
+ * @return
+   * @throws IllegalArgumentException if {@code timestamp < 0}.
+   * @throws IllegalArgumentException if {@code timestamp < getMinTimestamp()}.
+   * @see #setTimeRange
+   * @since 1.7
+   */
+  public GetRequest setMaxTimestamp(final long timestamp) {
+    if (timestamp < 0) {
+      throw new IllegalArgumentException("Negative timestamp: " + timestamp);
+    } else if (timestamp < min_timestamp) {
+      throw new IllegalArgumentException("New maximum timestamp (" + timestamp
+                                         + ") is greater than the minimum"
+                                         + " timestamp: " + min_timestamp);
+    }
+    max_timestamp = timestamp;
+    return this;
+  }
+
+  /**
+   * Returns the maximum timestamp to scan (exclusive).
+   * @return A positive integer.
+   * @since 1.7
+   */
+  public long getMaxTimestamp() {
+    return max_timestamp;
+  }
+
+  /**
+   * Sets the time range to scan.
+   * <p>
+   * {@link KeyValue}s that have a timestamp that do not fall in the range
+   * {@code [min_timestamp; max_timestamp[} will not be returned by the
+   * scanner.  HBase has internal optimizations to avoid loading in memory
+   * data filtered out in some cases.
+   * @param min_timestamp The minimum timestamp to scan (inclusive).
+   * @param max_timestamp The maximum timestamp to scan (exclusive).
+ * @return
+   * @throws IllegalArgumentException if {@code min_timestamp < 0}
+   * @throws IllegalArgumentException if {@code max_timestamp < 0}
+   * @throws IllegalArgumentException if {@code min_timestamp > max_timestamp}
+   * @since 1.7
+   */
+  public GetRequest setTimeRange(final long min_timestamp, final long max_timestamp) {
+    if (min_timestamp > max_timestamp) {
+      throw new IllegalArgumentException("New minimum timestamp (" + min_timestamp
+                                         + ") is greater than the new maximum"
+                                         + " timestamp: " + max_timestamp);
+    } else if (min_timestamp < 0) {
+      throw new IllegalArgumentException("Negative minimum timestamp: "
+                                         + min_timestamp);
+    }
+
+    // We now have the guarantee that max_timestamp >= 0, no need to check it.
+    this.min_timestamp = min_timestamp;
+    this.max_timestamp = max_timestamp;
+    return this;
+  }
+
+  /**
+   * Specifies the filter to apply to cells in this row.
+   * @param filter The filter.  If {@code null}, then no filter will be used.
+ * @return
+   * @since 1.7
+   */
+  public GetRequest setFilter(final ScanFilter filter) {
+    this.filter = filter;
+    return this;
+  }
+
+  /**
+   * Returns the possibly-{@code null} filter applied to cells in this row.
+   * @since 1.7
+   */
+  public ScanFilter getFilter() {
+    return filter;
+  }
+
+  /**
+   * Clears any filter that was previously set on this get request.
+   * <p>
+   * This is a shortcut for {@link #setFilter}{@code (null)}
+   * @since 1.7
+   */
+  public void clearFilter() {
+    filter = null;
+  }
+
   @Override
   byte[] method(final byte server_version) {
     if (server_version >= RegionClient.SERVER_VERSION_095_OR_ABOVE) {
@@ -323,7 +461,14 @@ public final class GetRequest extends HBaseRpc
 
   public String toString() {
     final String klass = isGetRequest() ? "GetRequest" : "Exists";
-    return super.toStringWithQualifiers(klass, family, qualifiers);
+    if (this.filter != null) {
+      final String filter = this.filter.toString();
+      final StringBuilder buf = new StringBuilder(9 + 1 + filter.length() + 1)
+        .append(", filter=").append(filter);
+      return super.toStringWithQualifiers(klass, family, qualifiers, null, buf.toString());
+    } else {
+      return super.toStringWithQualifiers(klass, family, qualifiers);
+    }
   }
 
   // ---------------------- //
@@ -352,6 +497,9 @@ public final class GetRequest extends HBaseRpc
     size += 8;  // long: Lock ID.
     size += 4;  // int:  Max number of versions to return.
     size += 1;  // byte: Whether or not to use a filter.
+    if (filter != null) {
+      size += filter.predictSerializedSize(); // the serialized filter size
+    }
     if (server_version >= 26) {  // New in 0.90 (because of HBASE-3174).
       size += 1;  // byte: Whether or not to cache the blocks read.
     }
@@ -396,7 +544,27 @@ public final class GetRequest extends HBaseRpc
       getpb.addColumn(column.build());
     }
 
-    // TODO: Filters.
+    // Filters
+    if (filter != null) {
+      getpb.setFilter(FilterPB.Filter.newBuilder()
+                     .setNameBytes(Bytes.wrap(filter.name()))
+                     .setSerializedFilter(Bytes.wrap(filter.serialize()))
+                     .build());
+    }
+
+    // TimeRange
+    final long min_ts = min_timestamp;
+    final long max_ts = max_timestamp;
+    if (min_ts != 0 || max_ts != Long.MAX_VALUE) {
+      final TimeRange.Builder time = TimeRange.newBuilder();
+      if (min_ts != 0) {
+        time.setFrom(min_ts);
+      }
+      if (max_ts != Long.MAX_VALUE) {
+        time.setTo(max_ts);
+      }
+      getpb.setTimeRange(time.build());
+    }
 
     final int versions = maxVersions();  // Shadows this.versions
     if (versions != 1) {
@@ -429,18 +597,21 @@ public final class GetRequest extends HBaseRpc
     writeByteArray(buf, key);
     buf.writeLong(lockid);  // Lock ID.
     buf.writeInt(maxVersions()); // Max number of versions to return.
-    buf.writeByte(0x00); // boolean (false): whether or not to use a filter.
-    // If the previous boolean was true:
-    //   writeByteArray(buf, filter name as byte array);
-    //   write the filter itself
+
+    if (filter == null) {
+      buf.writeByte(0x00); // boolean (false): don't use a filter.
+    } else {
+      buf.writeByte(0x01); // boolean (true): use a filter.
+      filter.serializeOld(buf);
+    }
 
     if (server_version >= 26) {  // New in 0.90 (because of HBASE-3174).
       buf.writeByte(0x01);  // boolean (true): whether to cache the blocks.
     }
 
     // TimeRange
-    buf.writeLong(0);               // Minimum timestamp.
-    buf.writeLong(Long.MAX_VALUE);  // Maximum timestamp.
+    buf.writeLong(this.min_timestamp); // Minimum timestamp.
+    buf.writeLong(this.max_timestamp);  // Maximum timestamp.
     buf.writeByte(0x01);            // Boolean: "all time".
     // The "all time" boolean indicates whether or not this time range covers
     // all possible times.  Not sure why it's part of the serialized RPC...
