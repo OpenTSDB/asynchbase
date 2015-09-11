@@ -1,0 +1,3 @@
+.carousel .carousel-control { visibility: hidden; }
+.carousel .carousel-indicators { visibility: hidden; }
+.carousel:hover .carousel-control { visibility: hidden; }

@@ -1,0 +1,59 @@
+.jumbotron {
+  padding: 30px;
+  margin-bottom: 30px;
+  color: #ffffff;
+  background-color: #1979a0;
+}
+.navbar-default {
+  background-color: #253544;
+  border-color: #19242f;
+}
+.navbar-default .navbar-brand {
+  color: #fefafb;
+}
+.navbar-default .navbar-brand:hover,
+.navbar-default .navbar-brand:focus {
+  color: #fff;
+  background-color: transparent;
+}
+.navbar-default .navbar-text {
+  color: #fefafb;
+}
+.navbar-default .navbar-nav > li > a {
+  color: #fefafb;
+}
+.navbar-default .navbar-nav > li > a:hover,
+.navbar-default .navbar-nav > li > a:focus {
+  color: #1979a0;
+  background-color: transparent;
+}
+.navbar-default .navbar-nav > .active > a,
+.navbar-default .navbar-nav > .active > a:hover,
+.navbar-default .navbar-nav > .active > a:focus {
+  color: #555555;
+  background-color: #19242f;
+}
+.navbar-default .navbar-nav > .disabled > a,
+.navbar-default .navbar-nav > .disabled > a:hover,
+.navbar-default .navbar-nav > .disabled > a:focus {
+  color: #cccccc;
+  background-color: transparent;
+}
+
+.btn-primary {
+  color: #fff;
+  background-color: #8cc541;
+  border-color: #78a936;
+}
+
+.glyphicon-stats:before {
+  color: #78a936;
+}
+
+.glyphicon-cloud:before {
+  color: #1979a0;
+}
+
+.glyphicon-pencil:before {
+  color: #78a936;
+}

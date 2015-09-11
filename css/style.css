@@ -1,0 +1,133 @@
+header,section,footer,aside,nav,article,figure{display:block}
+
+body{font-family:Arial,Helvetica,sans-serif;color:#000;margin:0}
+img{border:0}
+
+header {
+  margin: 0;
+  padding: 5px 0;
+  width: 100%;
+  background-color: #000;
+  margin-bottom: 25px;
+  -webkit-box-shadow: 3px 3px 6px rgba(0, 0, 0, 0.4);
+  -moz-box-shadow: 3px 3px 6px rgba(0, 0, 0, 0.4);
+  position: fixed;
+  z-index: 1;
+}
+#headerbar a{color:#f0f2ff;text-decoration:none}
+#headerbar a:hover {color:#fff;text-decoration:none}
+#headerbar a:active {color:#fff;text-decoration:none}
+
+a{color:#4251AA;text-decoration:none}
+a:hover {color:#32419A;text-decoration:underline;
+  text-shadow: 1px 1px 0 rgba(255, 255, 255, 0.5);
+}
+a:active {color:#AA4251;text-decoration:underline}
+
+h1{margin:0;color:#fff;font-size:40px;position:relative;top:15px}
+h1 a {
+  color: #fff;
+  background-color: #909AAA;
+  padding: 5px 20px 10px;
+  width: 300px;
+  border-radius: 10px;
+  text-shadow: -1px -1px 0 rgba(0, 0, 0, 0.5);
+  -webkit-border-radius: 10px;
+  -moz-border-radius: 10px;
+  -webkit-box-shadow: 3px 3px 6px rgba(0, 0, 0, 0.4);
+  -moz-box-shadow: 3px 3px 6px rgba(0, 0, 0, 0.4);
+  -webkit-font-smoothing: antialiased;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.4);
+  border-top: 1px solid rgba(255, 255, 255, 0.6);
+  background: -webkit-gradient(linear, left bottom, left top, from(#425060), to(#909AAA));
+  background: -moz-linear-gradient(center bottom, #425060, #909AAA);
+}
+h1 a:hover {
+  color: #fff;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.4);
+  padding-bottom: 10px;
+  text-shadow: -1px -1px 0 rgba(0, 0, 0, 0.5);
+  background-color: #425060;
+  background: -webkit-gradient(linear, left bottom, left top, from(#526070), to(#A0AABA));
+  background: -moz-linear-gradient(center bottom, #526070, #A0AABA);
+}
+h1 a:active {position:relative;top:1px;left:1px}
+
+h2{padding-left:25px;font-size:32px;color:#425060;
+  text-shadow: 1px 1px 3px #A0AABA;
+}
+
+p{margin:16px 0 16px}
+
+#headerbar{width:90%;margin:0 auto;position:relative}
+#content{width:90%;padding-top:0;margin:0 auto}
+.code{
+  margin: 5px;
+  padding: 10px;
+  font-family: monospace;
+  white-space: pre;
+  border-radius: 12px;
+  -webkit-border-radius: 12px;
+  -moz-border-radius: 12px;
+  background-color: #E0EAFA
+}
+
+nav{width:auto;float:left}
+nav ul{position:absolute;right:0;display:block;margin-top:-38px}
+nav ul li{display:inline;margin-left:32px}
+nav ul li a{font-size:24px}
+
+section{margin-bottom:100px;padding-top:100px}
+section h3{margin-top:1.5em}
+
+input:hover, textarea:hover {
+  border: 4px solid #909AAA;
+  -webkit-box-shadow: 0 0 10px rgba(0, 0, 0, 0.4);
+  -moz-box-shadow: 0 0 10px rgba(0, 0, 0, 0.4);
+}
+
+
+label{color:#324050}
+input, textarea {
+  background-color: rgba(255, 255, 255, 0.4);
+  border: 4px solid rgba(66, 80, 96, 0.25);
+  padding: 10px;
+  color: #4b4b4b;
+  font-size: 24px;
+  border-radius: 5px;
+  -webkit-border-radius: 5px;
+  -moz-border-radius: 5px;
+  margin-bottom: 15px;
+  margin-top: -10px;
+}
+input:focus, textarea:focus {border:4px solid #425060;background-color: rgba(255, 255, 255, 1)}
+
+input[type="submit"] {
+  border: none;
+  cursor: pointer;
+  color: #fff;
+  font-size: 24px;
+  background-color: #7ac000;
+  padding: 5px 36px 8px 36px;
+  border-radius: 10px;
+  -webkit-border-radius: 10px;
+  -moz-border-radius: 10px;
+  -webkit-box-shadow: 2px 2px 5px rgba(0, 0, 0, 0.4);
+  -moz-box-shadow: 2px 2px 5px rgba(0, 0, 0, 0.6);
+  border-bottom: 1px solid rgba(0, 0, 0, 0.4);
+  border-top: 1px solid rgba(255, 255, 255, 0.6);
+  background: -webkit-gradient(linear, left bottom, left top, from(#425060), to(#909AAA));
+  background: -moz-linear-gradient(center bottom, #425060, #909AAA);
+}
+
+input[type="submit"]:hover {
+  color: #fff;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.4);
+  background-color: #ff5400;
+  background: -webkit-gradient(linear, left bottom, left top, from(#526070), to(#A0AABA));
+  background: -moz-linear-gradient(center bottom, #526070, #A0AABA);
+}
+
+input[type="submit"]:active {position:relative;top:1px}
+
+footer{margin-top:75px;text-align:center;font-size:smaller}

@@ -1,0 +1,47 @@
+<div class="jumbotron">
+  <h1>Asynchronous HBase Client</h1>
+  <p>Access HBase up to twice as fast as the default HTable client in your favorite JVM language.</p>
+  <p><a class="btn btn-primary btn-lg" role="button" href="https://github.com/OpenTSDB/asynchbase/releases">Download 1.6.0</a></p>
+</div>
+<!--
+<div class="row">
+  <div class="col-md-4">
+    <div class="thumbnail">
+      <div class="caption">
+        <h3><i class="glyphicon glyphicon-pencil"></i> Store</h3>
+        <ul>
+          <li>Data is stored exactly as you give it</li>
+          <li>Write with millisecond precision</li>
+          <li>Keep raw data forever</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+  
+  <div class="col-md-4">
+    <div class="thumbnail">
+      <div class="caption">
+        <h3><i class="glyphicon glyphicon-cloud"></i> Scale</h3>
+        <ul>
+          <li>Runs on Hadoop and HBase</li>
+          <li>Scales to millions of writes per second</li>
+          <li>Add capacity by adding nodes</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+  
+  <div class="col-md-4">
+    <div class="thumbnail">
+      <div class="caption">
+        <h3><i class="glyphicon glyphicon-stats"></i> Read</h3>
+        <ul>
+          <li>Generate graphs from the GUI</li>
+          <li>Pull from the HTTP API</li>
+          <li>Choose an open source front-end</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</div>
+-->
