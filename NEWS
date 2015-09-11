@@ -1,6 +1,45 @@
 AsyncHBase - User visible and noteworthy changes.
 This project uses Semantic Versioning (see http://semver.org/).
 
+* Version 1.7.0 (2015-09-11) 
+
+This release adds support for secure HBase installations, more filters and
+greater configuration.
+
+New public APIs:
+  - The Config object handles configuration of the client and can be set
+    manually or it may load a list of settings from a properties file.
+  - Introduction of AppendRequest to allow for appending data to the value
+    of a column in HBase. Appends can be buffered similar to PutRequests.
+  - Introduction of Kerberos and simple authentication support against HBase
+    region servers. Configuration is similar to the HTable client.
+  - Introduction of locateRegions() and RegionLocation similar to HTable to
+    allow users the ability to get a list of regions for a table.
+  - Add filter support and timestamp ranges to GetRequests.
+  - Add a socket idle handler to close connections to region clients after
+    some period of inactivity.
+  - Introduce RPC timeouts on either a global or per-RPC basis.
+  - Netty threads are now named for easier debugging.
+  - Add filters including FirstKeyOnlyFilter, ColumnPaginationFilter,
+    KeyOnlyFilter and FuzzyRowFilter
+  - Introduce the RegionClientStats object for tracking metrics around individual
+    region client connections.
+
+Noteworthy bug fixes:
+  - Add the RegionOpeningException as a recoverable exception (#117)
+  - Region clients can now check the status of the socket write buffer before
+    sending RPCs to avoid OOM issues. Must be enabled via the config.
+  - Fix a small meta lookup permit bug when an exception is thrown and the 
+    semaphore isn't released.
+  - Fix an issue with stale region clients created when a region server
+    restarts.
+  - Fix a bug with CDH5 and HBase 0.96 when closing a scanner that has rows
+    remaining to be read.
+  - Fix a potential bug with decoding byte array backed ChannelBuffers in
+    the region client.
+  - Fix an issue where an RPC could be stranded in the inflight map when an
+    exception is thrown.
+
 * Version 1.5.0 (2013-12-13) [67fc3b7]
 
 This release introduces compatibility with HBase 0.96 and up, and adds

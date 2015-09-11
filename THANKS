@@ -4,22 +4,32 @@ AsyncHBase THANKS File
 The following persons contributed to the library by reporting problems,
 suggesting improvements, submitting patches or proofreading the code.
 
+Abhay Bothra
 Andrey Stepachev
 Arthur van Hoff
 Berk D. Demir
 Brandon Forehand
+Charles Antoine
+Francis Christopher Liu
+Gabe Benjamin
 Guo Sijie
 Ishan Chhabra
 James Baldassari
+Jason Culverhouse
+Jesse Chang
 Jonathan Payne
 Michael Rose
 Michael Stack
 Nicolas Thiébaud
 Phil Smith
+Philip K. Warren
+Rajesh G
 Shrijeet Paliwal
-Michael Stack
+Siddartha Guthikonda
+Stephane Bagneris
 Viral Bajaria
 Xun Liu
+Yao Shengzhe
 
 This list can be obtained at any time with the following one-liner:
 git log --pretty=format:'%an' | sort -u
