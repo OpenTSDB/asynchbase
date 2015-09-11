@@ -40,10 +40,10 @@
           <div class="navbar-header">
             <ul class="nav navbar-nav">
               <li><a href="index.html">Home</a></li>
-              <!--<li><a href="overview.html">Overview</a></li>-->
               <li><a href="https://github.com/OpenTSDB/asynchbase/releases">Download</a></li>
               <li><a href="https://github.com/OpenTSDB/asynchbase">Source</a></li>
               <li><a href="javadoc/index.html">Java Docs</a></li>
+              <li><a href="docs/build/html/index.html">Documentation</a></li>
               <li><a href="faq.html">FAQ</a></li>
             </ul>
           </div>
