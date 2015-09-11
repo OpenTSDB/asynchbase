@@ -1,0 +1,329 @@
+<!DOCTYPE html>
+
+
+<html xmlns="http://www.w3.org/1999/xhtml">
+  <head>
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+    
+    <title>Configuration &mdash; AsyncHBase 1.7 documentation</title>
+    
+    <link rel="stylesheet" href="_static/solar.css" type="text/css" />
+    <link rel="stylesheet" href="_static/pygments.css" type="text/css" />
+    
+    <script type="text/javascript">
+      var DOCUMENTATION_OPTIONS = {
+        URL_ROOT:    './',
+        VERSION:     '1.7',
+        COLLAPSE_INDEX: false,
+        FILE_SUFFIX: '.html',
+        HAS_SOURCE:  true
+      };
+    </script>
+    <script type="text/javascript" src="_static/jquery.js"></script>
+    <script type="text/javascript" src="_static/underscore.js"></script>
+    <script type="text/javascript" src="_static/doctools.js"></script>
+    <link rel="top" title="AsyncHBase 1.7 documentation" href="index.html" />
+    <link rel="prev" title="Installation" href="installation.html" /><link href='http://fonts.googleapis.com/css?family=Source+Code+Pro|Open+Sans:300italic,400italic,700italic,400,300,700' rel='stylesheet' type='text/css'>
+<link href="_static/solarized-dark.css" rel="stylesheet">
+<script type="text/javascript">
+  var _gaq = _gaq || [];
+  _gaq.push(['_setAccount', 'UA-18339382-1']);
+  _gaq.push(['_setDomainName', 'none']);
+  _gaq.push(['_setAllowLinker', true]);
+  _gaq.push(['_trackPageview']);
+  (function() {
+    var ga = document.createElement('script'); ga.type = 'text/javascript'; ga.async = true;
+    ga.src = ('https:' == document.location.protocol ? 'https://ssl' : 'http://www') + '.google-analytics.com/ga.js';
+    var s = document.getElementsByTagName('script')[0]; s.parentNode.insertBefore(ga, s);
+  })();
+</script>
+  </head>
+  <body>
+    <div class="related">
+      <h3>Navigation</h3>
+      <ul>
+        <li class="right" style="margin-right: 10px">
+          <a href="genindex.html" title="General Index"
+             accesskey="I">index</a></li>
+        <li class="right" >
+          <a href="installation.html" title="Installation"
+             accesskey="P">previous</a> |</li>
+        <li><a href="index.html">AsyncHBase 1.7 documentation</a> &raquo;</li> 
+      </ul>
+    </div>
+      <div class="sphinxsidebar">
+        <div class="sphinxsidebarwrapper">
+  <h3><a href="index.html">Table Of Contents</a></h3>
+  <ul>
+<li><a class="reference internal" href="#">Configuration</a><ul>
+<li><a class="reference internal" href="#properties">Properties</a></li>
+<li><a class="reference internal" href="#data-types">Data Types</a></li>
+</ul>
+</li>
+</ul>
+
+  <h4>Previous topic</h4>
+  <p class="topless"><a href="installation.html"
+                        title="previous chapter">Installation</a></p>
+<div id="searchbox" style="display: none">
+  <h3>Quick search</h3>
+    <form class="search" action="search.html" method="get">
+      <input type="text" name="q" />
+      <input type="submit" value="Go" />
+      <input type="hidden" name="check_keywords" value="yes" />
+      <input type="hidden" name="area" value="default" />
+    </form>
+    <p class="searchtip" style="font-size: 90%">
+    Enter search terms or a module, class or function name.
+    </p>
+</div>
+<script type="text/javascript">$('#searchbox').show(0);</script>
+        </div>
+      </div>
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          <div class="body">
+            
+  <div class="section" id="configuration">
+<h1>Configuration</h1>
+<p>AsyncHBase 1.7 has a new configuration class <tt class="docutils literal"><span class="pre">Config</span></tt> that enables tweaking many parameters of the client. For backwards compatibility, the existing <tt class="docutils literal"><span class="pre">HBaseClient</span></tt> constructors will instantiate a new config object with default values. However new constructors will accept a config object.</p>
+<p>To create a config with default values, instantiate it via <tt class="docutils literal"><span class="pre">Config</span> <span class="pre">config</span> <span class="pre">=</span> <span class="pre">new</span> <span class="pre">Config();</span></tt>. Or to load properties from a file, call <tt class="docutils literal"><span class="pre">Config</span> <span class="pre">config</span> <span class="pre">=</span> <span class="pre">new</span> <span class="pre">Config(&lt;path_to_file&gt;);</span></tt> where the file is a standard Java properties file with entries like <tt class="docutils literal"><span class="pre">hbase.rpc.timeout</span> <span class="pre">=</span> <span class="pre">60000</span></tt> separated by new lines.</p>
+<p>To modify the (default or parsed from file) value of a configuration entry, simply call <tt class="docutils literal"><span class="pre">config.overrideConfig(&lt;property&gt;,</span> <span class="pre">&lt;value&gt;);</span></tt>. Make sure to modify values <em>before</em> passing the config to the <tt class="docutils literal"><span class="pre">HBaseClient</span></tt> constructor. Modifying values of the config after instantiating the client will not cause an effect as many values are read from the config and stored in the client's memory, never to be read again.</p>
+<div class="section" id="properties">
+<h2>Properties</h2>
+<p>The following is a table of configuration options for AsyncHBase. Some of the values share names in common with HBase's configs but may behave slightly differently. Be sure to read the notes associated with the config before proceeding.</p>
+<table border="1" class="docutils">
+<colgroup>
+<col width="20%" />
+<col width="5%" />
+<col width="65%" />
+<col width="10%" />
+</colgroup>
+<thead valign="bottom">
+<tr class="row-odd"><th class="head">Property</th>
+<th class="head">Type</th>
+<th class="head">Description</th>
+<th class="head">Default</th>
+</tr>
+</thead>
+<tbody valign="top">
+<tr class="row-even"><td>hbase.client.retries.number</td>
+<td>Integer</td>
+<td>The number of times an RPC will be retried when a recoverable exception occurs, e.g. a region moving or splitting. Non-recoverable exceptions will fail the RPC immediately.</td>
+<td>10</td>
+</tr>
+<tr class="row-odd"><td>hbase.increments.buffer_size</td>
+<td>Integer</td>
+<td>How many unique counters to maintain in memory when using <tt class="docutils literal"><span class="pre">BufferedIncrement</span></tt> RPCs. Once this limit is reached, new buffered increments are immediately sent to the region server.</td>
+<td>65,535</td>
+</tr>
+<tr class="row-even"><td>hbase.ipc.client.connection.idle_timeout</td>
+<td>Integer</td>
+<td>How long, in seconds, to wait before closing an idle connection to a region server. Idle means no writes or reads to the socket.</td>
+<td>300</td>
+</tr>
+<tr class="row-odd"><td>hbase.ipc.client.socket.receiveBufferSize</td>
+<td>Integer</td>
+<td>The size of the region server socket receive buffer in bytes.</td>
+<td>System dependent</td>
+</tr>
+<tr class="row-even"><td>hbase.ipc.client.socket.sendBufferSize</td>
+<td>Integer</td>
+<td>The size of the region server socket send buffer in bytes.</td>
+<td>System dependent</td>
+</tr>
+<tr class="row-odd"><td>hbase.ipc.client.socket.timeout.connect</td>
+<td>Integer</td>
+<td>How long, in milliseconds, to wait for a socket connection attempt to a region server.</td>
+<td>5000</td>
+</tr>
+<tr class="row-even"><td>hbase.ipc.client.tcpkeepalive</td>
+<td>Boolean</td>
+<td>Whether or not to enable keep-alives on the TCP socket to the region servers.</td>
+<td>true</td>
+</tr>
+<tr class="row-odd"><td>hbase.ipc.client.tcpnodelay</td>
+<td>Boolean</td>
+<td>Whether or not to bypass TCP spooling and send packets immediately to the region servers.</td>
+<td>true</td>
+</tr>
+<tr class="row-even"><td>hbase.kerberos.regionserver.principal</td>
+<td>String</td>
+<td>A name or template to use as the principal for kerberos authentication. Instances of the string <tt class="docutils literal"><span class="pre">_HOST</span></tt> will be replaced with the host name of the client.</td>
+<td>&nbsp;</td>
+</tr>
+<tr class="row-odd"><td>hbase.nsre.high_watermark</td>
+<td>Integer</td>
+<td>The maximum number of RPCs allowed in the NSRE queue for a region before new RPCs are failed with please throttle exceptions.</td>
+<td>10000</td>
+</tr>
+<tr class="row-even"><td>hbase.nsre.low_watermark</td>
+<td>Integer</td>
+<td>The number of RPCs, per region server, that must be present in the NSRE queue before warnings start appearing in the log file.</td>
+<td>1000</td>
+</tr>
+<tr class="row-odd"><td>hbase.region_client.check_channel_write_status</td>
+<td>Boolean</td>
+<td>Whether or not to check the write status of the region server connection's socket before attempting to send the RPC. If a region server is slow, the client may buffer a large amount of data in memory while waiting for the server to consume data. This can lead to out of memory issues or a very large heap. When this is enabled and the buffer is full, RPCs will fail with please throttle exceptions.</td>
+<td>false</td>
+</tr>
+<tr class="row-even"><td>hbase.region_client.inflight_limit</td>
+<td>Integer</td>
+<td>The maximum number of RPCs sent to the connected region server and waiting a response. A large number of inflight RPCs can lead to out of memory issues. A value of 0 will disable this limit. If the limit is reached, RPCs will fail with please throttle exceptions.</td>
+<td>0</td>
+</tr>
+<tr class="row-odd"><td>hbase.region_client.pending_limit</td>
+<td>Integer</td>
+<td>The maximum number of RPCs queued while waiting for a region server connection to complete. If a region server is slow to respond to a connection request, or authentication takes a long time, then a large queue of RPCs may build up in memory. A value of 0 will disable this limit. If the limit is reached, RPCs will fail with please throttle exceptions.</td>
+<td>0</td>
+</tr>
+<tr class="row-even"><td>hbase.regionserver.kerberos.password</td>
+<td>String</td>
+<td>NOT RECOMMENDED OR TESTED: A password for the region server when authenticating via kerberos.</td>
+<td>&nbsp;</td>
+</tr>
+<tr class="row-odd"><td>hbase.rpcs.batch.size</td>
+<td>Integer</td>
+<td>The number of individual RPCs that can be buffered before being sent to the region server. If this limit is reached before <tt class="docutils literal"><span class="pre">hbase.rpcs.buffered_flush_interval</span></tt> then the batch is sent out immediately and a new batch is started.</td>
+<td>1024</td>
+</tr>
+<tr class="row-even"><td>hbase.rpcs.buffered_flush_interval</td>
+<td>Integer</td>
+<td>How often, in milliseconds, to flush buffered RPCs (Puts, Appends, etc) to the region servers.</td>
+<td>1000</td>
+</tr>
+<tr class="row-odd"><td>hbase.rpc.protection</td>
+<td>String</td>
+<td>Whether or not to encrypt RPCs while they are traversing the network. May be <tt class="docutils literal"><span class="pre">authentication</span></tt> (no encryption), <tt class="docutils literal"><span class="pre">integrity</span></tt>, (no encryption) or <tt class="docutils literal"><span class="pre">privacy</span></tt> (encrypted). Requires authentication to be enabled.</td>
+<td>&nbsp;</td>
+</tr>
+<tr class="row-even"><td>hbase.rpc.timeout</td>
+<td>Integer</td>
+<td>How long, in milliseconds, to wait for a response to an RPC from a region server before failing the RPC with a <tt class="docutils literal"><span class="pre">RpcTimedOutException</span></tt>. This value can be overridden on a per-RPC basis. A value of 0 will not allow RPCs to timeout.</td>
+<td>0</td>
+</tr>
+<tr class="row-odd"><td>hbase.sasl.clientconfig</td>
+<td>String</td>
+<td>The section in a JAAS configuration file to use when authenticating against a region server.</td>
+<td>Client</td>
+</tr>
+<tr class="row-even"><td>hbase.security.auth.94</td>
+<td>Boolean</td>
+<td>Whether or not the client is connection to an HBase 0.94 cluster with authentication.</td>
+<td>false</td>
+</tr>
+<tr class="row-odd"><td>hbase.security.auth.enable</td>
+<td>Boolean</td>
+<td>Whether or not to enable authentication when connecting to HBase. Please see ___TODO___ for more information.</td>
+<td>&nbsp;</td>
+</tr>
+<tr class="row-even"><td>hbase.security.authentication</td>
+<td>String</td>
+<td>The type of authentication required for the HBase cluster. May be <tt class="docutils literal"><span class="pre">kerberos</span></tt> or <tt class="docutils literal"><span class="pre">simple</span></tt>.</td>
+<td>&nbsp;</td>
+</tr>
+<tr class="row-odd"><td>hbase.security.simple.username</td>
+<td>String</td>
+<td>The user name for authenticating against an HBase cluster with simple authentication. (Not recommended)</td>
+<td>&nbsp;</td>
+</tr>
+<tr class="row-even"><td>hbase.timer.tick</td>
+<td>Integer</td>
+<td>How often, in milliseconds, to execute the flush and timeout timers, looking for new tasks. This value should not need modification.</td>
+<td>20</td>
+</tr>
+<tr class="row-odd"><td>hbase.timer.ticks_per_wheel</td>
+<td>Integer</td>
+<td>How many hash buckets are used for scheduling tasks in the flush and timeout timers. This value should not need modification.</td>
+<td>512</td>
+</tr>
+<tr class="row-even"><td>hbase.workers.size</td>
+<td>Integer</td>
+<td>The number of worker threads to instantiate for region client connections.</td>
+<td>2 * CPU cores</td>
+</tr>
+<tr class="row-odd"><td>hbase.zookeeper.getroot.retry_delay</td>
+<td>Integer</td>
+<td>How long, in milliseconds, to wait between attempts fetching the root region from Zookeeper if a call fails.</td>
+<td>1000</td>
+</tr>
+<tr class="row-even"><td>hbase.zookeeper.quorum</td>
+<td>String</td>
+<td>A comma-separated list of ZooKeeper hosts to connect to, with or without port specifiers.
+E.g. <tt class="docutils literal"><span class="pre">192.168.1.1:2181,192.168.1.2:2181</span></tt></td>
+<td>localhost</td>
+</tr>
+<tr class="row-odd"><td>hbase.zookeeper.session.timeout</td>
+<td>Integer</td>
+<td>How long, in milliseconds, to maintain a Zookeeper connection. After the session times out, the connection is closed and a new one will be opened the next time AsyncHBase needs root.</td>
+<td>5000</td>
+</tr>
+<tr class="row-even"><td>hbase.zookeeper.znode.parent</td>
+<td>String</td>
+<td>Path under which the znode for the -ROOT- region is located</td>
+<td>/hbase</td>
+</tr>
+</tbody>
+</table>
+<div class="admonition note">
+<p class="first admonition-title">Note</p>
+<p class="last">For authentication with Kerberos, a JAAS file must be created and passed to the JVM using AsyncHBase in the system parameter <tt class="docutils literal"><span class="pre">java.security.auth.login.config</span></tt>.</p>
+</div>
+</div>
+<div class="section" id="data-types">
+<h2>Data Types</h2>
+<p>Some configuration values require special consideration:</p>
+<ul>
+<li><p class="first">Booleans - The following literals will parse to <tt class="docutils literal"><span class="pre">True</span></tt>:</p>
+<ul class="simple">
+<li><tt class="docutils literal"><span class="pre">1</span></tt></li>
+<li><tt class="docutils literal"><span class="pre">true</span></tt></li>
+<li><tt class="docutils literal"><span class="pre">yes</span></tt></li>
+</ul>
+<p>Any other values will result in a <tt class="docutils literal"><span class="pre">False</span></tt>. Parsing is case insensitive</p>
+</li>
+<li><p class="first">Strings - Strings, even those with spaces, do not require quotation marks, but some considerations apply:</p>
+<ul>
+<li><p class="first">Special characters must be escaped with a backslash include: <tt class="docutils literal"><span class="pre">#</span></tt>, <tt class="docutils literal"><span class="pre">!</span></tt>, <tt class="docutils literal"><span class="pre">=</span></tt>, and <tt class="docutils literal"><span class="pre">:</span></tt>
+E.g.:</p>
+<div class="highlight-python"><div class="highlight"><pre>my.property = Hello World\!
+</pre></div>
+</div>
+</li>
+<li><p class="first">Unicode characters must be escaped with their hexadecimal representation, e.g.:</p>
+<div class="highlight-python"><div class="highlight"><pre>my.property = \u0009
+</pre></div>
+</div>
+</li>
+</ul>
+</li>
+</ul>
+</div>
+</div>
+
+
+          </div>
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="related">
+      <h3>Navigation</h3>
+      <ul>
+        <li class="right" style="margin-right: 10px">
+          <a href="genindex.html" title="General Index"
+             >index</a></li>
+        <li class="right" >
+          <a href="installation.html" title="Installation"
+             >previous</a> |</li>
+        <li><a href="index.html">AsyncHBase 1.7 documentation</a> &raquo;</li> 
+      </ul>
+    </div>
+    <div class="footer">
+        &copy; Copyright 2015, AsyncHBase.
+    Created using <a href="http://sphinx.pocoo.org/">Sphinx</a>. Theme by <a href="http://github.com/vkvn">vkvn</a>
+    </div>
+  </body>
+</html>

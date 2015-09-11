@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+
+
+<html xmlns="http://www.w3.org/1999/xhtml">
+  <head>
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+    
+    <title>What&#39;s New &mdash; AsyncHBase 1.7 documentation</title>
+    
+    <link rel="stylesheet" href="_static/solar.css" type="text/css" />
+    <link rel="stylesheet" href="_static/pygments.css" type="text/css" />
+    
+    <script type="text/javascript">
+      var DOCUMENTATION_OPTIONS = {
+        URL_ROOT:    './',
+        VERSION:     '1.7',
+        COLLAPSE_INDEX: false,
+        FILE_SUFFIX: '.html',
+        HAS_SOURCE:  true
+      };
+    </script>
+    <script type="text/javascript" src="_static/jquery.js"></script>
+    <script type="text/javascript" src="_static/underscore.js"></script>
+    <script type="text/javascript" src="_static/doctools.js"></script>
+    <link rel="top" title="AsyncHBase 1.7 documentation" href="index.html" />
+    <link rel="prev" title="Documentation for AsyncHBase 1.7" href="index.html" /><link href='http://fonts.googleapis.com/css?family=Source+Code+Pro|Open+Sans:300italic,400italic,700italic,400,300,700' rel='stylesheet' type='text/css'>
+<link href="_static/solarized-dark.css" rel="stylesheet">
+<script type="text/javascript">
+  var _gaq = _gaq || [];
+  _gaq.push(['_setAccount', 'UA-18339382-1']);
+  _gaq.push(['_setDomainName', 'none']);
+  _gaq.push(['_setAllowLinker', true]);
+  _gaq.push(['_trackPageview']);
+  (function() {
+    var ga = document.createElement('script'); ga.type = 'text/javascript'; ga.async = true;
+    ga.src = ('https:' == document.location.protocol ? 'https://ssl' : 'http://www') + '.google-analytics.com/ga.js';
+    var s = document.getElementsByTagName('script')[0]; s.parentNode.insertBefore(ga, s);
+  })();
+</script>
+  </head>
+  <body>
+    <div class="related">
+      <h3>Navigation</h3>
+      <ul>
+        <li class="right" style="margin-right: 10px">
+          <a href="genindex.html" title="General Index"
+             accesskey="I">index</a></li>
+        <li class="right" >
+          <a href="index.html" title="Documentation for AsyncHBase 1.7"
+             accesskey="P">previous</a> |</li>
+        <li><a href="index.html">AsyncHBase 1.7 documentation</a> &raquo;</li> 
+      </ul>
+    </div>
+      <div class="sphinxsidebar">
+        <div class="sphinxsidebarwrapper">
+  <h3><a href="index.html">Table Of Contents</a></h3>
+  <ul>
+<li><a class="reference internal" href="#">What's New</a><ul>
+<li><a class="reference internal" href="#id1">1.7</a></li>
+</ul>
+</li>
+</ul>
+
+  <h4>Previous topic</h4>
+  <p class="topless"><a href="index.html"
+                        title="previous chapter">Documentation for AsyncHBase 1.7</a></p>
+<div id="searchbox" style="display: none">
+  <h3>Quick search</h3>
+    <form class="search" action="search.html" method="get">
+      <input type="text" name="q" />
+      <input type="submit" value="Go" />
+      <input type="hidden" name="check_keywords" value="yes" />
+      <input type="hidden" name="area" value="default" />
+    </form>
+    <p class="searchtip" style="font-size: 90%">
+    Enter search terms or a module, class or function name.
+    </p>
+</div>
+<script type="text/javascript">$('#searchbox').show(0);</script>
+        </div>
+      </div>
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          <div class="body">
+            
+  <div class="section" id="what-s-new">
+<h1>What's New</h1>
+<div class="section" id="id1">
+<h2>1.7</h2>
+<ul class="simple">
+<li>AppendRequests - Behaves the same way as HTable append RPCs, appending a byte array to the existing column.</li>
+<li>Secure HBase Support - The client can now connect to HBase clusters that require Kerberos or simple authentication.</li>
+<li>RPC Timeouts - HTable will fail an RPC if it doesn't respond within 60 seconds by default. AsyncHBase now supports timeouts with <em>per RPC overrides</em>! By default, timeouts are disabled to provide backwards compatibility.</li>
+<li>Region Information - A new API allows for scanning the meta table for all of the regions associated with a user table, returning the list of region names and servers that are hosting them.</li>
+<li>Region Client Stats - Another new API provides statistics about each region client for useful debugging.</li>
+<li>New Config Object - Many configuration parameters are now accessible and can be loaded from a Java properties style file.</li>
+<li>GetRequest Filters/Timestamps - GetRequests now support filters and timestamps for greater flexibility.</li>
+<li>Region Client Timeouts - Region clients will now close gracefully if data isn't sent or received for some period of time.</li>
+<li>New filters from HTable including:<ul>
+<li>FirstKeyOnlyFilter</li>
+<li>ColumnPaginationFilter</li>
+<li>KeyOnlyFilter</li>
+<li>FuzzyRowFilter</li>
+</ul>
+</li>
+</ul>
+</div>
+</div>
+
+
+          </div>
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="related">
+      <h3>Navigation</h3>
+      <ul>
+        <li class="right" style="margin-right: 10px">
+          <a href="genindex.html" title="General Index"
+             >index</a></li>
+        <li class="right" >
+          <a href="index.html" title="Documentation for AsyncHBase 1.7"
+             >previous</a> |</li>
+        <li><a href="index.html">AsyncHBase 1.7 documentation</a> &raquo;</li> 
+      </ul>
+    </div>
+    <div class="footer">
+        &copy; Copyright 2015, AsyncHBase.
+    Created using <a href="http://sphinx.pocoo.org/">Sphinx</a>. Theme by <a href="http://github.com/vkvn">vkvn</a>
+    </div>
+  </body>
+</html>
