@@ -49,6 +49,7 @@ import java.util.List;
 
 import javax.security.sasl.SaslClient;
 
+import org.hbase.async.MultiAction.Response;
 import org.hbase.async.auth.SimpleClientAuthProvider;
 import org.hbase.async.generated.CellPB.Cell;
 import org.hbase.async.generated.ClientPB.GetResponse;
@@ -230,6 +231,30 @@ public class TestRegionClientDecode extends BaseTestRegionClient {
     assertEquals(1, timer.tasks.size());
     assertEquals(60000, (long)timer.tasks.get(0).getValue());
     verify(timer.timeouts.get(0), never()).cancel();
+  }
+  
+  @Test
+  public void goodMultiActionResponse94() throws Exception {
+    Whitebox.setInternalState(region_client, "server_version", 
+        RegionClient.SERVER_VERSION_092_OR_ABOVE);
+    final MultiAction rpc = new MultiAction();
+    for (int i = 0; i < 100; i++) {
+      final PutRequest put = new PutRequest("test".getBytes(), "hello".getBytes(), "t".getBytes(), 
+          Bytes.fromInt(100), new byte[] { 42 });
+      put.setRegion(region);
+      rpc.add(put);
+    }
+    
+    final Deferred<Object> md = rpc.getDeferred();
+    inflightTheRpc(201, rpc);
+    region_client.decode(ctx, chan, 
+        ChannelBuffers.wrappedBuffer(MULTI_ACTION_RESPONSE_094), VOID);
+    
+    final Response response = (Response) md.join();
+    assertEquals(100, response.size());
+    for (int i = 0; i < 100; i++) {
+      assertEquals(MultiAction.SUCCESS, response.result(i));
+    }
   }
   
   @Test
@@ -985,6 +1010,90 @@ public class TestRegionClientDecode extends BaseTestRegionClient {
   }
   
   @Test
+  public void timedoutRpcThenGoodRpc090() throws Exception {
+    resetMockClient();
+    Whitebox.setInternalState(region_client, "server_version", 
+        RegionClient.SERVER_VERSION_090_AND_BEFORE);    
+    
+    // this one has been timed out and we assume it was popped from the map
+    final GetRequest timedout = new GetRequest(TABLE, ROW);
+    timedout.setTimeout(1);
+    final Deferred<Object> deferred_to = timedout.getDeferred();
+    inflightTheRpc(1, timedout);
+    
+    assertEquals(1, rpcs_inflight.size());
+    assertEquals(1, timer.tasks.size());
+    assertEquals(1, (long)timer.tasks.get(0).getValue());
+    timer.tasks.get(0).getKey().run(null);
+    assertEquals(0, rpcs_inflight.size());
+    
+    try {
+      deferred_to.join(100);
+    } catch (RpcTimedOutException ex) { }
+    
+    final GetRequest rpc = new GetRequest(TABLE, KEY);
+    final Deferred<Object> deferred = rpc.getDeferred();
+    inflightTheRpc(3, rpc);
+
+    region_client.messageReceived(ctx, getMessage(
+        ChannelBuffers.wrappedBuffer(MULTI_ACTION_RESPONSE_090)));
+    region_client.messageReceived(ctx, getMessage(
+        ChannelBuffers.wrappedBuffer(GET_RESPONSE_090)));
+    
+    @SuppressWarnings("unchecked")
+    final ArrayList<KeyValue> row = (ArrayList<KeyValue>)deferred.join(1);
+    assertArrayEquals(new byte[] { 0, 0, 0, 100}, row.get(0).qualifier());
+    assertArrayEquals("*".getBytes(), row.get(0).value());
+    assertEquals(1, region_client.stats().rpcsTimedout());
+    assertEquals(2, timer.tasks.size());
+    assertEquals(60000, (long)timer.tasks.get(1).getValue());
+    verify(timer.timeouts.get(0), times(1)).cancel();
+    verify(timer.timeouts.get(1), times(1)).cancel();
+  }
+  
+  @Test
+  public void timedoutRpcThenGoodRpc094() throws Exception {
+    resetMockClient();
+    Whitebox.setInternalState(region_client, "server_version", 
+        RegionClient.SERVER_VERSION_092_OR_ABOVE);    
+    
+    // this one has been timed out and we assume it was popped from the map
+    final GetRequest timedout = new GetRequest(TABLE, ROW);
+    timedout.setTimeout(1);
+    final Deferred<Object> deferred_to = timedout.getDeferred();
+    inflightTheRpc(1, timedout);
+    
+    assertEquals(1, rpcs_inflight.size());
+    assertEquals(1, timer.tasks.size());
+    assertEquals(1, (long)timer.tasks.get(0).getValue());
+    timer.tasks.get(0).getKey().run(null);
+    assertEquals(0, rpcs_inflight.size());
+    
+    try {
+      deferred_to.join(100);
+    } catch (RpcTimedOutException ex) { }
+    
+    final GetRequest rpc = new GetRequest(TABLE, KEY);
+    final Deferred<Object> deferred = rpc.getDeferred();
+    inflightTheRpc(3, rpc);
+
+    region_client.messageReceived(ctx, getMessage(
+        ChannelBuffers.wrappedBuffer(MULTI_ACTION_RESPONSE_094)));
+    region_client.messageReceived(ctx, getMessage(
+        ChannelBuffers.wrappedBuffer(GET_RESPONSE_094)));
+    
+    @SuppressWarnings("unchecked")
+    final ArrayList<KeyValue> row = (ArrayList<KeyValue>)deferred.join(1);
+    assertArrayEquals(new byte[] { 0, 0, 0, 100}, row.get(0).qualifier());
+    assertArrayEquals("*".getBytes(), row.get(0).value());
+    assertEquals(1, region_client.stats().rpcsTimedout());
+    assertEquals(2, timer.tasks.size());
+    assertEquals(60000, (long)timer.tasks.get(1).getValue());
+    verify(timer.timeouts.get(0), times(1)).cancel();
+    verify(timer.timeouts.get(1), times(1)).cancel();
+  }
+  
+  @Test
   public void timedoutRpcThenGoodRpc() throws Exception {
     resetMockClient();
     
@@ -1024,6 +1133,100 @@ public class TestRegionClientDecode extends BaseTestRegionClient {
     assertArrayEquals(QUALIFIER, kvs.get(0).qualifier());
     assertArrayEquals(VALUE, kvs.get(0).value());
     assertEquals(TIMESTAMP, kvs.get(0).timestamp());
+    assertEquals(1, region_client.stats().rpcsTimedout());
+    assertEquals(2, timer.tasks.size());
+    assertEquals(60000, (long)timer.tasks.get(1).getValue());
+    verify(timer.timeouts.get(0), times(1)).cancel();
+    verify(timer.timeouts.get(1), times(1)).cancel();
+  }
+  
+  @Test
+  public void combinedTimedoutRpcThenGoodRpc090() throws Exception {
+    resetMockClient();
+    Whitebox.setInternalState(region_client, "server_version", 
+        RegionClient.SERVER_VERSION_090_AND_BEFORE);    
+    
+    // this one has been timed out and we assume it was popped from the map
+    // never mind that it's a get, not a multi action for this 94 test
+    final GetRequest timedout = new GetRequest(TABLE, ROW);
+    timedout.setTimeout(1);
+    final Deferred<Object> deferred_to = timedout.getDeferred();
+    inflightTheRpc(1, timedout);
+    
+    assertEquals(1, rpcs_inflight.size());
+    assertEquals(1, timer.tasks.size());
+    assertEquals(1, (long)timer.tasks.get(0).getValue());
+    timer.tasks.get(0).getKey().run(null);
+    assertEquals(0, rpcs_inflight.size());
+    
+    try {
+      deferred_to.join(100);
+    } catch (RpcTimedOutException ex) { }
+    
+    final byte[] data = new byte[MULTI_ACTION_RESPONSE_090.length + 
+                                 GET_RESPONSE_090.length];
+    System.arraycopy(MULTI_ACTION_RESPONSE_090, 0, data, 0, 
+        MULTI_ACTION_RESPONSE_090.length);
+    System.arraycopy(GET_RESPONSE_090, 0, data, MULTI_ACTION_RESPONSE_090.length, 
+        GET_RESPONSE_090.length);
+    final GetRequest rpc = new GetRequest(TABLE, KEY);
+    final Deferred<Object> deferred = rpc.getDeferred();
+    inflightTheRpc(3, rpc);
+    
+    region_client.messageReceived(ctx, 
+        getMessage(ChannelBuffers.wrappedBuffer(data)));
+
+    @SuppressWarnings("unchecked")
+    final ArrayList<KeyValue> row = (ArrayList<KeyValue>)deferred.join(1);
+    assertArrayEquals(new byte[] { 0, 0, 0, 100}, row.get(0).qualifier());
+    assertArrayEquals("*".getBytes(), row.get(0).value());
+    assertEquals(1, region_client.stats().rpcsTimedout());
+    assertEquals(2, timer.tasks.size());
+    assertEquals(60000, (long)timer.tasks.get(1).getValue());
+    verify(timer.timeouts.get(0), times(1)).cancel();
+    verify(timer.timeouts.get(1), times(1)).cancel();
+  }
+  
+  @Test
+  public void combinedTimedoutRpcThenGoodRpc094() throws Exception {
+    resetMockClient();
+    Whitebox.setInternalState(region_client, "server_version", 
+        RegionClient.SERVER_VERSION_092_OR_ABOVE);    
+    
+    // this one has been timed out and we assume it was popped from the map
+    // never mind that it's a get, not a multi action for this 94 test
+    final GetRequest timedout = new GetRequest(TABLE, ROW);
+    timedout.setTimeout(1);
+    final Deferred<Object> deferred_to = timedout.getDeferred();
+    inflightTheRpc(1, timedout);
+    
+    assertEquals(1, rpcs_inflight.size());
+    assertEquals(1, timer.tasks.size());
+    assertEquals(1, (long)timer.tasks.get(0).getValue());
+    timer.tasks.get(0).getKey().run(null);
+    assertEquals(0, rpcs_inflight.size());
+    
+    try {
+      deferred_to.join(100);
+    } catch (RpcTimedOutException ex) { }
+    
+    final byte[] data = new byte[MULTI_ACTION_RESPONSE_094.length + 
+                                 GET_RESPONSE_094.length];
+    System.arraycopy(MULTI_ACTION_RESPONSE_094, 0, data, 0, 
+        MULTI_ACTION_RESPONSE_094.length);
+    System.arraycopy(GET_RESPONSE_094, 0, data, MULTI_ACTION_RESPONSE_094.length, 
+        GET_RESPONSE_094.length);
+    final GetRequest rpc = new GetRequest(TABLE, KEY);
+    final Deferred<Object> deferred = rpc.getDeferred();
+    inflightTheRpc(3, rpc);
+    
+    region_client.messageReceived(ctx, 
+        getMessage(ChannelBuffers.wrappedBuffer(data)));
+
+    @SuppressWarnings("unchecked")
+    final ArrayList<KeyValue> row = (ArrayList<KeyValue>)deferred.join(1);
+    assertArrayEquals(new byte[] { 0, 0, 0, 100}, row.get(0).qualifier());
+    assertArrayEquals("*".getBytes(), row.get(0).value());
     assertEquals(1, region_client.stats().rpcsTimedout());
     assertEquals(2, timer.tasks.size());
     assertEquals(60000, (long)timer.tasks.get(1).getValue());
@@ -1072,6 +1275,102 @@ public class TestRegionClientDecode extends BaseTestRegionClient {
     assertArrayEquals(QUALIFIER, kvs.get(0).qualifier());
     assertArrayEquals(VALUE, kvs.get(0).value());
     assertEquals(TIMESTAMP, kvs.get(0).timestamp());
+    assertEquals(1, region_client.stats().rpcsTimedout());
+    assertEquals(2, timer.tasks.size());
+    assertEquals(60000, (long)timer.tasks.get(1).getValue());
+    verify(timer.timeouts.get(0), times(1)).cancel();
+    verify(timer.timeouts.get(1), times(1)).cancel();
+  }
+  
+  @Test
+  public void chunkedLateRpcThenGoodRpc090() throws Exception {
+    resetMockClient();
+    Whitebox.setInternalState(region_client, "server_version", 
+        RegionClient.SERVER_VERSION_090_AND_BEFORE);    
+    
+    final GetRequest timedout = new GetRequest(TABLE, ROW);
+    timedout.setTimeout(1);
+    final Deferred<Object> deferred_to = timedout.getDeferred();
+    inflightTheRpc(1, timedout);
+    assertEquals(1, rpcs_inflight.size());
+    assertEquals(1, timer.tasks.size());
+    assertEquals(1, (long)timer.tasks.get(0).getValue());
+    timer.tasks.get(0).getKey().run(null);
+    assertEquals(0, rpcs_inflight.size());
+    
+    final GetRequest rpc = new GetRequest(TABLE, KEY);
+    final Deferred<Object> deferred = rpc.getDeferred();
+    inflightTheRpc(3, rpc);
+    
+    int cutoff = 48;
+    final byte[] data = new byte[MULTI_ACTION_RESPONSE_090.length + 
+                                 GET_RESPONSE_090.length - cutoff];
+    System.arraycopy(MULTI_ACTION_RESPONSE_090, cutoff, data, 0, 
+        MULTI_ACTION_RESPONSE_090.length - cutoff);
+    System.arraycopy(GET_RESPONSE_090, 0, data, 
+        MULTI_ACTION_RESPONSE_090.length - cutoff, 
+        GET_RESPONSE_090.length);
+    
+    region_client.messageReceived(ctx, getMessage(
+        Arrays.copyOfRange(MULTI_ACTION_RESPONSE_090, 0, cutoff)));
+    region_client.messageReceived(ctx, getMessage(data));
+    
+    try {
+      deferred_to.join(100);
+    } catch (RpcTimedOutException ex) { }
+    
+    @SuppressWarnings("unchecked")
+    final ArrayList<KeyValue> row = (ArrayList<KeyValue>)deferred.join(1);
+    assertArrayEquals(new byte[] { 0, 0, 0, 100}, row.get(0).qualifier());
+    assertArrayEquals("*".getBytes(), row.get(0).value());
+    assertEquals(1, region_client.stats().rpcsTimedout());
+    assertEquals(2, timer.tasks.size());
+    assertEquals(60000, (long)timer.tasks.get(1).getValue());
+    verify(timer.timeouts.get(0), times(1)).cancel();
+    verify(timer.timeouts.get(1), times(1)).cancel();
+  }
+  
+  @Test
+  public void chunkedLateRpcThenGoodRpc094() throws Exception {
+    resetMockClient();
+    Whitebox.setInternalState(region_client, "server_version", 
+        RegionClient.SERVER_VERSION_092_OR_ABOVE);    
+    
+    final GetRequest timedout = new GetRequest(TABLE, ROW);
+    timedout.setTimeout(1);
+    final Deferred<Object> deferred_to = timedout.getDeferred();
+    inflightTheRpc(1, timedout);
+    assertEquals(1, rpcs_inflight.size());
+    assertEquals(1, timer.tasks.size());
+    assertEquals(1, (long)timer.tasks.get(0).getValue());
+    timer.tasks.get(0).getKey().run(null);
+    assertEquals(0, rpcs_inflight.size());
+    
+    final GetRequest rpc = new GetRequest(TABLE, KEY);
+    final Deferred<Object> deferred = rpc.getDeferred();
+    inflightTheRpc(3, rpc);
+    
+    int cutoff = 48;
+    final byte[] data = new byte[MULTI_ACTION_RESPONSE_094.length + 
+                                 GET_RESPONSE_094.length - cutoff];
+    System.arraycopy(MULTI_ACTION_RESPONSE_094, cutoff, data, 0, 
+        MULTI_ACTION_RESPONSE_094.length - cutoff);
+    System.arraycopy(GET_RESPONSE_094, 0, data, 
+        MULTI_ACTION_RESPONSE_094.length - cutoff, 
+        GET_RESPONSE_094.length);
+    
+    region_client.messageReceived(ctx, getMessage(
+        Arrays.copyOfRange(MULTI_ACTION_RESPONSE_094, 0, cutoff)));
+    region_client.messageReceived(ctx, getMessage(data));
+    
+    try {
+      deferred_to.join(100);
+    } catch (RpcTimedOutException ex) { }
+    
+    @SuppressWarnings("unchecked")
+    final ArrayList<KeyValue> row = (ArrayList<KeyValue>)deferred.join(1);
+    assertArrayEquals(new byte[] { 0, 0, 0, 100}, row.get(0).qualifier());
+    assertArrayEquals("*".getBytes(), row.get(0).value());
     assertEquals(1, region_client.stats().rpcsTimedout());
     assertEquals(2, timer.tasks.size());
     assertEquals(60000, (long)timer.tasks.get(1).getValue());
@@ -1243,4 +1542,41 @@ public class TestRegionClientDecode extends BaseTestRegionClient {
     return event;
   }
 
+  /** Response for a MultiAction request with PUTs from 0.94 */
+  public static final byte[] MULTI_ACTION_RESPONSE_094 = new byte[] { 
+    0x00, 0x00, 0x00, (byte) 0xc9, 0x02, 0x00, 0x00, 0x00, 0x58, 0x00, 0x00, 
+    0x00, 0x00, 0x43, 0x43, 0x00, 0x00, 0x00, 0x01, 0x35, 0x74, 0x65, 0x73, 
+    0x74, 0x2c, 0x2c, 0x31, 0x34, 0x34, 0x33, 0x39, 0x30, 0x39, 0x35, 0x30, 
+    0x31, 0x33, 0x35, 0x30, 0x2e, 0x61, 0x35, 0x35, 0x30, 0x65, 0x38, 0x34,
+    0x66, 0x36, 0x38, 0x34, 0x63, 0x63, 0x65, 0x34, 0x64, 0x33, 0x37, 0x62, 
+    0x66, 0x31, 0x34, 0x66, 0x34, 0x34, 0x61, 0x33, 0x39, 0x33, 0x36, 0x34, 
+    0x34, 0x2e, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x64, 0x00, 0x25, 
+    0x25, 0x00, 0x00, 0x00, 0x00
+};
+
+  /** Response for a GET request from 0.94 */
+  public static final byte[] GET_RESPONSE_094 = new byte[] { 
+    0x00, 0x00, 0x00, 0x03, 0x02, 0x00, 
+    0x00, 0x00, 0x36, 0x00, 0x00, 0x00, 0x00, 0x25, 0x25, 0x00, 0x00, 0x00, 
+    0x23, 0x00, 0x00, 0x00, 0x1f, 0x00, 0x00, 0x00, 0x16, 0x00, 0x00, 0x00, 
+    0x01, 0x00, 0x05, 0x68, 0x65, 0x6c, 0x6c, 0x6f, 0x01, 0x74, 0x00, 0x00, 
+    0x00, 0x64, 0x00, 0x00, 0x01, 0x50, 0x2f, (byte) 0xe2, (byte) 0x82, 
+    (byte) 0x9f, 0x04, 0x2a };
+  
+  /** Response for a MultiAction request with PUTs from 0.90 */
+  public static final byte[] MULTI_ACTION_RESPONSE_090 = new byte[] {
+    0x00, 0x00, 0x00, (byte) 0xc9, 0x00, 0x3a, 0x3a, 0x00, 0x00, 0x00, 0x01, 
+    0x35, 0x74, 0x65, 0x73, 0x74, 0x2c, 0x2c, 0x31, 0x34, 0x34, 0x33, 0x39, 
+    0x32, 0x30, 0x39, 0x33, 0x35, 0x36, 0x32, 0x39, 0x2e, 0x66, 0x65, 0x36, 
+    0x36, 0x35, 0x36, 0x32, 0x62, 0x37, 0x35, 0x61, 0x30, 0x30, 0x38, 0x63, 
+    0x30, 0x66, 0x30, 0x63, 0x35, 0x35, 0x33, 0x32, 0x30, 0x64, 0x63, 0x65, 
+    0x62, 0x37, 0x61, 0x37, 0x66, 0x2e, (byte) 0xff, (byte) 0xff, 
+    (byte) 0xff, (byte) 0xff };
+  
+  /** Response for a GET request from 0.90 */
+  public static final byte[] GET_RESPONSE_090 = new byte[] {
+    0x00, 0x00, 0x00, 0x03, 0x00, 0x25, 0x25, 0x00, 0x00, 0x00, 0x23, 0x00, 
+    0x00, 0x00, 0x1f, 0x00, 0x00, 0x00, 0x16, 0x00, 0x00, 0x00, 0x01, 0x00, 
+    0x05, 0x68, 0x65, 0x6c, 0x6c, 0x6f, 0x01, 0x74, 0x00, 0x00, 0x00, 0x64, 
+    0x00, 0x00, 0x01, 0x50, 0x30, 0x66, (byte) 0x8c, (byte) 0xad, 0x04, 0x2a };
 }
