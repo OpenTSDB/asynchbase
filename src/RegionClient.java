@@ -1422,8 +1422,21 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
       rpcid = buf.readInt();
     }
 
-    final HBaseRpc rpc = rpcs_inflight.remove(rpcid);
+    final HBaseRpc rpc = rpcs_inflight.get(rpcid);
     if (rpc == null) {
+      // make sure to consume the RPC body so that we can decode the next
+      // RPC in the buffer if there is one. Do this before incrementing counters
+      // as with pre-protobuf RPCs we may throw replays while consuming.
+      if (server_version >= SERVER_VERSION_095_OR_ABOVE) {
+        buf.readerIndex(rdx + size + 4);
+        if (LOG.isDebugEnabled()) {
+          LOG.debug("Skipped timed out RPC ID " + rpcid + " of " + size + 
+              " bytes on " + this);
+        }
+      } else {
+        consumeTimedoutNonPBufRPC(buf, rdx, rpcid);
+      }
+      
       // TODO - account for the rpcid overflow
       if (rpcid > -1 && rpcid <= this.rpcid.get()) {
         if (LOG.isDebugEnabled()) {
@@ -1439,14 +1452,6 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
               + "been corrupted. buf=" + Bytes.pretty(buf));
         }
         rpc_response_unknown.incrementAndGet();
-      }
-      
-      // make sure to consume the RPC body so that we can decode the next
-      // RPC in the buffer if there is one.
-      buf.readerIndex(rdx + size + 4);
-      if (LOG.isDebugEnabled()) {
-        LOG.debug("Skipped timed out RPC ID " + rpcid + " of " + size + 
-            " bytes on " + this);
       }
       return null;
     }
@@ -1485,6 +1490,7 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
         e = new NonRecoverableException(msg, e);
       }
       rpc.callback(e);
+      removeRpc(rpc, false);
       throw e;
     }
 
@@ -1494,6 +1500,7 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
                 + ", " + actualReadableBytes() + " readable bytes left"
                 + ", rpc=" + rpc);
     }
+    removeRpc(rpc, false);
 
     if (decoded instanceof NotServingRegionException
         && rpc.getRegion() != null) {
@@ -1566,6 +1573,8 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
       } catch (IllegalArgumentException e) {
         LOG.error("WTF?  RPC #" + rpcid + ": ", e);
       }
+    } else {
+      LOG.info("RPC wasn't framed: " + rpc);
     }
 
     if ((flags & HBaseRpc.RPC_ERROR) != 0) {
@@ -1578,6 +1587,121 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
     }
   }
 
+  /**
+   * Consumes a pre-protobuf RPC from HBase that has been timed out. 
+   * @param buf The channel buffer to read from
+   * @param rdx The original reader index used if the response is framed
+   * @param rpcid The RPC ID used for logging
+   */
+  private void consumeTimedoutNonPBufRPC(final ChannelBuffer buf, final int rdx, 
+      final int rpcid) {
+    final int flags;
+    if (secure_rpc_helper != null) {
+      flags = buf.readInt();
+    } else {
+      flags = buf.readByte();
+    }
+    
+    if ((flags & HBaseRpc.RPC_FRAMED) != 0) {
+      final int length = buf.readInt() - 4 - 1 - 4 - 4;
+      buf.readInt();  // Unused right now.
+      try {
+        ensureReadable(buf, length);
+      } catch (IllegalArgumentException e) {
+        LOG.error("WTF?  RPC #" + rpcid + ": ", e);
+      }
+      // this is easy as we have the length to skip
+      buf.readerIndex(rdx + length + 4 + 1 + 4 + 4);
+      if (LOG.isDebugEnabled()) {
+        LOG.debug("Skipped timed out RPC ID " + rpcid + " of " + length + 
+            " bytes on " + this);
+      }
+      return;
+    }
+
+    if ((flags & HBaseRpc.RPC_ERROR) != 0) {
+      final String type = HBaseRpc.readHadoopString(buf);
+      final String msg = HBaseRpc.readHadoopString(buf);
+      if (LOG.isDebugEnabled()) {
+        LOG.debug("Skipped timed out RPC ID " + rpcid + 
+            " with an exception response of type: " + type + 
+            " and message: " + msg + " on client " + this);
+      }
+      return;
+    }
+    
+    try {
+      consumeNonFramedTimedoutNonPBufRPC(buf);
+      if (LOG.isDebugEnabled()) {
+        LOG.debug("Skipped timed out RPC ID " + rpcid + " on client " + this);
+      }
+    } catch (IllegalArgumentException e) {  // The RPC didn't look good to us.
+      LOG.error("Failure parsing timedout exception", 
+          new InvalidResponseException(e.getMessage(), e));
+    }
+  }
+  
+  /**
+   * Consumes a pre-0.92 HBase RPC response that has been timedout. 
+   * Since we no longer have the original RPC we just keep reading.
+   * @param buf The channel buffer to read from.
+   */
+  private static void consumeNonFramedTimedoutNonPBufRPC(final ChannelBuffer buf) {
+    int length = 0;
+    switch (buf.readByte()) {  // Read the type of the response.
+    case  1:  // Boolean
+      buf.readByte();
+      return;
+    case  6:  // Long
+      buf.readLong();
+      return;
+    case 14:  // Writable
+      consumeNonFramedTimedoutNonPBufRPC(buf);  // Recursively de-serialize it.
+    case 17:  // NullInstance
+      buf.readByte();  // Consume the (useless) type of the "null".
+      return;
+    case 37:  // Result
+      buf.readByte();  // Read the type again.  See HBASE-2877.
+      length = buf.readInt();
+      HBaseRpc.checkArrayLength(buf, length);
+      buf.readerIndex(buf.readerIndex() + length);
+      return;
+    case 38:  // Result[]
+      length = buf.readInt();
+      HBaseRpc.checkArrayLength(buf, length);
+      buf.readerIndex(buf.readerIndex() + length);
+      return;
+    case 58:  // MultiPutResponse
+      // Fall through
+    case 67:  // MultiResponse
+      int type = buf.readByte(); // sub type, either multi-put or multi
+      // multi-put
+      int nregions = buf.readInt();
+      HBaseRpc.checkNonEmptyArrayLength(buf, nregions);
+      for (int i = 0; i < nregions; i++) {
+        HBaseRpc.readByteArray(buf); // region_name
+        if (type == 58) {
+          buf.readInt(); // index of the first failed edit
+        } else {
+          final int nkeys = buf.readInt();
+          HBaseRpc.checkNonEmptyArrayLength(buf, nkeys);
+          for (int j = 0; j < nkeys; j++) {
+            buf.readInt();
+            boolean error = buf.readByte() != 0x00;
+            if (error) {
+              HBaseRpc.readHadoopString(buf);
+              HBaseRpc.readHadoopString(buf);
+            } else {
+              // recurse to consume the embedded response
+              consumeNonFramedTimedoutNonPBufRPC(buf);
+            }
+          }
+        }
+      }
+      return;
+    }
+  }
+  
   /**
    * De-serializes an exception from HBase 0.94 and before.
    * @param buf The buffer to read from.
