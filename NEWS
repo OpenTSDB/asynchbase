@@ -1,6 +1,15 @@
 AsyncHBase - User visible and noteworthy changes.
 This project uses Semantic Versioning (see http://semver.org/).
 
+* Version 1.7.1 (??)
+
+This is a bug fix release.
+
+Noteworthy bug Fixes:
+  - Fix a regression where RPCs from pre-0.96 HBase clusters were not parsed
+    properly when large responses were split across packets. RPC timeouts were
+    not handled properly either and now they are.
+
 * Version 1.7.0 (2015-09-11) 
 
 This release adds support for secure HBase installations, more filters and
