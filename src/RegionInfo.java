@@ -26,7 +26,6 @@
  */
 package org.hbase.async;
 
-import java.lang.IllegalArgumentException;
 import java.util.Comparator;
 import java.util.Arrays;
 
@@ -55,7 +54,6 @@ final class RegionInfo implements Comparable<RegionInfo> {
   // So it contains the start_key.
   private final byte[] region_name;
   private final byte[] stop_key;
-  private final byte[] start_key;
 
   /**
    * Constructor.
@@ -69,13 +67,6 @@ final class RegionInfo implements Comparable<RegionInfo> {
       this.stop_key = EMPTY_ARRAY;
     } else {
       this.stop_key = stop_key;
-    }
-
-    final byte[] start_key = startKeyFromRegionName(region_name);
-    if (start_key.length == 0){
-      this.start_key = EMPTY_ARRAY;
-    } else {
-      this.start_key = start_key;
     }
   }
 
@@ -92,11 +83,6 @@ final class RegionInfo implements Comparable<RegionInfo> {
   /** Returns the stop key (exclusive) of this region.  */
   public byte[] stopKey() {
     return stop_key;
-  }
-
-  /** Returns the start key (inclusive) of this region.  */
-  public byte[] startKey(){ 
-    return start_key;
   }
 
   /**
@@ -274,7 +260,7 @@ final class RegionInfo implements Comparable<RegionInfo> {
     // Otherwise, return an empty string as start key aka this is the 
     // start key for the first region in the table.
     else {
-      return Arrays.copyOfRange(region_name, key_begin, key_begin);
+      return EMPTY_ARRAY;
     }
 
   }
