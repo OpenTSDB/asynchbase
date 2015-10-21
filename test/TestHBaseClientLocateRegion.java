@@ -48,7 +48,7 @@ public class TestHBaseClientLocateRegion extends BaseTestHBaseClient {
   @Test
   public void locateRegionRootHadRootLookupInZK() throws Exception {
     final Object obj = Whitebox.invokeMethod(client, "locateRegion", 
-        HBaseClient.ROOT, EMPTY_ARRAY);
+        get, HBaseClient.ROOT, EMPTY_ARRAY);
     assertTrue(root_deferred == obj);
     assertCounters(0, 0, 0);
   }
@@ -403,4 +403,4 @@ public class TestHBaseClientLocateRegion extends BaseTestHBaseClient {
         ((Counter)Whitebox.getInternalState(client, 
             "meta_lookups_wo_permit")).get());
   }
-}
+} 

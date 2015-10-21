@@ -1270,7 +1270,40 @@ public final class HBaseClient {
           return "openScanner errback";
         }
       });
-    }
+  }
+
+  /**
+   * Called instead of openScanner() in order to do an additional META lookup
+   * to find next region we will be scanning.
+   * @param scanner The scanner to open.
+   * @return A deferred scanner ID (long) if HBase 0.94 and before, or a
+   * deferred {@link Scanner.Response} if HBase 0.95 and up.
+   */
+  Deferred<Object> openReverseScanner(final Scanner scanner){
+    return locateRegionClosestBeforeKey(
+            scanner.getOpenRequest(), scanner.table(), scanner.startKey())
+            .addCallbacks(
+                    new Callback<Object, Object>() {
+                      public Object call(final Object arg) {
+                        return openScanner(scanner,
+                                scanner.getOpenRequestForReverseScan(
+                                        ((RegionLocation) arg).startKey()));
+                      }
+                    },
+                    new Callback<Object, Object>() {
+                      public Object call(final Object error) {
+                        LOG.info("Lookup to construct reverse scanner failed on table " +
+                                Bytes.pretty(scanner.table()) + " and start key " +
+                                Bytes.pretty(scanner.startKey()));
+                        return error;
+                      }
+
+                      public String toString() {
+                        return "openReverseScanner errback";
+                      }
+              }
+            );
+  }
 
   /** Singleton callback to handle responses of "openScanner" RPCs.  */
   private static final Callback<Object, Object> scanner_opened =
@@ -1977,7 +2010,7 @@ public final class HBaseClient {
         return d;
       }
     }
-    return locateRegion(table, key).addBothDeferring(new RetryRpc());
+    return locateRegion(request, table, key).addBothDeferring(new RetryRpc());
   }
 
   /**
@@ -2143,7 +2176,7 @@ public final class HBaseClient {
   public Deferred<List<RegionLocation>> locateRegions(final String table) {
     return locateRegions(table.getBytes());
   }
-  
+
   /**
    * Searches the meta table for all of the regions associated with the given
    * table. This method does not use the cache, rather it will scan HBase every
@@ -2188,57 +2221,64 @@ public final class HBaseClient {
   // --------------------------------------------------- //
 
   /**
+   * Locate the region which has the row that's less than or equal to the given row.
+   *
+   * @param request The RPC that's hunting for a region.
    * @param table The table we are trying to locate the region in.
    * @param key The row key for which we want to locate the previous region.
-   * @return A deferred callback when the lookup completes. This carries an 
+   * @return A deferred callback when the lookup completes. This carries a 
+   * {@link RegionLocation}.
    * unspecified result that should resolve to an ArrayList that can be parsed to
    * a RegionInfo object when completed.
    */
-  Deferred<Object> locateRegionBeforeKey(final byte[] table, final byte[] key) {
-    return locateRegionByLookup(table, key, false);
+  Deferred<Object> locateRegionClosestBeforeKey(final HBaseRpc request,
+                                         final byte[] table, final byte[] key) {
+    return locateRegion(request, table, key, true, true);
   }
 
   /**
-   * @param table The table to which the row belongs.
-   * @param key The row key for which we want to locate the region
-   * @return A deferred callback when the lookup completes. This carries an
-   * unspecified result that should resolve when complete.
-   */
-  Deferred<Object> locateRegion(final byte[] table, final byte[] key){
-    return locateRegionByLookup(table, key, true);
-  }
-
-  /**
-   * Locates the region that 1) contains the specified key and table
-   * OR 2) the region that is lexicographically BEFORE the region that contains 
-   * the given row key for the given table is in. If inclusive is true, 
-   * 1) is returned and if it is false 2) is run. 
+   * Locates the region in which the given row key for the given table is.
    * <p>
    * This does a lookup in the .META. / -ROOT- table(s), no cache is used.
    * If you want to use a cache, call {@link #getRegion} instead.
-   * @param request The RPC that's hunting for a region
+   * @param request The RPC that's hunting for a region.
    * @param table The table to which the row belongs.
-   * @param key The row key for which we want to locate the region or previous region.
-   * @param boolean Whether to return the region that includes (true) the key specified
-   * or the region before the key specified (false)
+   * @param key The row key for which we want to locate the region.
    * @return A deferred called back when the lookup completes.  The deferred
    * carries an unspecified result.
-   * @see #discoverRegion
    */
-  Deferred<Object> locateRegionByLookup(final byte[] table, final byte[] key, final boolean inclusive) {
+  private Deferred<Object> locateRegion(final HBaseRpc request,
+                                        final byte[] table, final byte[] key) {
+    return locateRegion(request, table, key, false, false);
+  }
+
+  /**
+   * Locates the region in which the given row key for the given table is.
+   * <p>
+   * This does a lookup in the .META. / -ROOT- table(s), no cache is used.
+   * If you want to use a cache, call {@link #getRegion} instead.
+   * @param request The RPC that's hunting for a region.
+   * @param table The table to which the row belongs.
+   * @param key The row key for which we want to locate the region.
+   * @param closest_before Whether or not to locate the region which has
+   * the row that's less than or equal to the given row.
+   * @param return_location Whether or not to return the region information
+   * in the deferred result.
+   * @return A deferred called back when the lookup completes.
+   * If {@link return_location} is true, the results will be a
+   * {@link RegionLocation}. If false, the results will be unspecified.
+   */
+  private Deferred<Object> locateRegion(final HBaseRpc request,
+                                        final byte[] table, final byte[] key,
+                                        final boolean closest_before,
+                                        final boolean return_location) {
     final boolean is_meta = Bytes.equals(table, META);
     final boolean is_root = !is_meta && Bytes.equals(table, ROOT);
     // We don't know in which region this row key is.  Let's look it up.
     // First, see if we already know where to look in .META.
     // Except, obviously, we don't wanna search in META for META or ROOT.
-
-    final byte[] meta_key;
-    if (inclusive){
-      meta_key = is_root ? null : createRegionSearchKey(table, key);
-    }
-    else {
-      meta_key = is_root ? null : createPreviousRegionSearchKey(table, key);
-    }
+    final byte[] meta_key = is_root ? null :
+            createRegionSearchKey(table, key, closest_before);
     final byte[] meta_name;
     final RegionInfo meta_region;
     if (has_root) {
@@ -2265,26 +2305,22 @@ public final class HBaseClient {
             return Deferred.fromResult(null);  // Looks like no lookup needed.
           }
         }
-        final Deferred<Object> d;
-        if (inclusive){
-          d = client.getClosestRowBefore(meta_region, meta_name, meta_key, INFO)
-          .addCallback(meta_lookup_done);
+        Deferred<Object> d = null;
+        try {
+          if (return_location) {
+            d = client.getClosestRowBefore(meta_region, meta_name, meta_key, INFO)
+                  .addCallback(meta_lookup_done_return_location);
+          } else{
+            d = client.getClosestRowBefore(meta_region, meta_name, meta_key, INFO)
+                  .addCallback(meta_lookup_done);
+          }
+        } catch (RuntimeException e) {
+          LOG.error("Unexpected exception while performing meta lookup", e);
+          if (has_permit) {
+            client.releaseMetaLookupPermit();
+          }
+          throw e;
         }
-        else {
-          d = client.getClosestRowBefore(meta_region, meta_name, meta_key, INFO)
-            .addCallback(
-              new Callback<Object, ArrayList<KeyValue>> () {
-                public ArrayList<KeyValue> call(final ArrayList<KeyValue> arg) {
-                  if (arg == null) {  // No result.
-                    return new ArrayList<KeyValue>(0);
-                  } else {
-                    discoverRegion(arg);
-                    return arg;
-                  } 
-                }}
-              );
-        }
-          
         if (has_permit) {
           final class ReleaseMetaLookupPermit implements Callback<Object, Object> {
             public Object call(final Object arg) {
@@ -2301,12 +2337,8 @@ public final class HBaseClient {
           meta_lookups_wo_permit.increment();
         }
         // This errback needs to run *after* the callback above.
-        if (inclusive){
-          return d.addErrback(newLocateRegionErrback(table, key));
-        }
-        else {
-          return d.addErrback(newLocateRegionErrback(table, key, true));
-        }
+        return d.addErrback(newLocateRegionErrback(request, table, key,
+                closest_before, return_location));
       }
     }
     // Make a local copy to avoid race conditions where we test the reference
@@ -2326,11 +2358,28 @@ public final class HBaseClient {
                                                   EMPTY_ARRAY);
     root_lookups.increment();
     return rootregion.getClosestRowBefore(root_region, ROOT, root_key, INFO)
-      .addCallback(root_lookup_done)
-      // This errback needs to run *after* the callback above.
-      .addErrback(newLocateRegionErrback(table, key));
-  
+            .addCallback(root_lookup_done)
+                    // This errback needs to run *after* the callback above.
+            .addErrback(newLocateRegionErrback(request, table, key,
+                    closest_before, return_location));
   }
+
+  /**
+   * Callback executed when a lookup in META completes
+   * and user wants RegionLocation.
+   */
+  private final class MetaWithRegionLocationCB
+          implements Callback<Object, ArrayList<KeyValue>> {
+    public Object call(final ArrayList<KeyValue> arg) {
+      discoverRegion(arg);
+      return toRegionLocation(arg);
+    }
+    public String toString() {
+      return "locateRegion in META with returning RegionLocation";
+    }
+  };
+  private final MetaWithRegionLocationCB meta_lookup_done_return_location
+          = new MetaWithRegionLocationCB();
 
   /** Callback executed when a lookup in META completes.  */
   private final class MetaCB implements Callback<Object, ArrayList<KeyValue>> {
@@ -2366,39 +2415,48 @@ public final class HBaseClient {
    * @param table The table to which the row belongs.
    * @param key The row key for which we want to locate the region.
    */
-  private Callback<Object, Exception> newLocateRegionErrback(final byte[] table, final byte[] key){
-    return newLocateRegionErrback(table, key, false);
+  private Callback<Object, Exception> newLocateRegionErrback(
+          final HBaseRpc request, final byte[] table, final byte[] key) {
+    return newLocateRegionErrback(request, table, key, false, false);
   }
 
-  private Callback<Object, Exception> newLocateRegionErrback(final byte[] table,
-                                                             final byte[] key, final boolean before) {
+  /**
+   * Creates a new callback that handles errors during META lookups.
+   * <p>
+   * This errback should be added *after* adding the callback that invokes
+   * {@link #discoverRegion} so it can properly fill in the table name when
+   * a {@link TableNotFoundException} is thrown (because the low-level code
+   * doesn't know about tables, it only knows about regions, but for proper
+   * error reporting users need the name of the table that wasn't found).
+   * @param request The RPC that is hunting for a region
+   * @param table The table to which the row belongs.
+   * @param key The row key for which we want to locate the region.
+   * @param closest_before Whether or not to locate the region which has
+   * the row that's less than or equal to the given row.
+   * @param return_location Whether or not to return the region information
+   * in the deferred result.
+   */
+  private Callback<Object, Exception> newLocateRegionErrback(
+          final HBaseRpc request, final byte[] table, final byte[] key,
+          final boolean closest_before, final boolean return_location) {
     return new Callback<Object, Exception>() {
       public Object call(final Exception e) {
         if (e instanceof TableNotFoundException) {
           return new TableNotFoundException(table);  // Populate the name.
         } else if (e instanceof RecoverableException) {
-          // Retry to locate the region.  TODO(tsuna): exponential backoff?
-          // XXX this can cause an endless retry loop (particularly if the
-          // address of -ROOT- in ZK is stale when we start, this code is
-          // going to retry in an almost-tight loop until the znode is
-          // updated).
-          if (before){
-            return locateRegionBeforeKey(table, key);
+          // Retry to locate the region if we haven't tried too many times.
+          // TODO(tsuna): exponential backoff?
+          if (cannotRetryRequest(request)) {
+            return tooManyAttempts(request, null);
           }
-          else {
-            return locateRegion(table, key);
-          }
+          request.attempt++;
+          return locateRegion(request, table, key, closest_before,
+                  return_location);
         }
         return e;
       }
       public String toString() {
-        if (before){
-          return "locateRegionBeforeKey errback";
-        }
-        else {
-          return "locateRegion errback";
-        }
-        
+        return "locateRegion errback";
       }
     };
   }
@@ -2412,6 +2470,21 @@ public final class HBaseClient {
    */
   private static byte[] createRegionSearchKey(final byte[] table,
                                               final byte[] key) {
+    return createRegionSearchKey(table, key, false);
+  }
+
+  /**
+   * Creates the META key to search for in order to locate the given key.
+   * @param table The table the row belongs to.
+   * @param key The key to search for in META.
+   * @param closest_before Whether or not to locate the region which has
+   * the row that's less than or equal to the given row.
+   * @return A row key to search for in the META table, that will help us
+   * locate the region serving the given {@code (table, key)}.
+   */
+  private static byte[] createRegionSearchKey(final byte[] table,
+                                              final byte[] key,
+                                              final boolean closest_before) {
     // Rows in .META. look like this:
     //   tablename,startkey,timestamp
     final byte[] meta_key = new byte[table.length + key.length + 3];
@@ -2419,26 +2492,17 @@ public final class HBaseClient {
     meta_key[table.length] = ',';
     System.arraycopy(key, 0, meta_key, table.length + 1, key.length);
     meta_key[meta_key.length - 2] = ',';
-    // ':' is the first byte greater than '9'.  We always want to find the
-    // entry with the greatest timestamp, so by looking right before ':'
-    // we'll find it.
-    meta_key[meta_key.length - 1] = ':';
-    return meta_key;
-  }
-
-  /**
-  * Creates the META key to search for to locate the given key 
-  * with smallest timestamp (as opposed to largest in {@link #createRegionSearchKey}).
-  * @param table The table the row belongs to.
-  * @param key The key to search for in META.
-  */
-  static byte[] createPreviousRegionSearchKey(final byte[] table,
-                                                      final byte[] key){
-    final byte[] meta_key = createRegionSearchKey(table, key);
-    meta_key[meta_key.length - 1] = '/'; 
-    // '/' is the first byte less than '0'. We always want to find the region
-    // that has the largest timestamp BEFORE the key specified so using '/'
-    // means we never get to the region that contains the input key.
+    if (closest_before) {
+      meta_key[meta_key.length - 1] = '/';
+      // '/' is the first byte less than '0'. We always want to find the region
+      // that has the largest timestamp BEFORE the key specified so using '/'
+      // means we never get to the region that contains the input key.
+    } else {
+      // ':' is the first byte greater than '9'.  We always want to find the
+      // entry with the greatest timestamp, so by looking right before ':'
+      // we'll find it.
+      meta_key[meta_key.length - 1] = ':';
+    }
     return meta_key;
   }
 
@@ -2522,32 +2586,6 @@ public final class HBaseClient {
     // Make sure we didn't find another key that's for another table
     // whose name is a prefix of the table name we were given.
     return cache_key[table.length] == ',';
-  }
-
-
-  /**
-   * Parses input that is a ArrayList<KeyValue> into a RegionInfo object
-   * and returns the start key of that region.
-   * Similar to {@link #discoverRegion} in parsing of the argument.
-   * @param arg Wrapped RegionInfo and port info.
-   * @return start_key as byte[] of the region that was passed in.
-   */
-  static byte[] processPreviousRegion(ArrayList<KeyValue> arg){
-    RegionInfo region = null;
-    for (final KeyValue kv : arg) {
-      final byte[] qualifier = kv.qualifier();
-      if (Arrays.equals(REGIONINFO, qualifier)) {
-        final byte[][] tmp = new byte[1][];  // Yes, this is ugly.
-        region = RegionInfo.fromKeyValue(kv, tmp);
-        break;
-      }
-    }
-    if (region != null){
-      return region.startKey();
-    }
-    else {
-      return null;
-    }
   }
 
   /**

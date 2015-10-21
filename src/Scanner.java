@@ -211,31 +211,32 @@ public final class Scanner {
   /**
   * Returns boolean indicating if scanner is in reversed direction
   */
-  public boolean getReversed(){
+  public boolean isReversed(){
     return is_reversed;
   }
 
   /**
   * Specifies if the scan will be in reverse or not
-  * @param to_reverse Indication of scan direction. If this is not
+  * @param reversed Indication of scan direction. If this is not
   * invoked, scanning will default to not being reversed.
   *
   * In a reversed scan, the first Scanner opened is opened on the region
-  * that the Scanner start key is in (the same as forward scan). But 
-  * subsequent scanners are opened via the overloaded 
-  * {@link #OpenScannerRequest} and the region to be opened on is 
-  * found through a META lookup using {@link #locateRegionBeforeKey}.
-  * 
+  * that the Scanner start key is in (the same as forward scan). But
+  * subsequent scanners are opened via the overloaded
+  * {@link #OpenScannerRequest} and the region to be opened on is
+  * found through a META lookup using
+   * {@link HBaseClient#locateRegionClosestBeforeKey}.
+  *
   */
-  public void setReverse(){
+  public void setReversed(boolean reversed){
     checkScanningNotStarted();
     is_reversed = true;
   }
 
   /**
-  * Returns boolean indicating if this is the first scanner opened on 
-  * a reverse scan. This is different from the subsequent scanners opened 
-  * in reverse scan because it is the only scanner whose region is found by 
+  * Returns boolean indicating if this is the first scanner opened on
+  * a reverse scan. This is different from the subsequent scanners opened
+  * in reverse scan because it is the only scanner whose region is found by
   * looking up the key
   */
   public boolean isFirstReverseRegion(){
@@ -733,11 +734,13 @@ public final class Scanner {
     if (region == DONE) {  // We're already done scanning.
       return Deferred.fromResult(null);
     } else if (region == null) {  // We need to open the scanner first.
-      if (this.getReversed() && !this.isFirstReverseRegion()){
-        return openReverseScanner().addCallbackDeferring(opened_scanner);
+      if (this.isReversed() && !this.isFirstReverseRegion()){
+        return client.openReverseScanner(this)
+                .addCallbackDeferring(opened_scanner);
       } else {
         if (is_reversed && start_key == EMPTY_ARRAY){
-          start_key = Bytes.createMaxByteArray(Short.MAX_VALUE - table.length - 3);
+          start_key = Bytes.createMaxByteArray(Short.MAX_VALUE - table.length
+                  - 3);
         }
         return client.openScanner(this).addCallbackDeferring(opened_scanner);
       }
@@ -785,7 +788,7 @@ public final class Scanner {
             return "scanner opened";
           }
         };
-    
+
 
   /**
    * Singleton callback to handle responses of "next" RPCs.
@@ -919,19 +922,20 @@ public final class Scanner {
 
   private Deferred<ArrayList<ArrayList<KeyValue>>> scanFinished(final Response resp) {
     final byte[] region_stop_key = region.stopKey();
-    final byte[] region_start_key = region.startKey();
+    final byte[] region_start_key = RegionInfo.startKeyFromRegionName(
+            region.name());
     // Check to see if this region is the last we should scan (either
     // because (1) it's the last region or (3) because its stop_key is
     // greater than or equal to the stop_key of this scanner provided
     // that (2) we're not trying to scan until the end of the table).
     // or if the scanner is reversed, (4) it's the first region or
-    // (6) scanner is in reverse and stop_key is after the region start_key 
+    // (6) scanner is in reverse and stop_key is after the region start_key
     // provided that (5) we are not trying to scan until the beginning.
-    if ((!is_reversed && 
+    if ((!is_reversed &&
         (region_stop_key == EMPTY_ARRAY ||                            // (1)
           (stop_key != EMPTY_ARRAY &&                                 // (2)
-          Bytes.memcmp(stop_key, region_stop_key) <= 0 )))            // (3)   
-      || (is_reversed && 
+          Bytes.memcmp(stop_key, region_stop_key) <= 0 )))            // (3)
+      || (is_reversed &&
         (region_start_key == EMPTY_ARRAY ||                           // (4)
           (stop_key != EMPTY_ARRAY &&                                 // (5)
           Bytes.memcmp(stop_key, region_start_key) >= 0)))){          // (6)
@@ -990,7 +994,7 @@ public final class Scanner {
     // Continue scanning from the next region's start key
     // Dependent on direction of scan
     if (is_reversed){
-      start_key = region.startKey();
+      start_key = RegionInfo.startKeyFromRegionName(region.name());
     } else{
       start_key = region.stopKey();
     }
@@ -1120,6 +1124,15 @@ public final class Scanner {
     return new OpenScannerRequest();
   }
 
+  /**
+   * Returns an RPC to open this scanner for reverse scan.
+   * Reverse scan requires to open scanner with region start key,
+   * but have to preserve start key for real scan.
+   * @param region_start_key region's start key
+   */
+  HBaseRpc getOpenRequestForReverseScan(final byte[] region_start_key) {
+    return new OpenScannerRequest(table, region_start_key);
+  }
 
   /**
    * Returns an RPC to close this scanner.
@@ -1212,41 +1225,6 @@ public final class Scanner {
     return rows;
   }
 
-  /**
-   * Called instead of openScanner() in order to do an additional META lookup to find
-   * next region we will be scanning.
-   * @return A deferred scanner ID (long) if HBase 0.94 and before, or a
-   * deferred {@link Scanner.Response} if HBase 0.95 and up.
-   */
-  private Deferred<Object> openReverseScanner(){
-    return client.locateRegionBeforeKey(table, start_key).addCallbacks(
-      new Callback<Object, Object> () {
-        public Object call(final Object  arg) {
-          if (arg instanceof ArrayList){
-            @SuppressWarnings("unchecked")
-            byte[] new_start_key = HBaseClient.processPreviousRegion((ArrayList<KeyValue>)arg);
-                        
-            return client.openScanner(Scanner.this,
-              new OpenScannerRequest(Scanner.this.table, new_start_key));
-          }
-          else{
-            return Deferred.fromResult(null);
-          }
-    }},
-    new Callback<Object, Object> (){
-      public Object call(final Object error){
-        LOG.info("Lookup to construct reverse scanner failed on table " + Bytes.pretty(table) +
-          " and start key " + Bytes.pretty(start_key));
-        return error;
-      }
-
-        public String toString(){
-          return "openReverseScanner errback";
-        }
-    }
-    );
-  }
-
   /** RPC method name to use with HBase 0.95+.  */
   private static final byte[] SCAN = new byte[] { 'S', 'c', 'a', 'n' };
 
@@ -1260,7 +1238,7 @@ public final class Scanner {
   final class OpenScannerRequest extends HBaseRpc {
 
     /**
-     * Default constructor that is used for every forward Scanner and 
+     * Default constructor that is used for every forward Scanner and
      * for the first Scanner in a reverse Scan
      */
     public OpenScannerRequest() {
@@ -1304,7 +1282,6 @@ public final class Scanner {
       size += start_key.length;  // The start key.
       size += 3;  // vint: stop key length (3 bytes => max length = 32768).
       size += stop_key.length;  // The stop key.
-      size += 1;  // bool: Whether the scanner is in reverse
       size += 4;  // int:  Max number of versions to return.
       size += 4;  // int:  Max number of KeyValues to get per RPC.
       size += 4;  // int:  Unused field only used by HBase's client.
