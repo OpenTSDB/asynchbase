@@ -29,9 +29,12 @@ package org.hbase.async;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.ByteBufAllocator;
 <<<<<<< HEAD
+<<<<<<< HEAD
 =======
 import io.netty.buffer.Unpooled;
 >>>>>>> Netty 4.0: optimized ByteBuf allocation for IO
+=======
+>>>>>>> Netty 4.0: more optimization on buffer allocation
 import io.netty.channel.Channel;
 import io.netty.util.ReferenceCountUtil;
 import org.hbase.async.auth.ClientAuthProvider;
