@@ -62,9 +62,9 @@
     <plugins>
 
       <plugin>
-        <groupId>com.google.protobuf.tools</groupId>
-        <artifactId>maven-protoc-plugin</artifactId>
-        <version>0.3.2</version>
+        <groupId>org.xolstice.maven.plugins</groupId>
+        <artifactId>protobuf-maven-plugin</artifactId>
+        <version>0.5.0</version>
         <configuration>
           <protocExecutable>protoc</protocExecutable>
           <protoSourceRoot>${basedir}/protobuf</protoSourceRoot>
@@ -288,13 +288,6 @@
   <properties>
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
   </properties>
-
-  <pluginRepositories>
-    <pluginRepository>
-      <id>protoc-plugin</id>
-      <url>http://sergei-ivanov.github.com/maven-protoc-plugin/repo/releases/</url>
-    </pluginRepository>
-  </pluginRepositories>
 
   <parent>
     <groupId>org.sonatype.oss</groupId>
