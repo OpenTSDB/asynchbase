@@ -105,6 +105,17 @@ public final class FuzzyRowFilter extends ScanFilter {
     public byte[] getFuzzyMask() {
       return fuzzy_mask;
     }
+  
+    @Override
+    public String toString() {
+      final StringBuilder buf = new StringBuilder();
+      buf.append("FuzzyFilterPair{row_key=")
+         .append(Bytes.pretty(row_key))
+         .append(", mask=")
+         .append(Bytes.pretty(fuzzy_mask))
+         .append("}");
+      return buf.toString();
+    }
   }
 
   /**
@@ -160,5 +171,14 @@ public final class FuzzyRowFilter extends ScanFilter {
       size +=  2 * ( 3 + filter.getRowKey().length );
     }
     return  size;
+  }
+
+  @Override
+  public String toString() {
+    final StringBuilder buf = new StringBuilder();
+    buf.append("FuzzyFilter{")
+       .append(filter_pairs)
+       .append("}");
+    return buf.toString();
   }
 }
