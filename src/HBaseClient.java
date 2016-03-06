@@ -549,7 +549,7 @@ public final class HBaseClient {
   
   /**
    * Constructor accepting a configuration object with at least the 
-   * "asynchbase.zk.quorum" specified in the format {@code "host1,host2,host3"}.
+   * "hbase.zookeeper.quorum" specified in the format {@code "host1,host2,host3"}.
    * @param config A configuration object
    * @since 1.7
    */
@@ -559,7 +559,7 @@ public final class HBaseClient {
   
   /**
    * Constructor accepting a configuration object with at least the 
-   * "asynchbase.zk.quorum" specified in the format {@code "host1,host2,host3"}
+   * "hbase.zookeeper.quorum" specified in the format {@code "host1,host2,host3"}
    * and an executor thread pool.
    * @param config A configuration object
    * @param The executor from which to obtain threads for NIO
