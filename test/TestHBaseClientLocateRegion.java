@@ -403,4 +403,4 @@ public class TestHBaseClientLocateRegion extends BaseTestHBaseClient {
         ((Counter)Whitebox.getInternalState(client, 
             "meta_lookups_wo_permit")).get());
   }
-}
+} 

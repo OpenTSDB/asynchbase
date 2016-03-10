@@ -50,6 +50,17 @@ public final class Bytes {
   private Bytes() {  // Can't instantiate.
   }
 
+  /**
+   * Create a max byte array with the specified max byte count
+   * @param num_bytes the length of returned byte array
+   * @return the created max byte array
+   */
+  public static byte[] createMaxByteArray(int num_bytes) {
+    byte[] max_byte_arr = new byte[num_bytes];
+    Arrays.fill(max_byte_arr, (byte) 0xff);
+    return max_byte_arr;
+  }
+
   // ------------------------------ //
   // Byte array conversion utilies. //
   // ------------------------------ //
