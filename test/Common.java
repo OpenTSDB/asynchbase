@@ -31,7 +31,6 @@ import org.jboss.netty.logging.Slf4JLoggerFactory;
 import org.junit.Ignore;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.hbase.async.HBaseClient;
 
 @Ignore // ignore for test runners
 final class Common {
@@ -56,7 +55,6 @@ final class Common {
     } else {
       zkquorum = "localhost";
     }
-    final HBaseClient client;
     if (args.length > 3) {
       return new HBaseClient(zkquorum, args[3]);
     } else {

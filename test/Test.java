@@ -26,21 +26,13 @@
  */
 package org.hbase.async;
 
+import com.google.common.base.Joiner;
+import org.junit.Ignore;
+import org.slf4j.Logger;
+
 import java.util.ArrayList;
 import java.util.HashMap;
-
-import org.hbase.async.AtomicIncrementRequest;
-import org.hbase.async.DeleteRequest;
-import org.hbase.async.GetRequest;
-import org.hbase.async.HBaseClient;
-import org.hbase.async.KeyValue;
-import org.hbase.async.PutRequest;
-import org.hbase.async.RowLock;
-import org.hbase.async.RowLockRequest;
-import org.hbase.async.Scanner;
-import org.slf4j.Logger;
-import org.hbase.async.Common;
-import org.junit.Ignore;
+import java.util.Map;
 
 /**
  * Simple command-line interface to quickly test async HBase.
@@ -54,6 +46,7 @@ final class Test {
   static {
     commands = new HashMap<String, Cmd>();
     commands.put("icv", new icv());
+    commands.put("micv", new micv());
     commands.put("scan", new scan());
     commands.put("mscan", new mscan());
     final get get = new get();  // get get get!!
@@ -76,6 +69,7 @@ final class Test {
                        + "Available commands:\n"
                        + "  get <table> <key> [family] [qualifiers ...]\n"
                        + "  icv <table> <key> <family> <qualifier> [amount]\n"
+                       + "  micv <table> <key> <family> <qualifiers> [amounts]\n"
                        + "  put <table> <key> <family> <qualifier> <value>\n"
                        + "  delete <table> <key> [<family> [<qualifier>]]\n"
                        + "  scan <table> [start] [family] [qualifier] [stop] [regexp]\n"
@@ -181,6 +175,30 @@ final class Test {
       try {
         final long result = client.atomicIncrement(icv).joinUninterruptibly();
         LOG.info("ICV result=" + result);
+      } catch (Exception e) {
+        LOG.error("ICV failed", e);
+      }
+    }
+  }
+
+  private static final class micv implements Cmd {
+    public void execute(final HBaseClient client, String[] args) {
+      ensureArguments(args, 6, 7);
+      final MultiColumnAtomicIncrementRequest micv =
+        new MultiColumnAtomicIncrementRequest(args[2], args[3], args[4], args[5].split(","));
+      if (args.length > 6) {
+        String[] raw = args[6].split(",");
+        long[] amounts = new long[raw.length];
+        for(int i = 0; i < amounts.length; i++) {
+          amounts[i] = Long.parseLong(raw[i]);
+        }
+        micv.setAmounts(amounts);
+      }
+      args = null;
+      try {
+        final Map<byte[], Long> result = client.atomicIncrements(micv).joinUninterruptibly();
+        final String formatted = Joiner.on("->").withKeyValueSeparator(";").join(result);
+        LOG.info("MICV result=" + formatted);
       } catch (Exception e) {
         LOG.error("ICV failed", e);
       }

@@ -26,40 +26,18 @@
  */
 package org.hbase.async;
 
-import java.io.IOException;
-import java.net.InetAddress;
-import java.net.InetSocketAddress;
-import java.net.SocketAddress;
-import java.net.UnknownHostException;
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.Collection;
-import java.util.HashMap;
-import java.util.Iterator;
-import java.util.List;
-import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentSkipListMap;
-import java.util.concurrent.Executor;
-import java.util.concurrent.Executors;
-import java.util.concurrent.atomic.AtomicInteger;
-
-import static java.util.concurrent.TimeUnit.MILLISECONDS;
-
 import com.google.common.cache.LoadingCache;
 import com.google.protobuf.InvalidProtocolBufferException;
-
+import com.stumbleupon.async.Callback;
+import com.stumbleupon.async.Deferred;
 import org.apache.zookeeper.AsyncCallback;
 import org.apache.zookeeper.KeeperException.Code;
 import org.apache.zookeeper.WatchedEvent;
 import org.apache.zookeeper.Watcher;
 import org.apache.zookeeper.ZooKeeper;
 import org.apache.zookeeper.data.Stat;
-import org.jboss.netty.channel.ChannelEvent;
-import org.jboss.netty.channel.ChannelHandler;
-import org.jboss.netty.channel.ChannelHandlerContext;
-import org.jboss.netty.channel.ChannelStateEvent;
-import org.jboss.netty.channel.DefaultChannelPipeline;
+import org.hbase.async.generated.ZooKeeperPB;
+import org.jboss.netty.channel.*;
 import org.jboss.netty.channel.socket.ClientSocketChannelFactory;
 import org.jboss.netty.channel.socket.SocketChannel;
 import org.jboss.netty.channel.socket.SocketChannelConfig;
@@ -71,18 +49,25 @@ import org.jboss.netty.handler.timeout.IdleState;
 import org.jboss.netty.handler.timeout.IdleStateAwareChannelHandler;
 import org.jboss.netty.handler.timeout.IdleStateEvent;
 import org.jboss.netty.handler.timeout.IdleStateHandler;
-import org.jboss.netty.util.HashedWheelTimer;
-import org.jboss.netty.util.ThreadNameDeterminer;
-import org.jboss.netty.util.Timeout;
+import org.jboss.netty.util.*;
 import org.jboss.netty.util.Timer;
 import org.jboss.netty.util.TimerTask;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import com.stumbleupon.async.Callback;
-import com.stumbleupon.async.Deferred;
+import java.io.IOException;
+import java.net.InetAddress;
+import java.net.InetSocketAddress;
+import java.net.SocketAddress;
+import java.net.UnknownHostException;
+import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentSkipListMap;
+import java.util.concurrent.Executor;
+import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicInteger;
 
-import org.hbase.async.generated.ZooKeeperPB;
+import static java.util.concurrent.TimeUnit.MILLISECONDS;
 
 /**
  * A fully asynchronous, thread-safe, modern HBase client.
@@ -405,6 +390,7 @@ public final class HBaseClient {
    * @see #setupIncrementCoalescing
    */
   private volatile LoadingCache<BufferedIncrement, BufferedIncrement.Amount> increment_buffer;
+  private volatile LoadingCache<BufferedMultiColumnIncrement, BufferedMultiColumnIncrement.Amounts> multi_column_increment_buffer;
 
   /** The configuration for this client */
   private final Config config;
@@ -562,7 +548,7 @@ public final class HBaseClient {
    * "hbase.zookeeper.quorum" specified in the format {@code "host1,host2,host3"}
    * and an executor thread pool.
    * @param config A configuration object
-   * @param The executor from which to obtain threads for NIO
+   * @param executor The executor from which to obtain threads for NIO
    * operations.  It is <strong>strongly</strong> encouraged to use a
    * {@link Executors#newCachedThreadPool} or something equivalent unless
    * you're sure to understand how Netty creates and uses threads.
@@ -783,8 +769,17 @@ public final class HBaseClient {
       if (buf != null && !buf.asMap().isEmpty()) {
         flushBufferedIncrements(buf);
         need_sync = true;
+
       } else {
-        need_sync = false;
+        final LoadingCache<BufferedMultiColumnIncrement, BufferedMultiColumnIncrement.Amounts> multiColumnBuf =
+          multi_column_increment_buffer;  // Single volatile-read.
+        if (multiColumnBuf != null && !multiColumnBuf.asMap().isEmpty()) {
+          flushBufferedMultiColumnIncrements(multiColumnBuf);
+          need_sync = true;
+
+        } else {
+          need_sync = false;
+        }
       }
     }
     final ArrayList<Deferred<Object>> d =
@@ -1340,7 +1335,6 @@ public final class HBaseClient {
   /**
    * Package-private access point for {@link Scanner}s to scan more rows.
    * @param scanner The scanner to use.
-   * @param nrows The maximum number of rows to retrieve.
    * @return A deferred row.
    */
   Deferred<Object> scanNextRows(final Scanner scanner) {
@@ -1402,6 +1396,21 @@ public final class HBaseClient {
   }
 
   /**
+   * Atomically and durably increments a few values in HBase.
+   * <p>
+   * This is equivalent to
+   * {@link #atomicIncrement(AtomicIncrementRequest, boolean) atomicIncrement}
+   * {@code (request, true)}
+   * @param request The increment request.
+   * @return The deferred {@code long} value that results from the increment.
+   */
+  public Deferred<Map<byte[], Long>> atomicIncrements(final MultiColumnAtomicIncrementRequest request) {
+    num_atomic_increments.increment();
+    return sendRpcToRegion(request).addCallbacks(micv_done,
+                                                 Callback.PASSTHROUGH);
+  }
+
+  /**
    * Buffers a durable atomic increment for coalescing.
    * <p>
    * This increment will be held in memory up to the amount of time allowed
@@ -1455,6 +1464,64 @@ public final class HBaseClient {
   }
 
   /**
+   * Buffers a durable atomic increment for coalescing.
+   * <p>
+   * This increment will be held in memory up to the amount of time allowed
+   * by {@link #getFlushInterval} in order to allow the client to coalesce
+   * increments.
+   * <p>
+   * Increment coalescing can dramatically reduce the number of RPCs and write
+   * load on HBase if you tend to increment multiple times the same working
+   * set of counters.  This is very common in user-facing serving systems that
+   * use HBase counters to keep track of user actions.
+   * <p>
+   * If client-side buffering is disabled ({@link #getFlushInterval} returns
+   * 0) then this function has the same effect as calling
+   * {@link #atomicIncrements(MultiColumnAtomicIncrementRequest)} directly.
+   * @param request The increment request.
+   * @return The deferred {@code long} value that results from the increment.
+   * @since 1.3
+   * @since 1.4 This method works with negative increment values.
+   */
+  public Deferred<Map<byte[], Long>> bufferMultiColumnAtomicIncrement(final MultiColumnAtomicIncrementRequest request) {
+
+    if (flush_interval == 0) { // Client-side buffer disabled.
+      return atomicIncrements(request);
+    }
+
+    long[] values = request.getAmounts();
+    for(long value: values) {
+      if (!BufferedIncrement.Amount.checkOverflow(value)) {   // Value too large
+        return atomicIncrements(request);
+      }
+    }
+
+    final BufferedMultiColumnIncrement incr = new BufferedMultiColumnIncrement(request.table(), request.key(), request.family(),
+                            request.qualifiers());
+
+    do {
+      BufferedMultiColumnIncrement.Amounts amounts;
+      // Semi-evil: the very first time we get here, `increment_buffer' will
+      // still be null (we don't initialize it in our constructor) so we catch
+      // the NPE that ensues to allocate the buffer and kick off a timer to
+      // regularly flush it.
+      try {
+        amounts = multi_column_increment_buffer.getUnchecked(incr);
+      } catch (NullPointerException e) {
+        setupMultiColumnIncrementCoalescing();
+        amounts = multi_column_increment_buffer.getUnchecked(incr);
+      }
+      if (amounts.update(values)) {
+        final Deferred<Map<byte[], Long>> deferred = new Deferred<Map<byte[], Long>>();
+        amounts.deferred.chain(deferred);
+        return deferred;
+      }
+      // else: Loop again to retry.
+      multi_column_increment_buffer.refresh(incr);
+    } while (true);
+  }
+
+  /**
    * Called the first time we get a buffered increment.
    * Lazily creates the increment buffer and sets up a timer to regularly
    * flush buffered increments.
@@ -1488,6 +1555,7 @@ public final class HBaseClient {
         }
       }
     }
+
     final short interval = flush_interval; // Volatile-read.
     // Handle the extremely unlikely yet possible racy case where:
     //   flush_interval was > 0
@@ -1496,6 +1564,51 @@ public final class HBaseClient {
     //   Meanwhile setFlushInterval(0) to disable buffering
     // In which case we just flush whatever we have in 1ms.
     timer.newTimeout(new FlushBufferedIncrementsTimer(),
+                     interval > 0 ? interval : 1, MILLISECONDS);
+  }
+
+  /**
+   * Called the first time we get a buffered increment.
+   * Lazily creates the increment buffer and sets up a timer to regularly
+   * flush buffered increments.
+   */
+  private synchronized void setupMultiColumnIncrementCoalescing() {
+    // If multiple threads attempt to setup coalescing at the same time, the
+    // first one to get here will make `increment_buffer' non-null, and thus
+    // subsequent ones will return immediately.  This is important to avoid
+    // creating more than one FlushBufferedIncrementsTimer below.
+    if (multi_column_increment_buffer != null) {
+      return;
+    }
+    makeMultiColumnIncrementBuffer();  // Volatile-write.
+
+    // Start periodic buffered increment flushes.
+    final class FlushBufferedMultiColumnIncrementsTimer implements TimerTask {
+      public void run(final Timeout timeout) {
+        try {
+          flushBufferedMultiColumnIncrements(multi_column_increment_buffer);
+        } finally {
+          final short interval = flush_interval; // Volatile-read.
+          // Even if we paused or disabled the client side buffer by calling
+          // setFlushInterval(0), we will continue to schedule this timer
+          // forever instead of pausing it.  Pausing it is troublesome because
+          // we don't keep a reference to this timer, so we can't cancel it or
+          // tell if it's running or not.  So let's just KISS and assume that
+          // if we need the timer once, we'll need it forever.  If it's truly
+          // not needed anymore, we'll just cause a bit of extra work to the
+          // timer thread every 100ms, no big deal.
+          newTimeout(this, interval > 0 ? interval : 100);
+        }
+      }
+    }
+    final short interval = flush_interval; // Volatile-read.
+    // Handle the extremely unlikely yet possible racy case where:
+    //   flush_interval was > 0
+    //   A buffered increment came in
+    //   It was the first one ever so we landed here
+    //   Meanwhile setFlushInterval(0) to disable buffering
+    // In which case we just flush whatever we have in 1ms.
+    timer.newTimeout(new FlushBufferedMultiColumnIncrementsTimer(),
                      interval > 0 ? interval : 1, MILLISECONDS);
   }
 
@@ -1537,6 +1650,43 @@ public final class HBaseClient {
   }
 
   /**
+   * Flushes all buffered increments.
+   * @param multicolumn_increment_buffer The buffer to flush.
+   */
+  private static void flushBufferedMultiColumnIncrements(// JAVA Y U NO HAVE TYPEDEF? F U!
+    final LoadingCache<BufferedMultiColumnIncrement, BufferedMultiColumnIncrement.Amounts> multicolumn_increment_buffer) {
+    // Calling this method to clean up before shutting down works solely
+    // because `invalidateAll()' will *synchronously* remove everything.
+    // The Guava documentation says "Discards all entries in the cache,
+    // possibly asynchronously" but in practice the code in `LocalCache'
+    // works as follows:
+    //
+    //   for each segment:
+    //     segment.clear
+    //
+    // Where clearing a segment consists in:
+    //
+    //   lock the segment
+    //   for each active entry:
+    //     add entry to removal queue
+    //   null out the hash table
+    //   unlock the segment
+    //   for each entry in removal queue:
+    //     call the removal listener on that entry
+    //
+    // So by the time the call to `invalidateAll()' returns, every single
+    // buffered increment will have been dealt with, and it is thus safe
+    // to shutdown the rest of the client to let it complete all outstanding
+    // operations.
+    if (LOG.isDebugEnabled()) {
+      LOG.debug("Flushing " + multicolumn_increment_buffer.size() + " buffered multi-column increments");
+    }
+    synchronized (multicolumn_increment_buffer) {
+      multicolumn_increment_buffer.invalidateAll();
+    }
+  }
+
+  /**
    * Creates the increment buffer according to current configuration.
    */
   private void makeIncrementBuffer() {
@@ -1547,12 +1697,38 @@ public final class HBaseClient {
     }
   }
 
-  /** Singleton callback to handle responses of incrementColumnValue RPCs.  */
+  /**
+   * Creates the increment buffer according to current configuration.
+   */
+  private void makeMultiColumnIncrementBuffer() {
+    final int size = increment_buffer_size;
+    multi_column_increment_buffer = BufferedMultiColumnIncrement.newCache(this, size);
+    if (LOG.isDebugEnabled()) {
+      LOG.debug("Created multi column increment buffer of " + size + " entries");
+    }
+  }
+
+  /** Singleton callback to handle responses of incrementColumnValue RPCs  */
   private static final Callback<Long, Object> icv_done =
     new Callback<Long, Object>() {
       public Long call(final Object response) {
         if (response instanceof Long) {
           return (Long) response;
+        } else {
+          throw new InvalidResponseException(Long.class, response);
+        }
+      }
+      public String toString() {
+        return "type incrementColumnValue response";
+      }
+    };
+
+  /** Singleton callback to handle responses of incrementColumnValue RPCs.  */
+  private static final Callback<Map<byte[], Long>, Object> micv_done =
+    new Callback<Map<byte[], Long>, Object>() {
+      public Map<byte[], Long> call(final Object response) {
+        if (response instanceof Map) {
+          return (Map<byte[], Long>) response;
         } else {
           throw new InvalidResponseException(Long.class, response);
         }
@@ -1855,7 +2031,7 @@ public final class HBaseClient {
    * region server connections where applicable.
    * @param return_locations Whether or not to return the region information
    * in the deferred result.
-   * @return A deferred to wait on for completion. If {@link return_locations}
+   * @return A deferred to wait on for completion. If it
    * is true, the results will be a list of {@link RegionLocation} objects.
    * If false, the result will be null on a successful scan.
    */
