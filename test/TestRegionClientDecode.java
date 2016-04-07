@@ -412,11 +412,11 @@ public class TestRegionClientDecode extends BaseTestRegionClient {
     assertNull(region_client.decode(ctx, chan, buffer, VOID));
 
     assertEquals(0, rpcs_inflight.size());
-    verify(hbase_client, never()).handleNSRE(any(HBaseRpc.class), 
+    verify(hbase_client, times(1)).handleNSRE(any(HBaseRpc.class), 
         any(byte[].class), any(RecoverableException.class));
     assertEquals(1, timer.tasks.size());
     assertEquals(60000, (long)timer.tasks.get(0).getValue());
-    verify(timer.timeouts.get(0), times(1)).cancel();
+    verify(timer.timeouts.get(0), never()).cancel();
   }
   
   @Test
