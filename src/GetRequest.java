@@ -190,7 +190,9 @@ public final class GetRequest extends HBaseRpc
    * indicating whether or not the given table / key exists.
    */
   static HBaseRpc exists(final byte[] table, final byte[] key) {
-    return new GetRequest(0F, table, key);
+    final GetRequest rpc = new GetRequest(0F, table, key);
+    rpc.setProbe(true);
+    return rpc;
   }
 
   /**
@@ -205,6 +207,7 @@ public final class GetRequest extends HBaseRpc
                          final byte[] key, final byte[] family) {
     final GetRequest rpc = new GetRequest(0F, table, key);
     rpc.family(family);
+    rpc.setProbe(true);
     return rpc;
   }
 
