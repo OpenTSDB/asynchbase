@@ -343,23 +343,42 @@ public class TestRegionClientDecode extends BaseTestRegionClient {
     verify(timer.timeouts.get(0), times(1)).cancel();
   }
   
-  @Test
-  public void notServingRegionException() throws Exception {
+  private void notServingRegionException(String remote_exception) throws Exception {
     final int id = 42;
     final GetRequest get = new GetRequest(TABLE, ROW);
     get.region = region;
     inflightTheRpc(id, get);
-    
-    ChannelBuffer buffer = PBufResponses.generateException(id, 
-        "org.apache.hadoop.hbase.NotServingRegionException");
+
+    ChannelBuffer buffer = PBufResponses.generateException(id,
+        remote_exception);
     assertNull(region_client.decode(ctx, chan, buffer, VOID));
 
     assertEquals(0, rpcs_inflight.size());
-    verify(hbase_client, times(1)).handleNSRE(any(HBaseRpc.class), 
+    verify(hbase_client, times(1)).handleNSRE(any(HBaseRpc.class),
         any(byte[].class), any(RecoverableException.class));
     assertEquals(1, timer.tasks.size());
     assertEquals(60000, (long)timer.tasks.get(0).getValue());
     verify(timer.timeouts.get(0), never()).cancel();
+  }
+
+  @Test
+  public void notServingRegionException() throws Exception {
+    notServingRegionException("org.apache.hadoop.hbase.NotServingRegionException");
+  }
+
+  @Test
+  public void regionServerAbortedException() throws Exception {
+    notServingRegionException("org.apache.hadoop.hbase.regionserver.RegionServerAbortedException");
+  }
+
+  @Test
+  public void regionServerStoppedException() throws Exception {
+    notServingRegionException("org.apache.hadoop.hbase.regionserver.RegionServerStoppedException");
+  }
+
+  @Test
+  public void serverNotRunningYetException() throws Exception {
+    notServingRegionException("org.apache.hadoop.hbase.ipc.ServerNotRunningYetException");
   }
   
   @Test
