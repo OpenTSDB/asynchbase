@@ -109,6 +109,8 @@ asynchbase_SOURCES := \
 	src/RegionOfflineException.java	\
 	src/RegionMovedException.java	\
 	src/RegionOpeningException.java	\
+	src/RegionServerAbortedException.java	\
+	src/RegionServerStoppedException.java	\
 	src/RemoteException.java	\
 	src/RpcTimedOutException.java	\
 	src/RowFilter.java	\
@@ -119,6 +121,7 @@ asynchbase_SOURCES := \
 	src/SecureRpcHelper.java	\
 	src/SecureRpcHelper94.java	\
 	src/SecureRpcHelper96.java	\
+	src/ServerNotRunningYetException.java	\
 	src/SingletonList.java	\
 	src/SubstringComparator.java	\
 	src/TableNotFoundException.java	\
