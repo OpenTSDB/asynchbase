@@ -16,3 +16,5 @@ jdk:
   - openjdk6
 notifications:
     email: false
+addons:
+  hostname: short-hostname
