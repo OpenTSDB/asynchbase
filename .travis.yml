@@ -1,5 +1,9 @@
 language: java
 before_install:
+  - cat /etc/hosts # optionally check the content *before*
+  - sudo hostname "$(hostname | cut -c1-63)"
+  - sed -e "s/^\\(127\\.0\\.0\\.1.*\\)/\\1 $(hostname | cut -c1-63)/" /etc/hosts | sudo tee /etc/hosts
+  - cat /etc/hosts # optionally check the content *after*
   - wget https://protobuf.googlecode.com/files/protobuf-2.5.0.tar.gz -O /tmp/protobuf-2.5.0.tar.gz
   - tar -C /tmp -xvf /tmp/protobuf-2.5.0.tar.gz
   - cd /tmp/protobuf-2.5.0 && ./configure --prefix=/usr && make --quiet && sudo make install
@@ -12,3 +16,5 @@ jdk:
   - openjdk6
 notifications:
     email: false
+addons:
+  hostname: short-hostname
