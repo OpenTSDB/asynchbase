@@ -31,8 +31,6 @@ import java.util.ArrayList;
 import java.util.Arrays;
 
 import org.jboss.netty.buffer.ChannelBuffer;
-import org.jboss.netty.buffer.ChannelBuffers;
-import org.jboss.netty.util.CharsetUtil;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -342,6 +340,11 @@ public final class Scanner {
 
   /**
    * Specifies multiple column families to scan.
+   * <p>
+   * NOTE: This will null out the qualifiers list if it was set previously as
+   * well as replace any families that were already set.
+   * @param families A list of one or more family names.
+   * @throws IllegalStateException if scanning already started.
    * @since 1.5
    */
   public void setFamilies(final String... families) {
@@ -350,8 +353,8 @@ public final class Scanner {
     for (int i = 0; i < families.length; i++) {
       this.families[i] = families[i].getBytes();
       KeyValue.checkFamily(this.families[i]);
-      qualifiers[i] = null;
     }
+    qualifiers = null;
   }
 
   /**
