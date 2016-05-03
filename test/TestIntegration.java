@@ -1791,28 +1791,28 @@ final public class TestIntegration {
   */
   @Test
   public void reverseScanWithOptionalParamsAcrossRegions() throws Exception{
-    final String table3 = args[0] + "3";
-    createOrTruncateTable(client, table3, family);
+    final String table5 = args[0] + "5";
+    createOrTruncateTable(client, table5, family);
     client.setFlushInterval(FAST_FLUSH);
-    final PutRequest put1 = new PutRequest(table3, "scop0", family, "q1", "val0");
+    final PutRequest put1 = new PutRequest(table5, "scop0", family, "q1", "val0");
     client.put(put1).join();
-    final PutRequest put2 = new PutRequest(table3, "scop1", family, "q1", "val1");
+    final PutRequest put2 = new PutRequest(table5, "scop1", family, "q1", "val1");
     client.put(put2).join();
-    final PutRequest put3 = new PutRequest(table3, "scop2", family, "q1", "val2");
+    final PutRequest put3 = new PutRequest(table5, "scop2", family, "q1", "val2");
     client.put(put3).join();
-    final PutRequest put4 = new PutRequest(table3, "scop3", family, "q1", "val3");
+    final PutRequest put4 = new PutRequest(table5, "scop3", family, "q1", "val3");
     client.put(put4).join();
 
-    splitTable(table3, "scop2");
-    splitTable(table3, "scop3");
-    alterTableStatus(table3);
+    splitTable(table5, "scop2");
+    splitTable(table5, "scop3");
+    alterTableStatus(table5);
 
-    ArrayList<ArrayList<KeyValue>> rows = genericScanGetAllAcrossRegions("scop1", null, table3, true);
+    ArrayList<ArrayList<KeyValue>> rows = genericScanGetAllAcrossRegions("scop1", null, table5, true);
     assertSizeIs(2, rows);
     assertEq("val1", rows.get(0).get(0).value());
     assertEq("val0", rows.get(1).get(0).value());
 
-    rows = genericScanGetAllAcrossRegions(null, "scop1", table3, true);
+    rows = genericScanGetAllAcrossRegions(null, "scop1", table5, true);
     assertSizeIs(2, rows);
     assertEq("val3", rows.get(0).get(0).value());
     assertEq("val2", rows.get(1).get(0).value());
