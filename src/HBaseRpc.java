@@ -478,18 +478,32 @@ public abstract class HBaseRpc {
   }
 
   /**
-   * If true, this RPC should fail-fast as soon as we know we have a problem.
+   * If true, this RPC is a probe which checks if the destination region is
+   * online.
    */
-  boolean probe = false;
+  private boolean probe = false;
 
-  public boolean isProbe() {
+  boolean isProbe() {
     return probe;
   }
 
-  public void setProbe(boolean probe) {
+  void setProbe(boolean probe) {
     this.probe = probe;
   }
-  
+
+  /**
+   * Whether or not if this RPC is a probe that is suspended by an NSRE
+   */
+  private boolean suspended_probe = false;
+
+  boolean isSuspendedProbe() {
+    return suspended_probe;
+  }
+
+  void setSuspendedProbe(boolean suspended_probe) {
+    this.suspended_probe = suspended_probe;
+  }
+
   /**
    * Package private constructor for RPCs that aren't for any region.
    */

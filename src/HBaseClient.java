@@ -2702,6 +2702,11 @@ public final class HBaseClient {
                   final byte[] region_name,
                   final RecoverableException e) {
     num_nsre_rpcs.increment();
+    if (rpc.isProbe()) {
+      synchronized (rpc) {
+        rpc.setSuspendedProbe(true);
+      }
+    }
     final boolean can_retry_rpc = !cannotRetryRequest(rpc);
     boolean known_nsre = true;  // We already aware of an NSRE for this region?
     ArrayList<HBaseRpc> nsred_rpcs = got_nsre.get(region_name);
@@ -2780,8 +2785,10 @@ public final class HBaseClient {
             } else if (can_retry_rpc) {
               reject = false;
               if (nsred_rpcs.contains(rpc)) {  // XXX O(n) check...  :-/
-                LOG.error("WTF?  Trying to add " + rpc + " twice to NSREd RPC"
-                          + " on " + Bytes.pretty(region_name));
+                // This can happen when a probe gets an NSRE and regions_cache
+                // is updated by another thread while it's retrying
+                LOG.debug("Trying to add " + rpc + " twice to NSREd RPC"
+                            + " on " + Bytes.pretty(region_name));
               } else {
                 nsred_rpcs.add(rpc);
               }
@@ -2792,23 +2799,27 @@ public final class HBaseClient {
         }
       } // end of the synchronized block.
 
-      // Stop here if this is a known NSRE and `rpc' is not our probe RPC.
-      if (known_nsre && exists_rpc != rpc) {
-        if (size != nsre_high_watermark && size % NSRE_LOG_EVERY == 0) {
-          final String msg = "There are now " + size
-            + " RPCs pending due to NSRE on " + Bytes.pretty(region_name);
-          if (size + NSRE_LOG_EVERY < nsre_high_watermark) {
-            LOG.info(msg);  // First message logged at INFO level.
-          } else {
-            LOG.warn(msg);  // Last message logged with increased severity.
+      // Stop here if this is a known NSRE and `rpc' is not our probe RPC that
+      // is not suspended
+      synchronized (exists_rpc) {
+        if (known_nsre && exists_rpc != rpc && !exists_rpc.isSuspendedProbe()) {
+          if (size != nsre_high_watermark && size % NSRE_LOG_EVERY == 0) {
+            final String msg = "There are now " + size
+              + " RPCs pending due to NSRE on " + Bytes.pretty(region_name);
+            if (size + NSRE_LOG_EVERY < nsre_high_watermark) {
+              LOG.info(msg);  // First message logged at INFO level.
+            } else {
+              LOG.warn(msg);  // Last message logged with increased severity.
+            }
           }
+          if (reject) {
+            rpc.callback(new PleaseThrottleException(size + " RPCs waiting on "
+              + Bytes.pretty(region_name) + " to come back online", e, rpc,
+              exists_rpc.getDeferred()));
+          }
+          return;  // This NSRE is already known and being handled.
         }
-        if (reject) {
-          rpc.callback(new PleaseThrottleException(size + " RPCs waiting on "
-            + Bytes.pretty(region_name) + " to come back online", e, rpc,
-            exists_rpc.getDeferred()));
-        }
-        return;  // This NSRE is already known and being handled.
+        exists_rpc.setSuspendedProbe(false);
       }
     }
 
@@ -2880,7 +2891,10 @@ public final class HBaseClient {
                   + Bytes.pretty(region_name) + " seems to have cleared");
             }
           }
-          final Iterator<HBaseRpc> i = rpcs.iterator();
+          final ArrayList<HBaseRpc> rpcs_to_replay = new ArrayList<HBaseRpc>(rpcs);
+          rpcs.clear();  // To avoid cyclic RPC chain
+
+          final Iterator<HBaseRpc> i = rpcs_to_replay.iterator();
           if (i.hasNext()) {
             HBaseRpc r = i.next();
             if (r != probe) {
@@ -2894,10 +2908,9 @@ public final class HBaseClient {
               }
             }
           } else {
-            LOG.error("WTF?  Impossible!  Empty rpcs array=" + rpcs
-                      + " found by " + this);
+            // We avoided cyclic RPC chain
+            LOG.debug("Empty rpcs array=" + rpcs_to_replay + " found by " + this);
           }
-          rpcs.clear();
         }
 
         return arg;
