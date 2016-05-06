@@ -37,7 +37,11 @@ import org.apache.zookeeper.Watcher;
 import org.apache.zookeeper.ZooKeeper;
 import org.apache.zookeeper.data.Stat;
 import org.hbase.async.generated.ZooKeeperPB;
-import org.jboss.netty.channel.*;
+import org.jboss.netty.channel.ChannelEvent;
+import org.jboss.netty.channel.ChannelHandler;
+import org.jboss.netty.channel.ChannelHandlerContext;
+import org.jboss.netty.channel.ChannelStateEvent;
+import org.jboss.netty.channel.DefaultChannelPipeline;
 import org.jboss.netty.channel.socket.ClientSocketChannelFactory;
 import org.jboss.netty.channel.socket.SocketChannel;
 import org.jboss.netty.channel.socket.SocketChannelConfig;
@@ -49,7 +53,9 @@ import org.jboss.netty.handler.timeout.IdleState;
 import org.jboss.netty.handler.timeout.IdleStateAwareChannelHandler;
 import org.jboss.netty.handler.timeout.IdleStateEvent;
 import org.jboss.netty.handler.timeout.IdleStateHandler;
-import org.jboss.netty.util.*;
+import org.jboss.netty.util.HashedWheelTimer;
+import org.jboss.netty.util.ThreadNameDeterminer;
+import org.jboss.netty.util.Timeout;
 import org.jboss.netty.util.Timer;
 import org.jboss.netty.util.TimerTask;
 import org.slf4j.Logger;
@@ -60,7 +66,13 @@ import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.SocketAddress;
 import java.net.UnknownHostException;
-import java.util.*;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collection;
+import java.util.HashMap;
+import java.util.Iterator;
+import java.util.List;
+import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentSkipListMap;
 import java.util.concurrent.Executor;
@@ -1404,7 +1416,7 @@ public final class HBaseClient {
    * @param request The increment request.
    * @return The deferred {@code long} value that results from the increment.
    */
-  public Deferred<Map<byte[], Long>> atomicIncrements(final MultiColumnAtomicIncrementRequest request) {
+  public Deferred<Map<byte[], Long>> atomicIncrement(final MultiColumnAtomicIncrementRequest request) {
     num_atomic_increments.increment();
     return sendRpcToRegion(request).addCallbacks(micv_done,
                                                  Callback.PASSTHROUGH);
@@ -1477,7 +1489,7 @@ public final class HBaseClient {
    * <p>
    * If client-side buffering is disabled ({@link #getFlushInterval} returns
    * 0) then this function has the same effect as calling
-   * {@link #atomicIncrements(MultiColumnAtomicIncrementRequest)} directly.
+   * {@link #atomicIncrement(MultiColumnAtomicIncrementRequest)} directly.
    * @param request The increment request.
    * @return The deferred {@code long} value that results from the increment.
    * @since 1.3
@@ -1486,13 +1498,13 @@ public final class HBaseClient {
   public Deferred<Map<byte[], Long>> bufferMultiColumnAtomicIncrement(final MultiColumnAtomicIncrementRequest request) {
 
     if (flush_interval == 0) { // Client-side buffer disabled.
-      return atomicIncrements(request);
+      return atomicIncrement(request);
     }
 
     long[] values = request.getAmounts();
     for(long value: values) {
       if (!BufferedIncrement.Amount.checkOverflow(value)) {   // Value too large
-        return atomicIncrements(request);
+        return atomicIncrement(request);
       }
     }
 

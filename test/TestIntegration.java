@@ -27,11 +27,6 @@
 package org.hbase.async;
 
 import java.lang.Exception;
-import java.lang.annotation.ElementType;
-import java.lang.annotation.Retention;
-import java.lang.annotation.RetentionPolicy;
-import java.lang.annotation.Target;
-import java.lang.reflect.Method;
 import java.io.BufferedReader;
 import java.io.File;
 import java.io.InputStream;
@@ -55,11 +50,7 @@ import org.junit.runner.Result;
 import org.junit.runner.notification.Failure;
 import org.junit.runner.notification.RunListener;
 import org.powermock.reflect.Whitebox;
-import org.slf4j.Logger;
 
-import java.io.*;
-import java.util.ArrayList;
-import java.util.Collection;
 import java.util.Map;
 
 import static org.junit.Assert.*;
@@ -331,7 +322,7 @@ final public class TestIntegration {
     final PutRequest put2 = new PutRequest(table, "s2", family, "q", "v2");
     final PutRequest put3 = new PutRequest(table, "s3", family, "q", "v3");
     Deferred.group(client.put(put1), client.put(put2),
-                   client.put(put3)).join();
+        client.put(put3)).join();
     // Scan the same 3 rows created above twice.
     for (int i = 0; i < 2; i++) {
       LOG.info("------------ iteration #" + i);
@@ -409,7 +400,7 @@ final public class TestIntegration {
                    client.put(put3)).join();
     final Scanner scanner = client.newScanner(table);
     scanner.setFamily(family);
-    scanner.setQualifiers(new byte[][] { { 'a' }, { 'c' } });
+    scanner.setQualifiers(new byte[][]{{'a'}, {'c'}});
     final ArrayList<ArrayList<KeyValue>> rows = scanner.nextRows(2).join();
     scanner.close().join();
     assertSizeIs(1, rows);
@@ -724,11 +715,11 @@ final public class TestIntegration {
             bufferMultiColumnIncrement(table, key, family, quals, new long[] { big, big }),
             bufferMultiColumnIncrement(table, key, family, quals, new long[] { big, big })
     ).addCallbackDeferring(new Callback<Deferred<ArrayList<KeyValue>>,
-            ArrayList<Map<byte[], Long>>>() {
+        ArrayList<Map<byte[], Long>>>() {
 
       public Deferred<ArrayList<KeyValue>> call(final ArrayList<Map<byte[], Long>> incs) {
         final GetRequest get = new GetRequest(table, key)
-                .family(family).qualifiers(quals);
+            .family(family).qualifiers(quals);
         return client.get(get);
       }
     }).join();
@@ -910,15 +901,15 @@ final public class TestIntegration {
     // HBase 0.98 and up do not create a KV on atomic increment when the
     // increment amount is 0.  So let's first send an increment of some
     // arbitrary value, and then ensure that this value hasn't changed.
-    Map<byte[], Long> inits = client.atomicIncrements(new MultiColumnAtomicIncrementRequest(table, key,
-            family, quals, new long[] {42,42})).join();
+    Map<byte[], Long> inits = client.atomicIncrement(new MultiColumnAtomicIncrementRequest(table, key,
+        family, quals, new long[]{42, 42})).join();
     for(Map.Entry<byte[], Long> entry : inits.entrySet()) {
       assertEquals(42, entry.getValue().longValue());
     }
 
-    bufferMultiColumnIncrement(table, key, family, quals, new long[] { 1, 1 });
+    bufferMultiColumnIncrement(table, key, family, quals, new long[]{1, 1});
     bufferMultiColumnIncrement(table, key, family, quals, new long[] { 2, 2 });
-    bufferMultiColumnIncrement(table, key, family, quals, new long[] { -3, -3 });
+    bufferMultiColumnIncrement(table, key, family, quals, new long[]{-3, -3});
 
     client.flush().joinUninterruptibly();
     final GetRequest get = new GetRequest(table, key)

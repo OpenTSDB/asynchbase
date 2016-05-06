@@ -196,7 +196,7 @@ final class Test {
       }
       args = null;
       try {
-        final Map<byte[], Long> result = client.atomicIncrements(micv).joinUninterruptibly();
+        final Map<byte[], Long> result = client.atomicIncrement(micv).joinUninterruptibly();
         final String formatted = Joiner.on("->").withKeyValueSeparator(";").join(result);
         LOG.info("MICV result=" + formatted);
       } catch (Exception e) {

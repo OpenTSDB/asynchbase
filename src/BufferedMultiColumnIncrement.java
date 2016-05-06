@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2012  The Async HBase Authors.  All rights reserved.
+ * Copyright (C) 2016  The Async HBase Authors.  All rights reserved.
  * This file is part of Async HBase.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -26,7 +26,12 @@
  */
 package org.hbase.async;
 
-import com.google.common.cache.*;
+import com.google.common.cache.CacheBuilder;
+import com.google.common.cache.CacheLoader;
+import com.google.common.cache.CacheStats;
+import com.google.common.cache.LoadingCache;
+import com.google.common.cache.RemovalListener;
+import com.google.common.cache.RemovalNotification;
 import com.stumbleupon.async.Deferred;
 
 import java.util.Arrays;
@@ -35,7 +40,7 @@ import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * Package-private class to uniquely identify a buffered multi-column atomic increment.
- * @since 1.7.1
+ * @since 1.8
  */
 final class BufferedMultiColumnIncrement {
 
@@ -44,7 +49,7 @@ final class BufferedMultiColumnIncrement {
       return false;
     }
     for (int i = 0; i < self.length; i++) {
-      if (!Bytes.equals(self[i], other[i])) {
+      if (Bytes.memcmp(self[i], other[i]) != 0) {
         return false;
       }
     }
@@ -363,7 +368,7 @@ final class BufferedMultiColumnIncrement {
         final MultiColumnAtomicIncrementRequest req =
             new MultiColumnAtomicIncrementRequest(incr.table, incr.key, incr.family,
                 incr.qualifiers, delta);
-        client.atomicIncrements(req).chain(amounts.deferred);
+        client.atomicIncrement(req).chain(amounts.deferred);
       }
     }
 
