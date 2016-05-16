@@ -100,6 +100,7 @@ asynchbase_SOURCES := \
 	src/PleaseThrottleException.java	\
 	src/PutRequest.java	\
 	src/QualifierFilter.java	\
+        src/CallQueueTooBigException.java    \
 	src/RecoverableException.java	\
 	src/RegexStringComparator.java	\
 	src/RegionClient.java	\
