@@ -894,9 +894,18 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
 
       private Object handleException(final Exception e) {
         if (!(e instanceof RecoverableException)) {
-          for (final BatchableRpc rpc : request.batch()) {
-            rpc.callback(e);
+
+          if (e instanceof HBaseException){
+            HBaseException ex = (HBaseException)e;
+            for (final BatchableRpc rpc : request.batch()) {
+              rpc.callback(ex.make(ex, rpc));
+            }
+          } else{
+            for (final BatchableRpc rpc : request.batch()) {
+              rpc.callback(e);
+            }
           }
+
           return e;  // Can't recover from this error, let it propagate.
         }
         if (LOG.isDebugEnabled()) {
