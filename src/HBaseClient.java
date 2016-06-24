@@ -35,6 +35,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
@@ -1219,6 +1220,124 @@ public final class HBaseClient {
       }
     };
 
+  public Deferred<List<ArrayList<KeyValue>>> get(final List<GetRequest> requests) {
+    return Deferred.groupInOrder(multiGet(requests))
+        .addCallback(
+            new Callback<List<ArrayList<KeyValue>>, ArrayList<ArrayList<KeyValue>>>() {
+              public List<ArrayList<KeyValue>> call(ArrayList<ArrayList<KeyValue>> results) {
+                return results;
+              }
+            }
+        );
+  }
+
+  public List<Deferred<ArrayList<KeyValue>>> get2defer(final List<GetRequest> requests) {
+    return multiGet(requests);
+  }
+
+  private List<Deferred<ArrayList<KeyValue>>> multiGet(
+      final List<GetRequest> requests) {
+    
+    class ResultCallbacker implements Callback<Object, Object> {
+      BatchGet batchGet;
+
+      ResultCallbacker(BatchGet batchGet) {
+        this.batchGet = batchGet;
+      }
+
+      public Object call(Object r) throws Exception {
+        if (r instanceof BatchGet.ActionResp[]) {
+          BatchGet.ActionResp[] entries = (BatchGet.ActionResp[]) r;
+
+          for (int i=0; i < entries.length; i++) {
+            BatchGet.ActionResp entry = entries[i];
+            GetRequest req = requests.get(entry.order);
+            if (entry.result instanceof ArrayList) {
+              req.callback(entry.result);
+            } else {
+              Exception e = (entry.result instanceof Exception) ?
+                            (Exception)entry.result : new InvalidResponseException(ArrayList.class, entry.result);
+              handleException(req, e);
+            }
+          }
+        } else {
+          Exception e = (r instanceof Exception) ?
+                        (Exception)r : new InvalidResponseException(BatchGet.ActionResp[].class, r);
+          for (BatchGet.ActionEntry entry: batchGet.actionEntries()) {
+            handleException(entry.rpc, e);
+          }
+        }
+        return null;
+      }
+
+      private void handleException(GetRequest req, final Exception e) {
+        if (e instanceof NotServingRegionException) {
+          handleNSRE(req, req.getRegion().name(), (NotServingRegionException)e);
+        } else if (e instanceof RecoverableException && !req.failfast()) {
+          sendRpcToRegion(req);
+        } else {
+          req.callback(e);
+        }
+      }
+    }
+
+    final List<Deferred<ArrayList<KeyValue>>> result_deferreds =
+        new ArrayList<Deferred<ArrayList<KeyValue>>>(requests.size());
+
+    final Map<RegionClient, BatchGet> region_batch_gets = 
+        new HashMap<RegionClient, BatchGet>();
+    
+    final HashSet<Integer> nsre_gets = new HashSet<Integer>();
+    
+    // Split gets according to regions.
+    for (int i = 0; i < requests.size(); i++) {
+      final GetRequest request = requests.get(i);
+      final byte[] table = request.table;
+      final byte[] key = request.key;
+      
+      // maybe be able to just use discoverRegion() here.
+      final RegionInfo region = getRegion(table, key);
+      RegionClient client = null;
+      if (region != null) {
+        client = (Bytes.equals(region.table(), ROOT)
+                  ? rootregion : region2client.get(region));
+      }
+
+      if (client == null || !client.isAlive()) {
+        // those nsre gets need special treatment.
+        nsre_gets.add(i);
+        continue;
+      }
+
+      request.setRegion(region);
+      BatchGet batchGet = region_batch_gets.get(client);
+      if (batchGet == null) {
+        batchGet = new BatchGet();
+        region_batch_gets.put(client, batchGet);
+      }
+      batchGet.add(new BatchGet.ActionEntry(request, i));
+    }
+
+    for (int i = 0; i < requests.size(); i++) {
+      final GetRequest request = requests.get(i);
+      if (nsre_gets.contains(i)) {
+        result_deferreds.add(get(request));
+      } else {
+        result_deferreds.add(request.getDeferred()
+            .addCallbacks(got, Callback.PASSTHROUGH));
+      }
+    }
+
+    for (Map.Entry<RegionClient, BatchGet> entry : region_batch_gets.entrySet()) {
+      final BatchGet request = entry.getValue();
+      final Deferred<Object> d = request.getDeferred();
+      d.addBoth(new ResultCallbacker(request));
+      entry.getKey().sendRpc(request);
+    }
+
+    return result_deferreds;
+  }
+    
   /**
    * Creates a new {@link Scanner} for a particular table.
    * @param table The name of the table you intend to scan.
