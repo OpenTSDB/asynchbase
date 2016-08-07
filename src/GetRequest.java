@@ -73,6 +73,8 @@ public final class GetRequest extends HBaseRpc
   /** Filter to apply on the scanner.  */
   private ScanFilter filter;
 
+  private boolean closestRowBefore = false;
+
   /** When set in the `versions' field, this is an Exist RPC. */
   private static final int EXIST_FLAG = 0x1;
 
@@ -434,6 +436,26 @@ public final class GetRequest extends HBaseRpc
     filter = null;
   }
 
+  /**
+   * Gets the closest row when the request does not match the specified row key.
+   * Supported for HBase 0.96 and above.
+   * This flag is ignored for old HBase.
+   * @param closestRowBefore flag to enable to get the closest row
+   * @return
+   */
+  public GetRequest setClosestRowBefore(boolean closestRowBefore) {
+    this.closestRowBefore = closestRowBefore;
+    return this;
+  }
+
+  /**
+   * Checks if getting the closest row feature is enabled.
+   * @return
+   */
+  public boolean isClosestRowBefore() {
+    return this.closestRowBefore;
+  }
+
   @Override
   byte[] method(final byte server_version) {
     if (server_version >= RegionClient.SERVER_VERSION_095_OR_ABOVE) {
@@ -575,6 +597,10 @@ public final class GetRequest extends HBaseRpc
     }
     if (!isGetRequest()) {
       getpb.setExistenceOnly(true);
+    }
+
+    if (closestRowBefore) {
+      getpb.setClosestRowBefore(true);
     }
 
     final ClientPB.GetRequest.Builder get = ClientPB.GetRequest.newBuilder()

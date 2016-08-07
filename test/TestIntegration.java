@@ -258,6 +258,38 @@ final public class TestIntegration {
   }
 
   /**
+   * write three values to a HBase column and get one with exact row key,
+   * and get another one with the closest row key.
+   */
+  @Test
+  public void getClosestRowBefore() throws Exception {
+    byte[] t = table.getBytes();
+    final byte[] f = family.getBytes();
+    final byte[][] cols = {"q1".getBytes(), "q2".getBytes()};
+    final byte[][] vals1 = {"val01-1".getBytes(), "val01-2".getBytes()};
+    final byte[][] vals2 = {"val02-1".getBytes(), "val02-2".getBytes()};
+    final byte[][] vals4 = {"val04-1".getBytes(), "val04-2".getBytes()};
+    final PutRequest put1 = new PutRequest(t, "k01".getBytes(), f, cols, vals1);
+    final PutRequest put2 = new PutRequest(t, "k02".getBytes(), f, cols, vals2);
+    final PutRequest put4 = new PutRequest(t, "k04".getBytes(), f, cols, vals4);
+    client.put(put1).join();
+    client.put(put2).join();
+    client.put(put4).join();
+    final GetRequest get4 = new GetRequest(table, "k04", family, "q1");
+    get4.setClosestRowBefore(true);
+    final ArrayList<KeyValue> kvs4 = client.get(get4).join();
+    assertSizeIs(2, kvs4); //setClosestRowBefore() breaks specific column Get. see HBASE-13272.
+    assertEq("k04", kvs4.get(0).key());
+    assertEq("val04-1", kvs4.get(0).value());
+    final GetRequest get3 = new GetRequest(table, "k03", family, "q1");
+    get3.setClosestRowBefore(true);
+    final ArrayList<KeyValue> kvs3 = client.get(get3).join();
+    assertSizeIs(2, kvs3); //setClosestRowBefore() breaks specific column Get. see HBASE-13272.
+    assertEq("k02", kvs3.get(0).key());
+    assertEq("val02-1", kvs3.get(0).value());
+  }
+
+  /**
    * Call Append on a column for the first time and validate that it was
    * created.
    */
