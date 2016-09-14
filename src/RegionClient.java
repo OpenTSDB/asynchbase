@@ -114,7 +114,7 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
     REMOTE_EXCEPTION_TYPES.put(VersionMismatchException.REMOTE_CLASS,
                                new VersionMismatchException(null, null));
     REMOTE_EXCEPTION_TYPES.put(CallQueueTooBigException.REMOTE_CLASS,
-            new CallQueueTooBigException(null, null));
+                               new CallQueueTooBigException(null, null));
   }
 
   /** We don't know the RPC protocol version of the server yet.  */
