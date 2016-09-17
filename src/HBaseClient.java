@@ -270,8 +270,8 @@ public final class HBaseClient {
    * Low and high watermarks when buffering RPCs due to an NSRE.
    * @see #handleNSRE
    */
-  private short nsre_low_watermark;
-  private short nsre_high_watermark;
+  private int nsre_low_watermark;
+  private int nsre_high_watermark;
   
   /**
    * Factory through which we will create all its channels / sockets.
@@ -558,8 +558,8 @@ public final class HBaseClient {
     rpc_timeout_timer = newTimer(config, "RPC Timeout Timer");
     flush_interval = config.getShort("hbase.rpcs.buffered_flush_interval");
     increment_buffer_size = config.getInt("hbase.increments.buffer_size");
-    nsre_low_watermark = config.getShort("hbase.nsre.low_watermark");
-    nsre_high_watermark = config.getShort("hbase.nsre.high_watermark");
+    nsre_low_watermark = config.getInt("hbase.nsre.low_watermark");
+    nsre_high_watermark = config.getInt("hbase.nsre.high_watermark");
     if (config.properties.containsKey("hbase.increments.durable")) {
       increment_buffer_durable = config.getBoolean("hbase.increments.durable");
     }
@@ -631,8 +631,8 @@ public final class HBaseClient {
     rpc_timeout_timer = newTimer(config, "RPC Timeout Timer");
     flush_interval = config.getShort("hbase.rpcs.buffered_flush_interval");
     increment_buffer_size = config.getInt("hbase.increments.buffer_size");
-    nsre_low_watermark = config.getShort("hbase.nsre.low_watermark");
-    nsre_high_watermark = config.getShort("hbase.nsre.high_watermark");
+    nsre_low_watermark = config.getInt("hbase.nsre.low_watermark");
+    nsre_high_watermark = config.getInt("hbase.nsre.high_watermark");
     if (config.properties.containsKey("hbase.increments.durable")) {
       increment_buffer_durable = config.getBoolean("hbase.increments.durable");
     }
