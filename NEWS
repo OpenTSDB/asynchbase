@@ -1,6 +1,26 @@
 AsyncHBase - User visible and noteworthy changes.
 This project uses Semantic Versioning (see http://semver.org/).
 
+* Version 1.7.2 (2016-09-17)
+
+This is a bug fix release.
+
+Noteworthy bug Fixes:
+  - Fix a race condition where messages in the NSRE queue could be stuck and
+    never retried properly. This will help region server crash recovery.
+  - Fix a bug in batched RPCs where, on exception, the batch RPC itself was
+    returned in the exception instead of the individual RPCs.
+  - Changed watermark variables to integers instead of shorts to avoid 
+    overflows when set to values over 32K.
+  - Added retries of CallQueueTooBigExceptions. These still need to avoid
+    flushing the region cache but at least they'll be retried.
+  - Fix calls to scanner.setFamilies() where NPEs were being thrown.
+  - Retry RPCs on RegionServerAbortedException, ServerNotRunningYetExceptions
+    and RegionServerStoppedExceptions.
+  - Fix CompareAndSetRequests so they serialize timestamps as well as the data
+    to target specific versions.
+  - Update the protobuf compiler plugin for Maven.
+
 * Version 1.7.1 (2016-02-10)
 
 This is a bug fix release.
