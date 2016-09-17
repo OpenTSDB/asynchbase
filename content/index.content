@@ -1,7 +1,13 @@
 <div class="jumbotron">
   <h1>Asynchronous HBase Client</h1>
   <p>Access HBase up to twice as fast as the default HTable client in your favorite JVM language.</p>
-  <p><a class="btn btn-primary btn-lg" role="button" href="https://github.com/OpenTSDB/asynchbase/releases">Download 1.6.0</a></p>
+  <p><a class="btn btn-primary btn-lg" role="button" href="https://github.com/OpenTSDB/asynchbase/releases">Download 1.7.2</a></p>
+  <p>Maven: <pre>
+  &lt;dependency&gt;
+    &lt;groupId&gt;org.hbase&lt;/groupId&gt;
+    &lt;artifactId&gt;asynchbase&lt;/artifactId&gt;
+    &lt;version&gt;1.7.2&lt;/version&gt;
+  &lt;/dependency&gt;</pre></p>
 </div>
 <!--
 <div class="row">
