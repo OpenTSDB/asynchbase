@@ -742,7 +742,7 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
       Object deserialize(final ChannelBuffer buf, final int cell_size) {
         assert cell_size == 0 : "cell_size=" + cell_size;
         final ClientPB.GetResponse resp =
-          readProtobuf(buf, ClientPB.GetResponse.PARSER);
+          readProtobuf(buf, ClientPB.GetResponse.parser());
         return GetRequest.extractResponse(resp, buf, cell_size);
       }
 
@@ -1415,7 +1415,7 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
       size = buf.readInt();
       ensureReadable(buf, size);
       HBaseRpc.checkArrayLength(buf, size);
-      header = HBaseRpc.readProtobuf(buf, RPCPB.ResponseHeader.PARSER);
+      header = HBaseRpc.readProtobuf(buf, RPCPB.ResponseHeader.parser());
       if (!header.hasCallId()) {
         final String msg = "RPC response (size: " + size + ") doesn't"
           + " have a call ID: " + header + ", buf=" + Bytes.pretty(buf);

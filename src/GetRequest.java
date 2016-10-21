@@ -644,7 +644,7 @@ public final class GetRequest extends HBaseRpc
   @Override
   Object deserialize(final ChannelBuffer buf, final int cell_size) {
     final ClientPB.GetResponse resp =
-      readProtobuf(buf, ClientPB.GetResponse.PARSER);
+      readProtobuf(buf, ClientPB.GetResponse.parser());
     if (isGetRequest()) {
       return extractResponse(resp, buf, cell_size);
     } else {

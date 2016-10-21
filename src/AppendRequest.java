@@ -636,7 +636,7 @@ public final class AppendRequest extends BatchableRpc
       HBaseRpc.ensureNoCell(cell_size);
     }
     final ClientPB.MutateResponse resp = 
-        readProtobuf(buf, ClientPB.MutateResponse.PARSER);
+        readProtobuf(buf, ClientPB.MutateResponse.parser());
     final ClientPB.Result result = resp.getResult();
     if (this.return_result) {
       final ArrayList<KeyValue> kvs = GetRequest.convertResult(result,

@@ -1440,7 +1440,7 @@ public final class Scanner {
 
     @Override
     Response deserialize(final ChannelBuffer buf, final int cell_size) {
-      final ScanResponse resp = readProtobuf(buf, ScanResponse.PARSER);
+      final ScanResponse resp = readProtobuf(buf, ScanResponse.parser());
       if (!resp.hasScannerId()) {
         throw new InvalidResponseException("Scan RPC response doesn't contain a"
                                            + " scanner ID", resp);
@@ -1490,7 +1490,7 @@ public final class Scanner {
 
     @Override
     Response deserialize(final ChannelBuffer buf, final int cell_size) {
-      final ScanResponse resp = readProtobuf(buf, ScanResponse.PARSER);
+      final ScanResponse resp = readProtobuf(buf, ScanResponse.parser());
       final long id = resp.getScannerId();
       if (scanner_id != id) {
         throw new InvalidResponseException("Scan RPC response was for scanner"
@@ -1554,7 +1554,7 @@ public final class Scanner {
     @Override
     Object deserialize(final ChannelBuffer buf, final int cell_size) {
       HBaseRpc.ensureNoCell(cell_size);
-      final ScanResponse resp = readProtobuf(buf, ScanResponse.PARSER);
+      final ScanResponse resp = readProtobuf(buf, ScanResponse.parser());
       final long id = resp.getScannerId();
       if (scanner_id != id) {
         throw new InvalidResponseException("Scan RPC response was for scanner"

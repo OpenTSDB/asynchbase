@@ -29,7 +29,7 @@ package org.hbase.async;
 import java.lang.reflect.Field;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
-
+import java.nio.ByteBuffer;
 import java.util.Arrays;
 import java.util.Comparator;
 import java.util.Iterator;
@@ -37,6 +37,8 @@ import java.util.Map;
 import java.util.TreeMap;
 
 import com.google.protobuf.ByteString;
+//import com.google.protobuf.ZeroCopyLiteralByteString;
+import com.google.protobuf.UnsafeByteOperations;
 import com.google.protobuf.ZeroCopyLiteralByteString;
 
 import org.jboss.netty.buffer.ChannelBuffer;
@@ -305,7 +307,7 @@ public final class Bytes {
    * @since 1.5
    */
   public static byte[] get(final ByteString buf) {
-    return ZeroCopyLiteralByteString.zeroCopyGetBytes(buf);
+    return ZeroCopyLiteralByteString.get(buf);
   }
 
   /** Transforms a string into an UTF-8 encoded byte array.  */

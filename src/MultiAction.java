@@ -528,7 +528,7 @@ final class MultiAction extends HBaseRpc implements HBaseRpc.IsEdit {
 
   @Override
   Object deserialize(final ChannelBuffer buf, final int cell_size) {
-    final MultiResponse resp = readProtobuf(buf, MultiResponse.PARSER);
+    final MultiResponse resp = readProtobuf(buf, MultiResponse.parser());
     final int responses = resp.getRegionActionResultCount();
     final int nrpcs = batch.size();
     final Object[] resps = new Object[nrpcs];

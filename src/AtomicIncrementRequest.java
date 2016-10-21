@@ -265,7 +265,7 @@ public final class AtomicIncrementRequest extends HBaseRpc
 
   @Override
   Object deserialize(final ChannelBuffer buf, int cell_size) {
-    final MutateResponse resp = readProtobuf(buf, MutateResponse.PARSER);
+    final MutateResponse resp = readProtobuf(buf, MutateResponse.parser());
     // An increment must always produce a result, so we shouldn't need to
     // check whether the `result' field is set here.
     final ArrayList<KeyValue> kvs = GetRequest.convertResult(resp.getResult(),

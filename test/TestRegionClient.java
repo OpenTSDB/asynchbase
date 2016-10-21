@@ -288,7 +288,7 @@ public class TestRegionClient extends BaseTestRegionClient {
     PowerMockito.field(RegionClient.class, "server_version")
       .set(rclient, RegionClient.SERVER_VERSION_095_OR_ABOVE);
 
-    PowerMockito.when(HBaseRpc.readProtobuf(buf, RPCPB.ResponseHeader.PARSER))
+    PowerMockito.when(HBaseRpc.readProtobuf(buf, RPCPB.ResponseHeader.parser()))
       .thenReturn(header);
     PowerMockito.when(buf, "readInt").thenReturn(0);
     PowerMockito.when(header, "hasCallId").thenReturn(false);

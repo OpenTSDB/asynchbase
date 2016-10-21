@@ -186,7 +186,7 @@ final class RegionInfo implements Comparable<RegionInfo> {
     }
     final HBasePB.RegionInfo pb;
     try {
-      pb = HBasePB.RegionInfo.PARSER.parseFrom(value, 4, value.length - 4);
+      pb = HBasePB.RegionInfo.parser().parseFrom(value, 4, value.length - 4);
     } catch (InvalidProtocolBufferException e) {
       throw new BrokenMetaException("Failed to decode " + Bytes.pretty(value),
                                     e);

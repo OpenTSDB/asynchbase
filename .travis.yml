@@ -4,9 +4,9 @@ before_install:
   - sudo hostname "$(hostname | cut -c1-63)"
   - sed -e "s/^\\(127\\.0\\.0\\.1.*\\)/\\1 $(hostname | cut -c1-63)/" /etc/hosts | sudo tee /etc/hosts
   - cat /etc/hosts # optionally check the content *after*
-  - wget https://github.com/google/protobuf/releases/download/v2.5.0/protobuf-2.5.0.tar.gz -O /tmp/protobuf-2.5.0.tar.gz
-  - tar -C /tmp -xvf /tmp/protobuf-2.5.0.tar.gz
-  - cd /tmp/protobuf-2.5.0 && ./configure --prefix=/usr && make --quiet && sudo make install
+#  - wget https://github.com/google/protobuf/releases/download/v2.5.0/protobuf-2.5.0.tar.gz -O /tmp/protobuf-2.5.0.tar.gz
+#  - tar -C /tmp -xvf /tmp/protobuf-2.5.0.tar.gz
+#  - cd /tmp/protobuf-2.5.0 && ./configure --prefix=/usr && make --quiet && sudo make install
 before_script:
   - cd ~/build/*/asynchbase
   - make pom.xml

@@ -242,7 +242,7 @@ final class CompareAndSetRequest extends HBaseRpc
   @Override
   Boolean deserialize(final ChannelBuffer buf, final int cell_size) {
     HBaseRpc.ensureNoCell(cell_size);
-    final MutateResponse resp = readProtobuf(buf, MutateResponse.PARSER);
+    final MutateResponse resp = readProtobuf(buf, MutateResponse.parser());
     if (!resp.hasProcessed()) {
       throw new InvalidResponseException(
         "After a CAS on " + put + ", the protobuf in the response didn't "
