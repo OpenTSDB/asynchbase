@@ -163,6 +163,32 @@
           </excludes>
         </configuration>
       </plugin>
+      
+      <!-- Shade Protobuf 2.5 since downstream may use newer PBufs -->
+      <plugin>
+       <groupId>org.apache.maven.plugins</groupId>
+       <artifactId>maven-shade-plugin</artifactId>
+       <version>2.4.1</version>
+       <executions>
+         <execution>
+           <phase>package</phase>
+           <goals>
+             <goal>shade</goal>
+           </goals>
+           <configuration>
+             <relocations>
+               <relocation>
+                 <pattern>com.google.protobuf</pattern>
+                 <shadedPattern>com.google.protobuf_2_5</shadedPattern>
+               </relocation>
+             </relocations>
+             <transformers>
+               <transformer implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer" />
+             </transformers>
+           </configuration>
+         </execution>
+       </executions>
+     </plugin>
 
     </plugins>
   </build>
