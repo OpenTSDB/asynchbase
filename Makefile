@@ -1,4 +1,4 @@
-# Copyright (C) 2010-2012  The Async HBase Authors.  All rights reserved.
+# Copyright (C) 2010-2016  The Async HBase Authors.  All rights reserved.
 # This file is part of Async HBase.
 # 
 # Redistribution and use in source and binary forms, with or without
@@ -39,7 +39,7 @@ proto_builddir := $(top_builddir)/protobuf
 spec_title := Asynchronous HBase Client
 spec_vendor := The Async HBase Authors
 # Semantic Versioning (see http://semver.org/).
-spec_version := 1.8.0-SNAPSHOT
+spec_version := 2.0.0-SNAPSHOT
 jar := $(top_builddir)/asynchbase-$(spec_version).jar
 
 asynchbase_PROTOS := \
