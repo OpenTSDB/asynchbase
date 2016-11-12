@@ -31,7 +31,7 @@ import java.util.regex.Pattern;
 
 import com.google.common.base.Charsets;
 import com.google.protobuf.ByteString;
-import org.jboss.netty.buffer.ChannelBuffer;
+import io.netty.buffer.ByteBuf;
 
 import org.hbase.async.generated.ComparatorPB;
 
@@ -112,7 +112,7 @@ public final class RegexStringComparator extends FilterComparator {
   }
 
   @Override
-  void serializeOld(ChannelBuffer buf) {
+  void serializeOld(ByteBuf buf) {
     super.serializeOld(buf);                            // super.predictSerializedSize()
     // Write code
     buf.writeByte(0);                                   // 1

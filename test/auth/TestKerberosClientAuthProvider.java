@@ -58,11 +58,11 @@ import javax.security.sasl.Sasl;
 import javax.security.sasl.SaslClient;
 import javax.security.sasl.SaslException;
 
+import io.netty.util.HashedWheelTimer;
 import org.apache.zookeeper.server.auth.KerberosName;
 import org.hbase.async.Config;
 import org.hbase.async.HBaseClient;
 import org.hbase.async.auth.KerberosClientAuthProvider.ClientCallbackHandler;
-import org.jboss.netty.util.HashedWheelTimer;
 import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
@@ -161,7 +161,7 @@ public class TestKerberosClientAuthProvider {
   @Test (expected = IllegalStateException.class)
   public void ctorLoginFailure() throws Exception {
     PowerMockito.doThrow(new LoginException("Boo!")).when(Login.class);
-    Login.initUserIfNeeded(any(Config.class), any(HashedWheelTimer.class), 
+    Login.initUserIfNeeded(any(Config.class), any(HashedWheelTimer.class),
         anyString(), any(ClientCallbackHandler.class));
     new KerberosClientAuthProvider(client);
   }

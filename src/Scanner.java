@@ -26,24 +26,22 @@
  */
 package org.hbase.async;
 
-import java.nio.charset.Charset;
-import java.util.ArrayList;
-import java.util.Arrays;
-
-import org.jboss.netty.buffer.ChannelBuffer;
-
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
 import com.stumbleupon.async.Callback;
 import com.stumbleupon.async.Deferred;
-
+import io.netty.buffer.ByteBuf;
 import org.hbase.async.generated.ClientPB.Column;
 import org.hbase.async.generated.ClientPB.Scan;
 import org.hbase.async.generated.ClientPB.ScanRequest;
 import org.hbase.async.generated.ClientPB.ScanResponse;
 import org.hbase.async.generated.FilterPB;
 import org.hbase.async.generated.HBasePB.TimeRange;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import java.nio.charset.Charset;
+import java.util.ArrayList;
+import java.util.Arrays;
+
 import static org.hbase.async.HBaseClient.EMPTY_ARRAY;
 
 
@@ -1057,7 +1055,7 @@ public final class Scanner {
     return buf.toString();
   }
 
-  /** Helper method for {@link toString}.  */
+  /** Helper method for toString  */
   private void familiesToString(final StringBuilder buf) {
     if (families == null) {
       return;
@@ -1196,7 +1194,7 @@ public final class Scanner {
    * in the buffer.
    */
   private ArrayList<ArrayList<KeyValue>> getRows(final ScanResponse resp,
-                                                 final ChannelBuffer buf,
+                                                 final ByteBuf buf,
                                                  final int cell_size) {
     final int nrows = (cell_size == 0
                        ? resp.getResultsCount()
@@ -1317,7 +1315,7 @@ public final class Scanner {
     }
 
     /** Serializes this request.  */
-    ChannelBuffer serialize(final byte server_version) {
+    ByteBuf serialize(final byte server_version) {
       // Save the region in the Scanner.  This kind of a kludge but it really
       // is the easiest way to give the Scanner the RegionInfo it needs.
       Scanner.this.region = super.region;
@@ -1371,12 +1369,12 @@ public final class Scanner {
         .setScan(scan.build())
         .setNumberOfRows(max_num_rows)
         .build();
-      return toChannelBuffer(SCAN, req);
+      return toByteBuf(SCAN, req);
     }
 
     /** Serializes this request for HBase 0.94 and before.  */
-    private ChannelBuffer serializeOld(final byte server_version) {
-      final ChannelBuffer buf = newBuffer(server_version,
+    private ByteBuf serializeOld(final byte server_version) {
+      final ByteBuf buf = newBuffer(server_version,
                                           predictSerializedSize());
       buf.writeInt(2);  // Number of parameters.
 
@@ -1439,7 +1437,7 @@ public final class Scanner {
     }
 
     @Override
-    Response deserialize(final ChannelBuffer buf, final int cell_size) {
+    Response deserialize(final ByteBuf buf, final int cell_size) {
       final ScanResponse resp = readProtobuf(buf, ScanResponse.PARSER);
       if (!resp.hasScannerId()) {
         throw new InvalidResponseException("Scan RPC response doesn't contain a"
@@ -1471,9 +1469,9 @@ public final class Scanner {
     }
 
     /** Serializes this request.  */
-    ChannelBuffer serialize(final byte server_version) {
+    ByteBuf serialize(final byte server_version) {
       if (server_version < RegionClient.SERVER_VERSION_095_OR_ABOVE) {
-        final ChannelBuffer buf = newBuffer(server_version,
+        final ByteBuf buf = newBuffer(server_version,
                                             4 + 1 + 8 + 1 + 4);
         buf.writeInt(2);  // Number of parameters.
         writeHBaseLong(buf, scanner_id);
@@ -1485,11 +1483,11 @@ public final class Scanner {
         .setScannerId(scanner_id)
         .setNumberOfRows(max_num_rows)
         .build();
-      return toChannelBuffer(SCAN, req);
+      return toByteBuf(SCAN, req);
     }
 
     @Override
-    Response deserialize(final ChannelBuffer buf, final int cell_size) {
+    Response deserialize(final ByteBuf buf, final int cell_size) {
       final ScanResponse resp = readProtobuf(buf, ScanResponse.PARSER);
       final long id = resp.getScannerId();
       if (scanner_id != id) {
@@ -1534,9 +1532,9 @@ public final class Scanner {
     }
 
     /** Serializes this request.  */
-    ChannelBuffer serialize(final byte server_version) {
+    ByteBuf serialize(final byte server_version) {
       if (server_version < RegionClient.SERVER_VERSION_095_OR_ABOVE) {
-        final ChannelBuffer buf = newBuffer(server_version,
+        final ByteBuf buf = newBuffer(server_version,
                                             4 + 1 + 8);
         buf.writeInt(1);  // Number of parameters.
         writeHBaseLong(buf, scanner_id);
@@ -1548,11 +1546,11 @@ public final class Scanner {
         .setCloseScanner(true)
         .setNumberOfRows(0)
         .build();
-      return toChannelBuffer(SCAN, req);
+      return toByteBuf(SCAN, req);
     }
 
     @Override
-    Object deserialize(final ChannelBuffer buf, final int cell_size) {
+    Object deserialize(final ByteBuf buf, final int cell_size) {
       HBaseRpc.ensureNoCell(cell_size);
       final ScanResponse resp = readProtobuf(buf, ScanResponse.PARSER);
       final long id = resp.getScannerId();

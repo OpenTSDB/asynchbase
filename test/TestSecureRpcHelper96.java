@@ -26,34 +26,16 @@
  */
 package org.hbase.async;
 
-import static org.junit.Assert.assertArrayEquals;
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertNull;
-import static org.junit.Assert.assertTrue;
-import static org.mockito.Matchers.any;
-import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.never;
-import static org.mockito.Mockito.times;
-import static org.mockito.Mockito.verify;
-import static org.mockito.Mockito.when;
-
-import java.io.IOException;
-import java.util.ArrayList;
-import java.util.List;
-
-import javax.security.auth.Subject;
-import javax.security.sasl.Sasl;
-import javax.security.sasl.SaslClient;
-
+import com.google.protobuf.CodedOutputStream;
+import io.netty.buffer.ByteBuf;
+import io.netty.buffer.Unpooled;
+import io.netty.channel.Channel;
+import io.netty.channel.ChannelFuture;
 import org.hbase.async.auth.ClientAuthProvider;
 import org.hbase.async.auth.KerberosClientAuthProvider;
 import org.hbase.async.auth.Login;
 import org.hbase.async.auth.SimpleClientAuthProvider;
 import org.hbase.async.generated.RPCPB;
-import org.jboss.netty.buffer.ChannelBuffer;
-import org.jboss.netty.buffer.ChannelBuffers;
-import org.jboss.netty.channel.Channel;
-import org.jboss.netty.channel.Channels;
 import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
@@ -65,7 +47,16 @@ import org.powermock.core.classloader.annotations.PrepareForTest;
 import org.powermock.modules.junit4.PowerMockRunner;
 import org.powermock.reflect.Whitebox;
 
-import com.google.protobuf.CodedOutputStream;
+import javax.security.auth.Subject;
+import javax.security.sasl.Sasl;
+import javax.security.sasl.SaslClient;
+import java.io.IOException;
+import java.util.ArrayList;
+import java.util.List;
+
+import static org.junit.Assert.*;
+import static org.mockito.Matchers.any;
+import static org.mockito.Mockito.*;
 
 @RunWith(PowerMockRunner.class)
 @PowerMockIgnore({"javax.management.*", "javax.xml.*",
@@ -73,11 +64,11 @@ import com.google.protobuf.CodedOutputStream;
   "com.sum.*", "org.xml.*"})
 @PrepareForTest({ HBaseClient.class, Login.class, RegionClient.class,
   SaslClient.class, KerberosClientAuthProvider.class, SecureRpcHelper.class,
-  Subject.class, Channel.class, Channels.class })
+  Subject.class, Channel.class })
 public class TestSecureRpcHelper96 extends BaseTestSecureRpcHelper {
 
   private Channel channel;
-  private List<ChannelBuffer> buffers;
+  private List<ByteBuf> buffers;
   private SecureRpcHelper96 helper;
 
   @Before
@@ -90,19 +81,18 @@ public class TestSecureRpcHelper96 extends BaseTestSecureRpcHelper {
     
     when(sasl_client.hasInitialResponse()).thenReturn(true);
     
-    PowerMockito.mockStatic(Channels.class);
-    PowerMockito.doAnswer(new Answer<Void>() {
-      @Override
-      public Void answer(final InvocationOnMock invocation) throws Throwable {
-        if (buffers == null) {
-          buffers = new ArrayList<ChannelBuffer>(2);
-        }
-        buffers.add((ChannelBuffer)invocation.getArguments()[1]);
-        return null;
-      }
-    }).when(Channels.class);
-    Channels.write(any(Channel.class), any(ChannelBuffer.class));
-    
+    when(channel.writeAndFlush(any(ByteBuf.class))).thenAnswer(
+            new Answer<ChannelFuture>() {
+
+              public ChannelFuture answer(final InvocationOnMock invocation) throws Throwable {
+                if (buffers == null) {
+                  buffers = new ArrayList<ByteBuf>(2);
+                }
+                buffers.add((ByteBuf) invocation.getArguments()[0]);
+                return null;
+              }
+            });
+
     config.overrideConfig(SecureRpcHelper.SECURITY_AUTHENTICATION_KEY, 
         "kerberos");
     helper = new SecureRpcHelper96(client, region_client, remote_endpoint);
@@ -125,9 +115,9 @@ public class TestSecureRpcHelper96 extends BaseTestSecureRpcHelper {
     helper.sendHello(channel);
     assertEquals(2, buffers.size());
     assertArrayEquals(new byte[] { 'H', 'B', 'a', 's', 0, 81 }, 
-        buffers.get(0).array());
+        toArray(buffers.get(0)));
     assertArrayEquals(new byte[] { 0, 0, 0, 1, 42 }, 
-        buffers.get(1).array());
+        toArray(buffers.get(1)));
   }
   
   @Test
@@ -142,7 +132,7 @@ public class TestSecureRpcHelper96 extends BaseTestSecureRpcHelper {
     helper.sendHello(channel);
     assertEquals(1, buffers.size());
     assertArrayEquals(new byte[] { 'H', 'B', 'a', 's', 0, 81 }, 
-        buffers.get(0).array());
+        toArray(buffers.get(0)));
   }
   
   @Test
@@ -158,7 +148,7 @@ public class TestSecureRpcHelper96 extends BaseTestSecureRpcHelper {
     assertTrue(ex instanceof IllegalStateException);
     assertEquals(1, buffers.size());
     assertArrayEquals(new byte[] { 'H', 'B', 'a', 's', 0, 81 }, 
-        buffers.get(0).array());
+        toArray(buffers.get(0)));
   }
   
   @Test
@@ -174,7 +164,7 @@ public class TestSecureRpcHelper96 extends BaseTestSecureRpcHelper {
     assertTrue(ex instanceof RuntimeException);
     assertEquals(1, buffers.size());
     assertArrayEquals(new byte[] { 'H', 'B', 'a', 's', 0, 81 }, 
-        buffers.get(0).array());
+        toArray(buffers.get(0)));
   }
   
   @Test
@@ -186,9 +176,9 @@ public class TestSecureRpcHelper96 extends BaseTestSecureRpcHelper {
     helper = new SecureRpcHelper96(client, region_client, remote_endpoint);
     helper.sendHello(channel);
     
-    assertArrayEquals(new byte[] { 'H', 'B', 'a', 's', 0, 80 }, 
-        buffers.get(0).array());
-    assertArrayEquals(header095("Cohen"), buffers.get(1).array());
+    assertArrayEquals(new byte[] { 'H', 'B', 'a', 's', 0, 80 },
+        toArray(buffers.get(0)));
+    assertArrayEquals(header095("Cohen"), toArray(buffers.get(1)));
     verify(region_client, times(1)).becomeReady(channel, 
         RegionClient.SERVER_VERSION_095_OR_ABOVE);
   }
@@ -201,7 +191,7 @@ public class TestSecureRpcHelper96 extends BaseTestSecureRpcHelper {
         "Cohen");
     helper = new SecureRpcHelper96(client, region_client, remote_endpoint);
     
-    final ChannelBuffer buf = ChannelBuffers.wrappedBuffer(new byte[] { 42 });
+    final ByteBuf buf = Unpooled.wrappedBuffer(new byte[]{42});
     assertTrue(buf == helper.handleResponse(buf, channel));
   }
   
@@ -211,9 +201,9 @@ public class TestSecureRpcHelper96 extends BaseTestSecureRpcHelper {
 
     // kinda fake in that we'll process it in one go
     when(sasl_client.isComplete()).thenReturn(false).thenReturn(true);
-    final ChannelBuffer buf = getSaslBuffer(0, new byte[] { 42 });
+    final ByteBuf buf = getSaslBuffer(0, new byte[] { 42 });
     assertNull(helper.handleResponse(buf, channel));
-    assertArrayEquals(header095("Eskarina"), buffers.get(0).array());
+    assertArrayEquals(header095("Eskarina"), toArray(buffers.get(0)));
     verify(region_client, times(1)).becomeReady(channel, 
         RegionClient.SERVER_VERSION_095_OR_ABOVE);
     verify(sasl_client, times(1)).getNegotiatedProperty(Sasl.QOP);
@@ -225,7 +215,7 @@ public class TestSecureRpcHelper96 extends BaseTestSecureRpcHelper {
 
     // kinda fake in that we'll process it in one go
     when(sasl_client.isComplete()).thenReturn(false).thenReturn(true);
-    final ChannelBuffer buf = getSaslBuffer(1, new byte[] { 42 });
+    final ByteBuf buf = getSaslBuffer(1, new byte[] { 42 });
     assertTrue(buf == helper.handleResponse(buf, channel));
     assertNull(buffers);
     verify(region_client, never()).becomeReady(channel, 
@@ -238,7 +228,7 @@ public class TestSecureRpcHelper96 extends BaseTestSecureRpcHelper {
     setupChallenge();
 
     when(sasl_client.isComplete()).thenReturn(false).thenReturn(false);
-    final ChannelBuffer buf = getSaslBuffer(0, new byte[] { 42 });
+    final ByteBuf buf = getSaslBuffer(0, new byte[] { 42 });
     assertNull(helper.handleResponse(buf, channel));
     assertNull(buffers);
     verify(region_client, never()).becomeReady(channel, 
@@ -253,7 +243,7 @@ public class TestSecureRpcHelper96 extends BaseTestSecureRpcHelper {
     when(sasl_client.getNegotiatedProperty(Sasl.QOP))
       .thenThrow(new IllegalStateException("Boo!"));
     when(sasl_client.isComplete()).thenReturn(false).thenReturn(true);
-    final ChannelBuffer buf = getSaslBuffer(0, new byte[] { 42 });
+    final ByteBuf buf = getSaslBuffer(0, new byte[] { 42 });
     RuntimeException ex = null;
     try {
       helper.handleResponse(buf, channel);
@@ -272,7 +262,7 @@ public class TestSecureRpcHelper96 extends BaseTestSecureRpcHelper {
     setupChallenge();
 
     when(sasl_client.isComplete()).thenReturn(false).thenReturn(true);
-    final ChannelBuffer buf = ChannelBuffers.wrappedBuffer(
+    final ByteBuf buf = Unpooled.wrappedBuffer(
         new byte[] { 0, 0, 0, 0, 0, 1 });
     RuntimeException ex = null;
     try {
@@ -292,7 +282,7 @@ public class TestSecureRpcHelper96 extends BaseTestSecureRpcHelper {
     setupChallenge();
     
     when(sasl_client.isComplete()).thenReturn(true);
-    final ChannelBuffer buf = getSaslBuffer(0, new byte[] { 42 });
+    final ByteBuf buf = getSaslBuffer(0, new byte[] { 42 });
     assertTrue(buf == helper.handleResponse(buf, channel));
     assertNull(buffers);
     verify(region_client, never()).becomeReady(channel, 
@@ -304,10 +294,10 @@ public class TestSecureRpcHelper96 extends BaseTestSecureRpcHelper {
   public void handleResponseSaslCompleteWrapped() throws Exception {
     setupUnwrap();
     
-    final ChannelBuffer buf = ChannelBuffers.wrappedBuffer(wrapped_payload);
+    final ByteBuf buf = Unpooled.wrappedBuffer(wrapped_payload);
     Whitebox.setInternalState(helper, "use_wrap", true);
     when(sasl_client.isComplete()).thenReturn(true);
-    final ChannelBuffer unwrapped = helper.handleResponse(buf, channel);
+    final ByteBuf unwrapped = helper.handleResponse(buf, channel);
     assertArrayEquals(unwrapped.array(), unwrapped_payload);
     assertNull(buffers);
     verify(region_client, never()).becomeReady(channel, 
@@ -321,12 +311,12 @@ public class TestSecureRpcHelper96 extends BaseTestSecureRpcHelper {
    * @param payload The pyalod to wrap
    * @return A channel buffer for testing
    */
-  protected ChannelBuffer getSaslBuffer(final int state, final byte[] payload) {
+  protected ByteBuf getSaslBuffer(final int state, final byte[] payload) {
     final byte[] buf = new byte[payload.length + 4 + 4];
     System.arraycopy(payload, 0, buf, 8, payload.length);
     System.arraycopy(Bytes.fromInt(payload.length), 0, buf, 4, 4);
     Bytes.setInt(buf, state);
-    return ChannelBuffers.wrappedBuffer(buf);
+    return Unpooled.wrappedBuffer(buf);
   }
   
   /**

@@ -26,22 +26,13 @@
  */
 package org.hbase.async;
 
-import static org.mockito.Matchers.any;
-import static org.mockito.Matchers.anyInt;
-import static org.mockito.Matchers.anyString;
-import static org.mockito.Mockito.when;
-import static org.powermock.api.mockito.PowerMockito.mock;
-
-import java.util.Map;
-
+import io.netty.buffer.ByteBuf;
+import io.netty.buffer.ByteBufAllocator;
+import io.netty.channel.Channel;
+import io.netty.channel.ChannelHandlerContext;
 import org.hbase.async.BaseTestHBaseClient.FakeTimer;
 import org.hbase.async.generated.RPCPB;
-import org.jboss.netty.buffer.ChannelBuffer;
-import org.jboss.netty.buffer.HeapChannelBufferFactory;
-import org.jboss.netty.channel.Channel;
-import org.jboss.netty.channel.ChannelHandlerContext;
-import org.jboss.netty.channel.ChannelStateEvent;
-import org.jboss.netty.channel.Channels;
+import org.junit.After;
 import org.junit.Before;
 import org.junit.runner.RunWith;
 import org.mockito.Mockito;
@@ -52,6 +43,13 @@ import org.powermock.core.classloader.annotations.PowerMockIgnore;
 import org.powermock.core.classloader.annotations.PrepareForTest;
 import org.powermock.modules.junit4.PowerMockRunner;
 import org.powermock.reflect.Whitebox;
+
+import java.nio.channels.Channels;
+import java.util.Map;
+
+import static org.mockito.Matchers.*;
+import static org.mockito.Mockito.when;
+import static org.powermock.api.mockito.PowerMockito.mock;
 
 @RunWith(PowerMockRunner.class)
 //"Classloader hell"...  It's real.  Tell PowerMock to ignore these classes
@@ -76,7 +74,6 @@ public class BaseTestRegionClient {
   protected HBaseRpc rpc = mock(HBaseRpc.class);
   protected Channel chan;
   protected ChannelHandlerContext ctx;
-  protected ChannelStateEvent cse;
   protected HBaseClient hbase_client;
   protected Config config;
   protected Map<Integer, HBaseRpc> rpcs_inflight;
@@ -96,12 +93,13 @@ public class BaseTestRegionClient {
     
     chan = mock(Channel.class, Mockito.RETURNS_DEEP_STUBS);
     ctx = mock(ChannelHandlerContext.class);
-    cse = mock(ChannelStateEvent.class);
+    when(ctx.alloc()).thenReturn(ByteBufAllocator.DEFAULT);
+
     secure_rpc_helper = mock(SecureRpcHelper.class);
-    
-    when(ctx.getChannel()).thenReturn(chan);
-    final HeapChannelBufferFactory factory = new HeapChannelBufferFactory();
-    when(chan.getConfig().getBufferFactory()).thenReturn(factory);
+
+    when(ctx.channel()).thenReturn(chan);
+    final ByteBufAllocator allocator = ByteBufAllocator.DEFAULT;
+    when(chan.config().getAllocator()).thenReturn(allocator);
     
     PowerMockito.doAnswer(new Answer<RegionClient>(){
       @Override
@@ -120,7 +118,12 @@ public class BaseTestRegionClient {
         RegionClient.SERVER_VERSION_095_OR_ABOVE);
     rpcs_inflight = Whitebox.getInternalState(region_client, "rpcs_inflight");
   }
-  
+
+  @After
+  public void tearDown() throws Exception {
+    timer.stop();
+  }
+
   /**
    * Injects the security helper mock in the class. The default is to operate
    * without security.
@@ -129,12 +132,12 @@ public class BaseTestRegionClient {
     Whitebox.setInternalState(region_client, "secure_rpc_helper", secure_rpc_helper);
 
     when(secure_rpc_helper
-        .handleResponse(any(ChannelBuffer.class), any(Channel.class)))
-        .thenAnswer(new Answer<ChannelBuffer>() {
+        .handleResponse(any(ByteBuf.class), any(Channel.class)))
+        .thenAnswer(new Answer<ByteBuf>() {
           @Override
-          public ChannelBuffer answer(final InvocationOnMock args)
+          public ByteBuf answer(final InvocationOnMock args)
               throws Throwable {
-            return (ChannelBuffer)args.getArguments()[0];
+            return (ByteBuf)args.getArguments()[0];
           }
     });
   }

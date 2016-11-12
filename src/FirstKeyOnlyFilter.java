@@ -26,10 +26,8 @@
  */
 package org.hbase.async;
 
-import org.jboss.netty.buffer.ChannelBuffer;
-
+import io.netty.buffer.ByteBuf;
 import org.hbase.async.generated.FilterPB;
-import org.hbase.async.generated.HBasePB;
 
 /**
  * A filter that will only return the first KV from each row.
@@ -58,7 +56,7 @@ public class FirstKeyOnlyFilter extends ScanFilter {
   }
 
   @Override
-  void serializeOld(ChannelBuffer buf) {
+  void serializeOld(ByteBuf buf) {
     // Write the filter name
     buf.writeByte((byte) name().length);            // 1
     buf.writeBytes(name());                         // name().length

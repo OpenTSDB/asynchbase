@@ -26,8 +26,8 @@
  */
 package org.hbase.async;
 
-import org.jboss.netty.buffer.ChannelBuffer;
-import org.jboss.netty.util.CharsetUtil;
+import io.netty.buffer.ByteBuf;
+import io.netty.util.CharsetUtil;
 
 import java.nio.charset.Charset;
 import java.util.Arrays;
@@ -158,7 +158,7 @@ public final class KeyRegexpFilter extends ScanFilter {
   }
 
   @Override
-  void serializeOld(final ChannelBuffer buf) {
+  void serializeOld(final ByteBuf buf) {
     buf.writeByte((byte) ROWFILTER.length);                     // 1
     buf.writeBytes(ROWFILTER);                                  // 40
     // writeUTF of the comparison operator

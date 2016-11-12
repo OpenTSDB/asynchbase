@@ -27,17 +27,14 @@
 package org.hbase.async;
 
 import com.google.protobuf.CodedOutputStream;
-
+import io.netty.buffer.ByteBuf;
+import io.netty.buffer.ByteBufAllocator;
+import io.netty.channel.Channel;
 import org.hbase.async.generated.RPCPB;
-import org.jboss.netty.buffer.ChannelBuffer;
-import org.jboss.netty.buffer.ChannelBuffers;
-import org.jboss.netty.channel.Channel;
-import org.jboss.netty.channel.Channels;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import javax.security.sasl.Sasl;
-
 import java.io.IOException;
 import java.net.SocketAddress;
 
@@ -71,8 +68,9 @@ class SecureRpcHelper96 extends SecureRpcHelper {
 
   @Override
   public void sendHello(final Channel channel) {
-    ChannelBuffer buffer = ChannelBuffers.wrappedBuffer(connection_header);
-    Channels.write(channel, buffer);
+    ByteBuf buffer = ByteBufAllocator.DEFAULT.ioBuffer(connection_header.length);
+    buffer.writeBytes(connection_header);
+    channel.writeAndFlush(buffer);
 
     // sasl_client is null for Simple Auth case
     if (sasl_client != null)  {
@@ -81,16 +79,14 @@ class SecureRpcHelper96 extends SecureRpcHelper {
         challenge_bytes = processChallenge(new byte[0]);
       }
       if (challenge_bytes != null) {
-        final byte[] buf = new byte[4 + challenge_bytes.length];
-        buffer = ChannelBuffers.wrappedBuffer(buf);
-        buffer.clear();
+        buffer = ByteBufAllocator.DEFAULT.ioBuffer(4 + challenge_bytes.length);
         buffer.writeInt(challenge_bytes.length);
         buffer.writeBytes(challenge_bytes);
 
         //if (LOG.isDebugEnabled()) {
-        //  LOG.debug("Sending initial SASL Challenge: " + Bytes.pretty(buf));
+        //  LOG.debug("Sending initial SASL Challenge: " + Bytes.pretty(buffer));
         //}
-        Channels.write(channel, buffer);
+        channel.writeAndFlush(buffer);
       } else {
         // TODO - is this exception worthy? We'll never get back here
         LOG.error("Missing initial Sasl response on client " + region_client);
@@ -101,7 +97,7 @@ class SecureRpcHelper96 extends SecureRpcHelper {
   }
 
   @Override
-  public ChannelBuffer handleResponse(final ChannelBuffer buf, 
+  public ByteBuf handleResponse(final ByteBuf buf, 
       final Channel chan) {
     if (sasl_client == null) {
       return buf;
@@ -130,15 +126,10 @@ class SecureRpcHelper96 extends SecureRpcHelper {
       final byte[] challenge_bytes = processChallenge(b);
 
       if (challenge_bytes != null) {
-        final byte[] out_bytes = new byte[4 + challenge_bytes.length];
-        //if (LOG.isDebugEnabled()) {
-        //  LOG.debug("Sending SASL response: "+Bytes.pretty(out_bytes));
-        //}
-        final ChannelBuffer out_buffer = ChannelBuffers.wrappedBuffer(out_bytes);
-        out_buffer.clear();
+        final ByteBuf out_buffer = ByteBufAllocator.DEFAULT.ioBuffer(4 + challenge_bytes.length);
         out_buffer.writeInt(challenge_bytes.length);
         out_buffer.writeBytes(challenge_bytes);
-        Channels.write(chan, out_buffer);
+        chan.writeAndFlush(out_buffer);
       }
 
       if (sasl_client.isComplete()) {
@@ -171,22 +162,20 @@ class SecureRpcHelper96 extends SecureRpcHelper {
       .setCellBlockCodecClass("org.apache.hadoop.hbase.codec.KeyValueCodec")
       .build();
     final int pblen = pb.getSerializedSize();
-    final byte[] buf = new byte[4 + pblen];
-    final ChannelBuffer header = ChannelBuffers.wrappedBuffer(buf);
-    header.clear();
+
+    final ByteBuf header = ByteBufAllocator.DEFAULT.ioBuffer(4 + pblen);
     header.writeInt(pblen);  // 4 bytes
+    final byte[] buf = new byte[pblen];
     try {
       final CodedOutputStream output =
-        CodedOutputStream.newInstance(buf, 4, pblen);
+        CodedOutputStream.newInstance(buf, 0, pblen);
       pb.writeTo(output);
       output.checkNoSpaceLeft();
     } catch (IOException e) {
       throw new RuntimeException("Should never happen", e);
     }
-    // We wrote to the underlying buffer but Netty didn't see the writes,
-    // so move the write index forward.
-    header.writerIndex(buf.length);
-    Channels.write(chan, header);
+    header.writeBytes(buf);
+    chan.writeAndFlush(header);
     region_client.becomeReady(chan, RegionClient.SERVER_VERSION_095_OR_ABOVE);
   }
 }

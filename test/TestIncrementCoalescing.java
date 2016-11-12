@@ -26,23 +26,13 @@
  */
 package org.hbase.async;
 
+import com.google.common.cache.CacheStats;
+import com.stumbleupon.async.Callback;
+import org.junit.Ignore;
+import org.slf4j.Logger;
+
 import java.util.ArrayList;
 import java.util.Random;
-
-import com.google.common.cache.CacheStats;
-
-import org.slf4j.Logger;
-import org.hbase.async.AtomicIncrementRequest;
-import org.hbase.async.Bytes;
-import org.hbase.async.DeleteRequest;
-import org.hbase.async.HBaseClient;
-import org.hbase.async.KeyValue;
-import org.hbase.async.Scanner;
-
-import com.stumbleupon.async.Callback;
-
-import org.hbase.async.Common;
-import org.junit.Ignore;
 
 /**
  * Integration test for increment coalescing.

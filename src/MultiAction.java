@@ -26,19 +26,14 @@
  */
 package org.hbase.async;
 
-import java.util.Arrays;
+import io.netty.buffer.ByteBuf;
+import org.hbase.async.generated.ClientPB.*;
+import org.hbase.async.generated.HBasePB.NameBytesPair;
+
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.Comparator;
-
-import org.jboss.netty.buffer.ChannelBuffer;
-import org.hbase.async.generated.ClientPB.Action;
-import org.hbase.async.generated.ClientPB.MultiRequest;
-import org.hbase.async.generated.ClientPB.MultiResponse;
-import org.hbase.async.generated.ClientPB.RegionAction;
-import org.hbase.async.generated.ClientPB.RegionActionResult;
-import org.hbase.async.generated.ClientPB.ResultOrException;
-import org.hbase.async.generated.HBasePB.NameBytesPair;
 
 /**
  * Package-private class to batch multiple RPCs for a same region together.
@@ -207,7 +202,7 @@ final class MultiAction extends HBaseRpc implements HBaseRpc.IsEdit {
   }
 
   /** Serializes this request.  */
-  ChannelBuffer serialize(final byte server_version) {
+  ByteBuf serialize(final byte server_version) {
     if (server_version < RegionClient.SERVER_VERSION_095_OR_ABOVE) {
       return serializeOld(server_version);
     }
@@ -235,11 +230,11 @@ final class MultiAction extends HBaseRpc implements HBaseRpc.IsEdit {
       actions.addAction(action);
     }
     req.addRegionAction(actions.build());
-    return toChannelBuffer(MMULTI, req.build());
+    return toByteBuf(MMULTI, req.build());
   }
 
   /** Serializes this request for HBase 0.94 and before.  */
-  private ChannelBuffer serializeOld(final byte server_version) {
+  private ByteBuf serializeOld(final byte server_version) {
     // Due to the wire format expected by HBase, we need to group all the
     // edits by region, then by key, then by family.  HBase does this by
     // building a crazy map-of-map-of-map-of-list-of-edits, but this is
@@ -253,7 +248,7 @@ final class MultiAction extends HBaseRpc implements HBaseRpc.IsEdit {
     // efficiently tell ahead of time how many edits or bytes will follow
     // until we cross such boundaries.
     Collections.sort(batch, MULTI_CMP);
-    final ChannelBuffer buf = newBuffer(server_version,
+    final ByteBuf buf = newBuffer(server_version,
                                         predictSerializedSize(server_version));
     buf.writeInt(1);  // Number of parameters.
 
@@ -527,7 +522,7 @@ final class MultiAction extends HBaseRpc implements HBaseRpc.IsEdit {
   }
 
   @Override
-  Object deserialize(final ChannelBuffer buf, final int cell_size) {
+  Object deserialize(final ByteBuf buf, final int cell_size) {
     final MultiResponse resp = readProtobuf(buf, MultiResponse.PARSER);
     final int responses = resp.getRegionActionResultCount();
     final int nrpcs = batch.size();
@@ -686,7 +681,7 @@ final class MultiAction extends HBaseRpc implements HBaseRpc.IsEdit {
    * See HBase's {@code MultiResponse}.
    * Only used with HBase 0.94 and earlier.
    */
-  Response responseFromBuffer(final ChannelBuffer buf) {
+  Response responseFromBuffer(final ByteBuf buf) {
     switch (buf.readByte()) {
       case 58:
         return deserializeMultiPutResponse(buf);
@@ -701,7 +696,7 @@ final class MultiAction extends HBaseRpc implements HBaseRpc.IsEdit {
    * De-serializes a {@code MultiResponse}.
    * This is only used when talking to HBase 0.92.x to 0.94.x.
    */
-  Response deserializeMultiResponse(final ChannelBuffer buf) {
+  Response deserializeMultiResponse(final ByteBuf buf) {
     final int nregions = buf.readInt();
     HBaseRpc.checkNonEmptyArrayLength(buf, nregions);
     final Object[] resps = new Object[batch.size()];
@@ -761,7 +756,7 @@ final class MultiAction extends HBaseRpc implements HBaseRpc.IsEdit {
    * De-serializes a {@code MultiPutResponse}.
    * This is only used when talking to old versions of HBase (pre 0.92).
    */
-  Response deserializeMultiPutResponse(final ChannelBuffer buf) {
+  Response deserializeMultiPutResponse(final ByteBuf buf) {
     final int nregions = buf.readInt();
     HBaseRpc.checkNonEmptyArrayLength(buf, nregions);
     final int nrpcs = batch.size();

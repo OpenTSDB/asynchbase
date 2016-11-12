@@ -26,25 +26,24 @@
  */
 package org.hbase.async;
 
-import java.util.List;
-
-import org.hbase.async.generated.ClientPB;
-import org.hbase.async.generated.ClientPB.Result;
-import org.hbase.async.generated.RPCPB;
-import org.hbase.async.generated.CellPB.Cell;
-import org.hbase.async.generated.ClientPB.MultiResponse;
-import org.hbase.async.generated.ClientPB.RegionActionResult;
-import org.hbase.async.generated.ClientPB.ResultOrException;
-import org.hbase.async.generated.ClientPB.RegionActionResult.Builder;
-import org.hbase.async.generated.HBasePB.NameBytesPair;
-import org.hbase.async.generated.RPCPB.ResponseHeader;
-import org.jboss.netty.buffer.ChannelBuffer;
-import org.jboss.netty.buffer.ChannelBuffers;
-import org.junit.Ignore;
-
 import com.google.protobuf.ByteString;
 import com.google.protobuf.CodedOutputStream;
 import com.google.protobuf.GeneratedMessageLite;
+import io.netty.buffer.ByteBuf;
+import io.netty.buffer.Unpooled;
+import org.hbase.async.generated.CellPB.Cell;
+import org.hbase.async.generated.ClientPB;
+import org.hbase.async.generated.ClientPB.MultiResponse;
+import org.hbase.async.generated.ClientPB.RegionActionResult;
+import org.hbase.async.generated.ClientPB.RegionActionResult.Builder;
+import org.hbase.async.generated.ClientPB.Result;
+import org.hbase.async.generated.ClientPB.ResultOrException;
+import org.hbase.async.generated.HBasePB.NameBytesPair;
+import org.hbase.async.generated.RPCPB;
+import org.hbase.async.generated.RPCPB.ResponseHeader;
+import org.junit.Ignore;
+
+import java.util.List;
 
 @Ignore // ignore for test runners
 public class PBufResponses {
@@ -55,7 +54,7 @@ public class PBufResponses {
    * @param kvs The KVs to serialize
    * @return A buffer to pass upstream
    */
-  public static ChannelBuffer getRequest(final int id, final List<KeyValue> kvs)
+  public static ByteBuf getRequest(final int id, final List<KeyValue> kvs)
     throws Exception {
     final ClientPB.Result.Builder result = ClientPB.Result.newBuilder();
     for (final KeyValue kv : kvs) {
@@ -79,7 +78,7 @@ public class PBufResponses {
    * @param response The response to encode
    * @return The buffer to pass upstream
    */
-  static ChannelBuffer writeToBuffer(final ResponseHeader header, 
+  static ByteBuf writeToBuffer(final ResponseHeader header, 
       final GeneratedMessageLite response) throws Exception {
     final int hlen = header.getSerializedSize();
     final int vhlen = CodedOutputStream.computeRawVarint32Size(hlen);
@@ -95,7 +94,7 @@ public class PBufResponses {
     }
     
     Bytes.setInt(buf, buf.length - 4);
-    return ChannelBuffers.wrappedBuffer(buf);
+    return Unpooled.wrappedBuffer(buf);
   }
   
   /**
@@ -207,7 +206,7 @@ public class PBufResponses {
    * @param response The response to serialize
    * @return A channel buffer to parse
    */
-  static ChannelBuffer encodeResponse(final GeneratedMessageLite response) 
+  static ByteBuf encodeResponse(final GeneratedMessageLite response) 
       throws Exception {
     final int pblen = response.getSerializedSize();
     final int vlen = CodedOutputStream.computeRawVarint32Size(pblen);
@@ -216,7 +215,7 @@ public class PBufResponses {
         vlen + pblen);
     
     out.writeMessageNoTag(response);
-    return ChannelBuffers.wrappedBuffer(buf);
+    return Unpooled.wrappedBuffer(buf);
   }
   
   /**
@@ -241,7 +240,7 @@ public class PBufResponses {
    * @param clazz The remote exception class name
    * @return A buffer you can pass to the Region Client
    */
-  static ChannelBuffer generateException(final int id, final String clazz)
+  static ByteBuf generateException(final int id, final String clazz)
       throws Exception {
   
     final RPCPB.ExceptionResponse response = 

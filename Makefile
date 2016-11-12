@@ -197,7 +197,7 @@ test_LIBADD := \
 package_dir := $(subst .,/,$(package))
 AM_JAVACFLAGS := -Xlint -source 6 -target 6
 JAVAC := javac
-JVM_ARGS :=
+JVM_ARGS := -Dio.netty.noPreferDirect=true -Dio.netty.noUnsafe=true
 PROTOC := protoc
 classes := $(asynchbase_SOURCES:src/%.java=$(top_builddir)/$(package_dir)/%.class) \
  $(protobuf_SOURCES:src/%.java=$(top_builddir)/com/google/%.class) \
@@ -290,7 +290,7 @@ $(jar): $(top_builddir)/manifest $(top_builddir)/.javac-stamp $(classes)
 doc: $(top_builddir)/api/index.html
 
 JDK_JAVADOC := http://download.oracle.com/javase/6/docs/api
-NETTY_JAVADOC := http://docs.jboss.org/netty/3.2/api
+NETTY_JAVADOC := http://netty.io/4.0/api/index.html
 SUASYNC_JAVADOC := http://tsunanet.net/~tsuna/async/api
 GUAVA_JAVADOC := http://docs.guava-libraries.googlecode.com/git/javadoc
 JAVADOCS = $(JDK_JAVADOC) $(NETTY_JAVADOC) $(SUASYNC_JAVADOC) $(GUAVA_JAVADOC)

@@ -26,7 +26,7 @@
  */
 package org.hbase.async;
 
-import org.jboss.netty.buffer.ChannelBuffer;
+import io.netty.buffer.ByteBuf;
 
 import org.hbase.async.generated.ComparatorPB;
 import org.hbase.async.generated.FilterPB;
@@ -89,7 +89,7 @@ public abstract class CompareFilter extends ScanFilter {
   }
 
   @Override
-  void serializeOld(ChannelBuffer buf) {
+  void serializeOld(ByteBuf buf) {
     // Write the filter name
     buf.writeByte((byte) name().length);            // 1
     buf.writeBytes(name());                         // name().length

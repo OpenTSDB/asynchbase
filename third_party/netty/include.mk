@@ -23,10 +23,10 @@
 # ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 # POSSIBILITY OF SUCH DAMAGE.
 
-NETTY_MAJOR_VERSION = 3.9
-NETTY_VERSION := 3.9.4.Final
-NETTY := third_party/netty/netty-$(NETTY_VERSION).jar
-NETTY_BASE_URL := http://central.maven.org/maven2/io/netty/netty/$(NETTY_VERSION)
+NETTY_MAJOR_VERSION = 4.0
+NETTY_VERSION := 4.0.30.Final
+NETTY := third_party/netty/netty-all-$(NETTY_VERSION).jar
+NETTY_BASE_URL := http://central.maven.org/maven2/io/netty/netty-all/$(NETTY_VERSION)
 
 $(NETTY): $(NETTY).md5
 	set dummy "$(NETTY_BASE_URL)" "$(NETTY)"; shift; $(FETCH_DEPENDENCY)

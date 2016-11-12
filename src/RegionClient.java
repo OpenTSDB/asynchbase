@@ -26,42 +26,36 @@
  */
 package org.hbase.async;
 
+import com.google.protobuf.CodedOutputStream;
+import com.stumbleupon.async.Callback;
+import com.stumbleupon.async.Deferred;
+import io.netty.buffer.ByteBuf;
+import io.netty.buffer.ByteBufAllocator;
+import io.netty.buffer.CompositeByteBuf;
+import io.netty.channel.Channel;
+import io.netty.channel.ChannelFuture;
+import io.netty.channel.ChannelFutureListener;
+import io.netty.channel.ChannelHandlerContext;
+import io.netty.handler.codec.ReplayingDecoder;
+import io.netty.util.Timeout;
+import io.netty.util.TimerTask;
+import org.hbase.async.generated.ClientPB;
+import org.hbase.async.generated.HBasePB;
+import org.hbase.async.generated.RPCPB;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
+import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
-
-import com.google.protobuf.CodedOutputStream;
-
-import org.jboss.netty.buffer.ChannelBuffer;
-import org.jboss.netty.buffer.ChannelBuffers;
-import org.jboss.netty.channel.Channel;
-import org.jboss.netty.channel.ChannelEvent;
-import org.jboss.netty.channel.ChannelFuture;
-import org.jboss.netty.channel.ChannelFutureListener;
-import org.jboss.netty.channel.ChannelHandlerContext;
-import org.jboss.netty.channel.ChannelStateEvent;
-import org.jboss.netty.channel.Channels;
-import org.jboss.netty.channel.ExceptionEvent;
-import org.jboss.netty.handler.codec.replay.ReplayingDecoder;
-import org.jboss.netty.handler.codec.replay.VoidEnum;
-import org.jboss.netty.util.Timeout;
-import org.jboss.netty.util.TimerTask;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
-import com.stumbleupon.async.Callback;
-import com.stumbleupon.async.Deferred;
-
-import org.hbase.async.generated.ClientPB;
-import org.hbase.async.generated.HBasePB;
-import org.hbase.async.generated.RPCPB;
 
 /**
  * Stateful handler that manages a connection to a specific RegionServer.
@@ -85,7 +79,7 @@ import org.hbase.async.generated.RPCPB;
  * accepting write requests as well as buffering requests if the underlying
  * channel isn't connected.
  */
-final class RegionClient extends ReplayingDecoder<VoidEnum> {
+final class RegionClient extends ReplayingDecoder<Void> {
 
   private static final Logger LOG = LoggerFactory.getLogger(RegionClient.class);
 
@@ -298,7 +292,7 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
    * @since 1.7
    */
   public String getRemoteAddress() {
-    return chan != null ? chan.getRemoteAddress().toString() : null;
+    return chan != null ? chan.remoteAddress().toString() : null;
   }
   
   /**
@@ -314,7 +308,7 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
         pending_rpcs != null ? pending_rpcs.size() : 0,
         rpcid.get(),
         dead,
-        chan != null ? chan.getRemoteAddress().toString() : "",
+        chan != null ? chan.remoteAddress().toString() : "",
         batched_rpcs != null ? batched_rpcs.size() : 0,
         rpcs_timedout.get(),
         writes_blocked.get(),
@@ -520,15 +514,12 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
       return Deferred.fromResult(null);
     }
     LOG.debug("Shutdown requested, chan={}", chancopy);
-    if (chancopy.isConnected()) {
-      Channels.disconnect(chancopy);   // ... this is going to set it to null.
+    if (chancopy.isActive()) {
+      chancopy.disconnect();   // ... this is going to set it to null.
       // At this point, all in-flight RPCs are going to be failed.
     }
-    if (chancopy.isBound()) {
-      Channels.unbind(chancopy);
-    }
     // It's OK to call close() on a Channel if it's already closed.
-    final ChannelFuture future = Channels.close(chancopy);
+    final ChannelFuture future = chancopy.closeFuture();
 
     // Now wrap the ChannelFuture in a Deferred.
     final Deferred<Object> d = new Deferred<Object>();
@@ -544,7 +535,7 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
             d.callback(null);
             return;
           }
-          final Throwable t = future.getCause();
+          final Throwable t = future.cause();
           if (t instanceof Exception) {
             d.callback(t);
           } else {
@@ -577,10 +568,10 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
       return GET_PROTOCOL_VERSION;
     }
 
-    ChannelBuffer serialize(final byte server_version) {
+    ByteBuf serialize(final byte server_version) {
     /** Pre-serialized form for this RPC, which is always the same.  */
       // num param + type 1 + string length + string + type 2 + long
-      final ChannelBuffer buf = newBuffer(server_version,
+      final ByteBuf buf = newBuffer(server_version,
                                           4 + 1 + 1 + 44 + 1 + 8);
       buf.writeInt(2);  // Number of parameters.
       // 1st param.
@@ -594,7 +585,7 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
     }
 
     @Override
-    Object deserialize(final ChannelBuffer buf, final int cell_size) {
+    Object deserialize(final ByteBuf buf, final int cell_size) {
       throw new AssertionError("Should never be here.");
     }
 
@@ -611,10 +602,10 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
     }
 
     /**
-     * Handles the response of {@link #helloRpc}.
+     * Handles the response of helloRpc.
      * @return null when it re-tried for a version mismatch. A version
      * object if it was successful.
-     * @throws an exception If there was an error that we cannot retry. It
+     * @throws Exception an exception If there was an error that we cannot retry. It
      * includes ServerNotRunningYetExceptio, and NotServingRegionException.
      */
     public Long call(final Object response) throws Exception {
@@ -739,7 +730,7 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
       }
 
       @Override
-      Object deserialize(final ChannelBuffer buf, final int cell_size) {
+      Object deserialize(final ByteBuf buf, final int cell_size) {
         assert cell_size == 0 : "cell_size=" + cell_size;
         final ClientPB.GetResponse resp =
           readProtobuf(buf, ClientPB.GetResponse.PARSER);
@@ -747,7 +738,7 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
       }
 
       @Override
-      ChannelBuffer serialize(final byte server_version) {
+      ByteBuf serialize(final byte server_version) {
         if (server_version < SERVER_VERSION_095_OR_ABOVE) {
           return serializeOld(server_version);
         }
@@ -760,17 +751,17 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
           .setRegion(region.toProtobuf())
           .setGet(getpb)
           .build();
-        return toChannelBuffer(GetRequest.GGET, get);
+        return toByteBuf(GetRequest.GGET, get);
       }
 
-      private ChannelBuffer serializeOld(final byte server_version) {
+      private ByteBuf serializeOld(final byte server_version) {
         // region.length and row.length will use at most a 3-byte VLong.
         // This is because VLong wastes 1 byte of meta-data + 2 bytes of
         // payload.  HBase's own KeyValue code uses a short to store the row
         // length.  Finally, family.length cannot be on more than 1 byte,
         // HBase's own KeyValue code uses a byte to store the family length.
         final byte[] region_name = region.name();
-        final ChannelBuffer buf = newBuffer(server_version,
+        final ByteBuf buf = newBuffer(server_version,
           + 4                                      // num param
           + 1 + 2 + region_name.length             // 3 times 1 byte for the
           + 1 + 4 + row.length                     //   parm type + VLong
@@ -921,7 +912,7 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
    * @param rpc The RPC that failed.
    * @param e The recoverable error that caused the edit to fail, if known.
    * Can be {@code null}.
-   * @param The deferred result of the new attempt to send this edit.
+   * @return  The deferred result of the new attempt to send this edit.
    */
   private Deferred<Object> retryEdit(final BatchableRpc rpc,
                                      final RecoverableException e) {
@@ -984,7 +975,7 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
           hbase_client.num_multi_rpcs.increment();
         }
       }
-      final ChannelBuffer serialized = encode(rpc);
+      final ByteBuf serialized = encode(rpc);
       if (serialized == null) {  // Error during encoding.
         return;  // Stop here.  RPC has been failed already.
       }
@@ -1002,7 +993,7 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
         }
         
         rpc.enqueueTimeout(this);
-        Channels.write(chan, serialized);
+        chan.writeAndFlush(serialized);
         rpcs_sent.incrementAndGet();
         return;
       }  // else: continue to the "we're disconnected" code path below.
@@ -1050,7 +1041,7 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
 
   /**
    * Transforms the given single-edit multi-put into a regular single-put.
-   * @param multiput The single-edit multi-put to transform.
+   * @param batch The single-edit multi-put to transform.
    */
   private BatchableRpc multiActionToSingleAction(final MultiAction batch) {
     final BatchableRpc rpc = batch.batch().get(0);
@@ -1077,30 +1068,29 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
   // -------------------------------------- //
 
   @Override
-  public void channelConnected(final ChannelHandlerContext ctx,
-                               final ChannelStateEvent e) {
-    final Channel chan = e.getChannel();
-    final ChannelBuffer header;
-    
-    if (hbase_client.getConfig().getBoolean("hbase.security.auth.enable") && 
+  public void channelActive(ChannelHandlerContext ctx) throws Exception {
+    final Channel chan = ctx.channel();
+    final ByteBuf header;
+
+    if (hbase_client.getConfig().getBoolean("hbase.security.auth.enable") &&
         hbase_client.getConfig().hasProperty("hbase.security.auth.94")) {
-      secure_rpc_helper = new SecureRpcHelper94(hbase_client, this, 
-          chan.getRemoteAddress());
+      secure_rpc_helper = new SecureRpcHelper94(hbase_client, this,
+          chan.remoteAddress());
       secure_rpc_helper.sendHello(chan);
-      LOG.info("Initialized security helper: " + secure_rpc_helper + 
+      LOG.info("Initialized security helper: " + secure_rpc_helper +
           " for region client: " + this);
     } else {
       if (!hbase_client.has_root) {
         if (hbase_client.getConfig().getBoolean("hbase.security.auth.enable")) {
-          secure_rpc_helper = new SecureRpcHelper96(hbase_client, this, 
-              chan.getRemoteAddress());
+          secure_rpc_helper = new SecureRpcHelper96(hbase_client, this,
+              chan.remoteAddress());
           secure_rpc_helper.sendHello(chan);
-          LOG.info("Initialized security helper: " + secure_rpc_helper + 
+          LOG.info("Initialized security helper: " + secure_rpc_helper +
               " for region client: " + this);
           return;
         }
         header = header095();
-        Channels.write(chan, header);
+        chan.writeAndFlush(header);
         becomeReady(chan, SERVER_VERSION_095_OR_ABOVE);
         return;
       } else if (System.getProperty("org.hbase.async.cdh3b3") != null) {
@@ -1114,7 +1104,7 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
 
   /**
    * Sends the queued RPCs to the server, once we're connected to it.
-   * This gets called after {@link #channelConnected}, once we were able to
+   * This gets called after {@link #channelActive}, once we were able to
    * handshake with the server and find out which version it's running.
    * @see #helloRpc
    */
@@ -1132,23 +1122,17 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
     }
   }
 
+  /**
+   * Cleans up channel and related resources.
+   *
+   * @param ctx context obj
+   * @throws Exception if failed to process remaining data before cleanup
+   */
   @Override
-  public void channelDisconnected(final ChannelHandlerContext ctx,
-                                  final ChannelStateEvent e) throws Exception {
+  public void channelInactive(ChannelHandlerContext ctx) throws Exception {
     chan = null;
-    super.channelDisconnected(ctx, e);  // Let the ReplayingDecoder cleanup.
-    cleanup(e.getChannel());
-  }
-
-  @Override
-  public void channelClosed(final ChannelHandlerContext ctx,
-                            final ChannelStateEvent e) {
-    chan = null;
-    // No need to call super.channelClosed() because we already called
-    // super.channelDisconnected().  If we get here without getting a
-    // DISCONNECTED event, then we were never connected in the first place so
-    // the ReplayingDecoder has nothing to cleanup.
-    cleanup(e.getChannel());
+    super.channelInactive(ctx);
+    cleanup(ctx.channel());
   }
 
   /**
@@ -1204,19 +1188,9 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
   }
 
   @Override
-  public void handleUpstream(final ChannelHandlerContext ctx,
-                             final ChannelEvent e) throws Exception {
-    if (LOG.isDebugEnabled()) {
-      LOG.debug("handleUpstream {}", e);
-    }
-    super.handleUpstream(ctx, e);
-  }
-
-  @Override
-  public void exceptionCaught(final ChannelHandlerContext ctx,
-                              final ExceptionEvent event) {
-    final Throwable e = event.getCause();
-    final Channel c = event.getChannel();
+  public void exceptionCaught(ChannelHandlerContext ctx, Throwable e) throws Exception {
+    super.exceptionCaught(ctx, e);
+    final Channel c = ctx.channel();
 
     if (e instanceof RejectedExecutionException) {
       LOG.warn("RPC rejected by the executor,"
@@ -1225,7 +1199,7 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
       LOG.error("Unexpected exception from downstream on " + c, e);
     }
     if (c.isOpen()) {
-      Channels.close(c);  // Will trigger channelClosed(), which will cleanup()
+      c.close();  // Will trigger channelClosed(), which will cleanup()
     } else {              // else: presumably a connection timeout.
       cleanup(c);         // => need to cleanup() from here directly.
     }
@@ -1259,7 +1233,7 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
    * @return The buffer to write to the channel or {@code null} if there was
    * an error and there's nothing to write.
    */
-  private ChannelBuffer encode(final HBaseRpc rpc) {
+  private ByteBuf encode(final HBaseRpc rpc) {
     if (!rpc.hasDeferred()) {
       throw new AssertionError("Should never happen!  rpc=" + rpc);
     }
@@ -1271,7 +1245,7 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
     // the server if we do.
 
     rpc.rpc_id = this.rpcid.incrementAndGet();
-    ChannelBuffer payload;
+    ByteBuf payload;
     try {
       payload = rpc.serialize(server_version);
       // We assume that payload has enough bytes at the beginning for us to
@@ -1303,16 +1277,19 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
         // The first int is the size of the message, excluding the 4 bytes
         // needed for the size itself, hence the `-4'.
         payload.setInt(offset, payload.readableBytes() - 4); // 4 bytes
+
+        byte[] pbbytes = new byte[1 + pblen];
         try {
           final CodedOutputStream output =
-            CodedOutputStream.newInstance(payload.array(), 4 + offset,
-                                          1 + pblen);
-          output.writeRawByte(pblen);  // varint but always on 1 byte here.
+            CodedOutputStream.newInstance(pbbytes, 0, 1 + pblen);
+          output.writeRawByte(pblen);  // variant but always on 1 byte here.
           header.writeTo(output);
           output.checkNoSpaceLeft();
         } catch (IOException e) {
           throw new RuntimeException("Should never happen", e);
         }
+        payload.setBytes(4 + offset, pbbytes);
+
       } else if (server_version >= SERVER_VERSION_092_OR_ABOVE) {
         // The first int is the size of the message, excluding the 4 bytes
         // needed for the size itself, hence the `-4'.
@@ -1385,29 +1362,29 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
    * constraints may be relaxed.  Basically, anything that is only touched
    * from a Netty IO thread doesn't require synchronization.
    * @param ctx Unused.
-   * @param chan The channel on which the response came.
-   * @param buf The buffer containing the raw RPC response.
+   * @param inbuf The buffer containing the raw RPC response.
+   * @param list The list of object decoded.
    * @return {@code null}, always.
    */
   @Override
-  protected Object decode(final ChannelHandlerContext ctx,
-                          final Channel chan,
-                          final ChannelBuffer channel_buffer,
-                          final VoidEnum unused) {
-    ChannelBuffer buf = channel_buffer;
+  protected void decode(final ChannelHandlerContext ctx,
+                          final ByteBuf inbuf,
+                          final List<Object> list) {
+
+    ByteBuf buf = inbuf;
     final long start = System.nanoTime();
     final int rdx = buf.readerIndex();
     LOG.debug("------------------>> ENTERING DECODE >>------------------");
     final int rpcid;
     final RPCPB.ResponseHeader header;
-    
+
     if (secure_rpc_helper != null) {
-      buf = secure_rpc_helper.handleResponse(buf, chan);
-      if (buf == null) {
-        // everything in the buffer was part of the security handshake so we're
-        // done here.
-        return null;
-      }
+       buf = secure_rpc_helper.handleResponse(buf, chan);
+       if (buf == null) {
+         // everything in the buffer was part of the security handshake so we're
+         // done here.
+         return;
+       }
     }
     
     final int size;
@@ -1459,7 +1436,7 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
         }
         rpc_response_unknown.incrementAndGet();
       }
-      return null;
+      return;
     }
     
     // TODO - if the RPC doesn't match we could search the map for the proper
@@ -1515,7 +1492,7 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
       // we can't do anything about it.
       hbase_client.handleNSRE(rpc, rpc.getRegion().name(),
                               (RecoverableException) decoded);
-      return null;
+      return;
     }
 
     try {
@@ -1528,7 +1505,7 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
       LOG.debug("------------------<< LEAVING  DECODE <<------------------"
                 + " time elapsed: " + ((System.nanoTime() - start) / 1000) + "us");
     }
-    return null;  // Stop processing here.  The Deferred does everything else.
+    // Stop processing here.  The Deferred does everything else.
   }
 
   /**
@@ -1539,7 +1516,7 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
    * @param buf Buffer to check.
    * @param nbytes Number of bytes desired.
    */
-  private static void ensureReadable(final ChannelBuffer buf, final int nbytes) {
+  private static void ensureReadable(final ByteBuf buf, final int nbytes) {
     buf.markReaderIndex();
     buf.skipBytes(nbytes);
     buf.resetReaderIndex();
@@ -1552,7 +1529,7 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
    * @return The de-serialized RPC response (which can be {@code null}
    * or an exception).
    */
-  private Object deserialize(final ChannelBuffer buf, final HBaseRpc rpc) {
+  private Object deserialize(final ByteBuf buf, final HBaseRpc rpc) {
     // The 1st byte of the payload contains flags:
     //   0x00  Old style success (prior 0.92).
     //   0x01  RPC failed with an exception.
@@ -1599,7 +1576,7 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
    * @param rdx The original reader index used if the response is framed
    * @param rpcid The RPC ID used for logging
    */
-  private void consumeTimedoutNonPBufRPC(final ChannelBuffer buf, final int rdx, 
+  private void consumeTimedoutNonPBufRPC(final ByteBuf buf, final int rdx,
       final int rpcid) {
     final int flags;
     if (secure_rpc_helper != null) {
@@ -1652,7 +1629,7 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
    * Since we no longer have the original RPC we just keep reading.
    * @param buf The channel buffer to read from.
    */
-  private static void consumeNonFramedTimedoutNonPBufRPC(final ChannelBuffer buf) {
+  private static void consumeNonFramedTimedoutNonPBufRPC(final ByteBuf buf) {
     int length = 0;
     switch (buf.readByte()) {  // Read the type of the response.
     case  1:  // Boolean
@@ -1713,7 +1690,7 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
    * @param buf The buffer to read from.
    * @param request The RPC that caused this exception.
    */
-  static HBaseException deserializeException(final ChannelBuffer buf,
+  static HBaseException deserializeException(final ByteBuf buf,
                                              final HBaseRpc request) {
     // In case of failures, the rest of the response is just 2
     // Hadoop-encoded strings.  The first is the class name of the
@@ -1784,7 +1761,7 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
    * @return The de-serialized object (which can be {@code null}).
    */
   @SuppressWarnings("fallthrough")
-  static Object deserializeObject(final ChannelBuffer buf,
+  static Object deserializeObject(final ByteBuf buf,
                                   final HBaseRpc request) {
     switch (buf.readByte()) {  // Read the type of the response.
       case  1:  // Boolean
@@ -1818,7 +1795,7 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
    * @param buf The buffer to peek into.
    * @param length The total size of all the KeyValues that follow.
    */
-  static int numberOfKeyValuesAhead(final ChannelBuffer buf, int length) {
+  static int numberOfKeyValuesAhead(final ByteBuf buf, int length) {
     // Immediately try to "fault" if `length' bytes aren't available.
     ensureReadable(buf, length);
     int num_kv = 0;
@@ -1844,7 +1821,7 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
    * @param buf The buffer that contains a serialized {@code Result}.
    * @return The result parsed into a list of {@link KeyValue} objects.
    */
-  private static ArrayList<KeyValue> parseResult(final ChannelBuffer buf) {
+  private static ArrayList<KeyValue> parseResult(final ByteBuf buf) {
     final int length = buf.readInt();
     HBaseRpc.checkArrayLength(buf, length);
     //LOG.debug("total Result response length={}", length);
@@ -1877,7 +1854,7 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
    * a list of {@link KeyValue} objects.
    */
   private static
-    ArrayList<ArrayList<KeyValue>> parseResults(final ChannelBuffer buf) {
+    ArrayList<ArrayList<KeyValue>> parseResults(final ByteBuf buf) {
     final byte version = buf.readByte();
     if (version != 0x01) {
       LOG.warn("Received unsupported Result[] version: " + version);
@@ -1940,37 +1917,35 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
   /**
    * Decodes the response of an RPC and triggers its {@link Deferred}.
    * <p>
-   * This method is used by {@link FrameDecoder} when the channel gets
+   * This method is used by FrameDecoder when the channel gets
    * disconnected.  The buffer for that channel is passed to this method in
    * case there's anything left in it.
    * @param ctx Unused.
-   * @param chan The channel on which the response came.
    * @param buf The buffer containing the raw RPC response.
+   * @param out The decoded object.
    * @return {@code null}, always.
    */
   @Override
-  protected Object decodeLast(final ChannelHandlerContext ctx,
-                              final Channel chan,
-                              final ChannelBuffer buf,
-                              final VoidEnum unused) {
+  protected void decodeLast(ChannelHandlerContext ctx,
+                            ByteBuf buf,
+                            List<Object> out)
+          throws Exception {
     // When we disconnect, decodeLast is called instead of decode.
     // We simply check whether there's any data left in the buffer, in which
     // case we attempt to process it.  But if there's no data left, then we
     // don't even bother calling decode() as it'll complain that the buffer
     // doesn't contain enough data, which unnecessarily pollutes the logs.
-    if (buf.readable()) {
+    if (buf.isReadable()) {
       try {
-        return decode(ctx, chan, buf, unused);
+        decode(ctx, buf, out);
       } finally {
-        if (buf.readable()) {
+        if (buf.isReadable()) {
           LOG.error("After decoding the last message on " + chan
                     + ", there was still some undecoded bytes in the channel's"
                     + " buffer (which are going to be lost): "
                     + buf + '=' + Bytes.pretty(buf));
         }
       }
-    } else {
-      return null;
     }
   }
 
@@ -2043,20 +2018,8 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
                                                    SIMPLE_AUTH,
                                                    };
 
-  /** Common part of the hello header: magic + version.  */
-  private ChannelBuffer commonHeader(final byte[] buf, final byte[] hrpc) {
-    final ChannelBuffer header = ChannelBuffers.wrappedBuffer(buf);
-    header.clear();  // Set the writerIndex to 0.
-
-    // Magic header.  See HBaseClient#writeHeader
-    // "hrpc" followed by the version.
-    // See HBaseServer#HEADER and HBaseServer#CURRENT_VERSION.
-    header.writeBytes(hrpc);  // for 0.94 and earlier: 4 + 1. For 0.95+: 4 + 2
-    return header;
-  }
-
   /** Hello header for HBase 0.95 and later.  */
-  private ChannelBuffer header095() {
+  private ByteBuf header095() {
     final RPCPB.UserInformation user = RPCPB.UserInformation.newBuilder()
       .setEffectiveUser(System.getProperty("user.name", "asynchbase"))
       .build();
@@ -2066,27 +2029,26 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
       .setCellBlockCodecClass("org.apache.hadoop.hbase.codec.KeyValueCodec")
       .build();
     final int pblen = pb.getSerializedSize();
-    final byte[] buf = new byte[HBASE.length + 4 + pblen];
-    final ChannelBuffer header = commonHeader(buf, HBASE);
+    final byte[] buf = new byte[pblen];
+    final ByteBuf header = ByteBufAllocator.DEFAULT.ioBuffer(HBASE.length + 4 + pblen);
+    header.writeBytes(HBASE);
     header.writeInt(pblen);  // 4 bytes
     try {
       final CodedOutputStream output =
-        CodedOutputStream.newInstance(buf, HBASE.length + 4, pblen);
+        CodedOutputStream.newInstance(buf, 0, pblen);
       pb.writeTo(output);
       output.checkNoSpaceLeft();
     } catch (IOException e) {
       throw new RuntimeException("Should never happen", e);
     }
-    // We wrote to the underlying buffer but Netty didn't see the writes,
-    // so move the write index forward.
-    header.writerIndex(buf.length);
+    header.writeBytes(buf);
     return header;
   }
 
   /** Hello header for HBase 0.92 to 0.94.  */
-  private ChannelBuffer header092() {
-    final byte[] buf = new byte[4 + 1 + 4 + 1 + 44];
-    final ChannelBuffer header = commonHeader(buf, HRPC3);
+  private ByteBuf header092() {
+    final ByteBuf header = ByteBufAllocator.DEFAULT.ioBuffer(4 + 1 + 4 + 1 + 44);
+    header.writeBytes(HRPC3);
 
     // Serialized ipc.ConnectionHeader
     // We skip 4 bytes now and will set it to the actual size at the end.
@@ -2103,9 +2065,9 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
   }
 
   /** Hello header for HBase 0.90 and earlier.  */
-  private ChannelBuffer header090() {
-    final byte[] buf = new byte[4 + 1 + 4 + 2 + 29 + 2 + 48 + 2 + 47];
-    final ChannelBuffer header = commonHeader(buf, HRPC3);
+  private ByteBuf header090() {
+    final ByteBuf header = ByteBufAllocator.DEFAULT.ioBuffer(4 + 1 + 4 + 2 + 29 + 2 + 48 + 2 + 47);
+    header.writeBytes(HRPC3);
 
     // Serialized UserGroupInformation to say who we are.
     // We're not nice so we're not gonna say who we are and we'll just send
@@ -2135,7 +2097,7 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
   }
 
   /** CDH3b3-specific header for Hadoop "security".  */
-  private ChannelBuffer headerCDH3b3() {
+  private ByteBuf headerCDH3b3() {
     // CDH3 b3 includes a temporary patch that is non-backwards compatible
     // and results in clients getting disconnected as soon as they send the
     // header, because the HBase RPC protocol provides no mechanism to send
@@ -2143,7 +2105,8 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
     // of a connection.
     final byte[] user = Bytes.UTF8(System.getProperty("user.name", "asynchbase"));
     final byte[] buf = new byte[4 + 1 + 4 + 4 + user.length];
-    final ChannelBuffer header = commonHeader(buf, HRPC3);
+    final ByteBuf header = ByteBufAllocator.DEFAULT.ioBuffer(4 + 1 + 4 + 4 + user.length);
+    header.writeBytes(HRPC3);
 
     // Length of the encoded string (useless).
     header.writeInt(4 + user.length);  // 4
@@ -2161,21 +2124,13 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
    * @param chan The channel connected to the server we need to handshake.
    * @param header The header to use for the handshake.
    */
-  private void helloRpc(final Channel chan, final ChannelBuffer header) {
-    LOG.debug("helloRpc for the channel: {}", chan);
-    Callback<Object, Exception> errorback = new Callback<Object, Exception>() {
-
-      @Override
-      public Object call(final Exception e) throws Exception {
-        LOG.info("helloRpc failed. Closing the channel:" + chan, e);
-        Channels.close(chan);
-        return e;
-      }
-    };
+  private void helloRpc(final Channel chan, final ByteBuf header) {
     final GetProtocolVersionRequest rpc = new GetProtocolVersionRequest();
-    rpc.getDeferred().addBoth(new ProtocolVersionCB(chan))
-                     .addErrback(errorback);
-    Channels.write(chan, ChannelBuffers.wrappedBuffer(header, encode(rpc)));
+    rpc.getDeferred().addBoth(new ProtocolVersionCB(chan));
+    CompositeByteBuf wrapper = ByteBufAllocator.DEFAULT.compositeDirectBuffer(2);
+    wrapper.addComponent(header);
+    wrapper.addComponent(encode(rpc));
+    chan.writeAndFlush(wrapper);
   }
 
   /**
@@ -2185,6 +2140,6 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
   void sendVersion(final Channel chan) {
     final GetProtocolVersionRequest rpc = new GetProtocolVersionRequest();
     rpc.getDeferred().addBoth(new ProtocolVersionCB(chan));
-    Channels.write(chan, encode(rpc));
+    chan.writeAndFlush(encode(rpc));
   }
 }

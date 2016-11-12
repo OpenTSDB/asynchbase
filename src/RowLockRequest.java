@@ -26,7 +26,7 @@
  */
 package org.hbase.async;
 
-import org.jboss.netty.buffer.ChannelBuffer;
+import io.netty.buffer.ByteBuf;
 
 /**
  * Acquires an explicit row lock.
@@ -102,13 +102,13 @@ public final class RowLockRequest extends HBaseRpc
   }
 
   /** Serializes this request.  */
-  ChannelBuffer serialize(final byte server_version) {
+  ByteBuf serialize(final byte server_version) {
     if (server_version >= RegionClient.SERVER_VERSION_095_OR_ABOVE) {
       throw new UnsupportedOperationException("Row locks are not supported with"
                                               + " this version of HBase ("
                                               + server_version + ").");
     }
-    final ChannelBuffer buf = newBuffer(server_version,
+    final ByteBuf buf = newBuffer(server_version,
                                         predictSerializedSize());
     buf.writeInt(2);  // Number of parameters.
 
@@ -119,7 +119,7 @@ public final class RowLockRequest extends HBaseRpc
   }
 
   @Override
-  Object deserialize(final ChannelBuffer buf, int cell_size) {
+  Object deserialize(final ByteBuf buf, int cell_size) {
     throw new AssertionError("Should never be here.");
   }
 
@@ -153,9 +153,9 @@ public final class RowLockRequest extends HBaseRpc
       return UNLOCK_ROW;
     }
 
-    ChannelBuffer serialize(final byte server_version) {
+    ByteBuf serialize(final byte server_version) {
       // num param + type 1 + region length + region + type 2 + long
-      final ChannelBuffer buf = newBuffer(server_version,
+      final ByteBuf buf = newBuffer(server_version,
                                           + 4 + 1 + 3 + region.name().length
                                           + 1 + 8);
       buf.writeInt(2);  // Number of parameters.
@@ -165,7 +165,7 @@ public final class RowLockRequest extends HBaseRpc
     }
 
     @Override
-    Object deserialize(final ChannelBuffer buf, final int cell_size) {
+    Object deserialize(final ByteBuf buf, final int cell_size) {
       throw new AssertionError("Should never be here.");
     }
 

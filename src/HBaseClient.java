@@ -26,6 +26,38 @@
  */
 package org.hbase.async;
 
+import com.google.common.cache.LoadingCache;
+import com.google.protobuf.InvalidProtocolBufferException;
+import com.stumbleupon.async.Callback;
+import com.stumbleupon.async.Deferred;
+import io.netty.bootstrap.Bootstrap;
+import io.netty.channel.ChannelDuplexHandler;
+import io.netty.channel.ChannelHandlerContext;
+import io.netty.channel.ChannelInitializer;
+import io.netty.channel.ChannelOption;
+import io.netty.channel.ChannelOutboundHandlerAdapter;
+import io.netty.channel.ChannelPromise;
+import io.netty.channel.EventLoopGroup;
+import io.netty.channel.nio.NioEventLoopGroup;
+import io.netty.channel.socket.SocketChannel;
+import io.netty.channel.socket.nio.NioSocketChannel;
+import io.netty.handler.timeout.IdleState;
+import io.netty.handler.timeout.IdleStateEvent;
+import io.netty.handler.timeout.IdleStateHandler;
+import io.netty.util.HashedWheelTimer;
+import io.netty.util.Timeout;
+import io.netty.util.Timer;
+import io.netty.util.TimerTask;
+import org.apache.zookeeper.AsyncCallback;
+import org.apache.zookeeper.KeeperException.Code;
+import org.apache.zookeeper.WatchedEvent;
+import org.apache.zookeeper.Watcher;
+import org.apache.zookeeper.ZooKeeper;
+import org.apache.zookeeper.data.Stat;
+import org.hbase.async.generated.ZooKeeperPB;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import java.io.IOException;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
@@ -41,49 +73,10 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentSkipListMap;
-import java.util.concurrent.Executor;
-import java.util.concurrent.Executors;
+import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
-
-import com.google.common.cache.LoadingCache;
-import com.google.protobuf.InvalidProtocolBufferException;
-
-import org.apache.zookeeper.AsyncCallback;
-import org.apache.zookeeper.KeeperException.Code;
-import org.apache.zookeeper.WatchedEvent;
-import org.apache.zookeeper.Watcher;
-import org.apache.zookeeper.ZooKeeper;
-import org.apache.zookeeper.data.Stat;
-import org.jboss.netty.channel.ChannelEvent;
-import org.jboss.netty.channel.ChannelHandler;
-import org.jboss.netty.channel.ChannelHandlerContext;
-import org.jboss.netty.channel.ChannelStateEvent;
-import org.jboss.netty.channel.DefaultChannelPipeline;
-import org.jboss.netty.channel.socket.ClientSocketChannelFactory;
-import org.jboss.netty.channel.socket.SocketChannel;
-import org.jboss.netty.channel.socket.SocketChannelConfig;
-import org.jboss.netty.channel.socket.nio.NioChannelConfig;
-import org.jboss.netty.channel.socket.nio.NioClientBossPool;
-import org.jboss.netty.channel.socket.nio.NioClientSocketChannelFactory;
-import org.jboss.netty.channel.socket.nio.NioWorkerPool;
-import org.jboss.netty.handler.timeout.IdleState;
-import org.jboss.netty.handler.timeout.IdleStateAwareChannelHandler;
-import org.jboss.netty.handler.timeout.IdleStateEvent;
-import org.jboss.netty.handler.timeout.IdleStateHandler;
-import org.jboss.netty.util.HashedWheelTimer;
-import org.jboss.netty.util.ThreadNameDeterminer;
-import org.jboss.netty.util.Timeout;
-import org.jboss.netty.util.Timer;
-import org.jboss.netty.util.TimerTask;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
-import com.stumbleupon.async.Callback;
-import com.stumbleupon.async.Deferred;
-
-import org.hbase.async.generated.ZooKeeperPB;
 
 /**
  * A fully asynchronous, thread-safe, modern HBase client.
@@ -272,7 +265,7 @@ public final class HBaseClient {
   /**
    * Factory through which we will create all its channels / sockets.
    */
-  private final ClientSocketChannelFactory channel_factory;
+  private final EventLoopGroup event_loop_group;
 
   /** Watcher to keep track of the -ROOT- region in ZooKeeper.  */
   private final ZKClient zkclient;
@@ -310,7 +303,7 @@ public final class HBaseClient {
    * is always the first to be updated, because that's the map from
    * which all the lookups are done in the fast-path of the requests
    * that need to locate a region.  The second map to be updated is
-   * {@link region2client}, because it comes second in the fast-path
+   *  region2client, because it comes second in the fast-path
    * of every requests that need to locate a region.  The third map
    * is only used to handle RegionServer disconnections gracefully.
    * <p>
@@ -373,7 +366,7 @@ public final class HBaseClient {
    * us because we want to purge disconnected clients from the cache as
    * quickly as possible after the disconnection, to avoid handing out clients
    * that are going to cause unnecessary errors.
-   * @see RegionClientPipeline#handleDisconnect
+   * @see RegionClient handleDisconnect
    */
   private final HashMap<String, RegionClient> ip2client =
     new HashMap<String, RegionClient>();
@@ -409,7 +402,16 @@ public final class HBaseClient {
 
   /** The configuration for this client */
   private final Config config;
-  
+
+  // TODO: the PowerMock does not seem to work when I tried to spy on createClient. So use this flag to
+  // prevent EventLoop from connecting to test region server during unit test. This should default to true
+  // and only set to false during unit test
+  private boolean autoConnectDuringBootstrap = true;
+
+  void setAutoConnectDuringBootstrap(boolean autoConnectDuringBootstrap) {
+    this.autoConnectDuringBootstrap = autoConnectDuringBootstrap;
+  }
+
   /** Integers for thread naming */
   final static AtomicInteger BOSS_THREAD_ID = new AtomicInteger();
   final static AtomicInteger WORKER_THREAD_ID = new AtomicInteger();
@@ -489,35 +491,20 @@ public final class HBaseClient {
    * @param base_path The base path under which is the znode for the
    * -ROOT- region.
    */
-  public HBaseClient(final String quorum_spec, final String base_path) {
-    this(quorum_spec, base_path, defaultChannelFactory(new Config()));
+  public HBaseClient(final String quorum_spec, final String base_path,
+                     final int numThreads, final ThreadFactory threadFactory) {
+    this(quorum_spec, base_path, new NioEventLoopGroup(numThreads, threadFactory));
   }
 
   /**
-   * Constructor for advanced users with special needs.
-   * <p>
-   * <strong>NOTE:</strong> Only advanced users who really know what they're
-   * doing should use this constructor.  Passing an inappropriate thread
-   * pool, or blocking its threads will prevent this {@code HBaseClient}
-   * from working properly or lead to poor performance.
+   * Constructor.
    * @param quorum_spec The specification of the quorum, e.g.
    * {@code "host1,host2,host3"}.
    * @param base_path The base path under which is the znode for the
    * -ROOT- region.
-   * @param executor The executor from which to obtain threads for NIO
-   * operations.  It is <strong>strongly</strong> encouraged to use a
-   * {@link Executors#newCachedThreadPool} or something equivalent unless
-   * you're sure to understand how Netty creates and uses threads.
-   * Using a fixed-size thread pool will not work the way you expect.
-   * <p>
-   * Note that calling {@link #shutdown} on this client will <b>NOT</b>
-   * shut down the executor.
-   * @see NioClientSocketChannelFactory
-   * @since 1.2
    */
-  public HBaseClient(final String quorum_spec, final String base_path,
-                     final Executor executor) {
-    this(quorum_spec, base_path, new CustomChannelFactory(executor));
+  public HBaseClient(final String quorum_spec, final String base_path) {
+    this(quorum_spec, base_path, new NioEventLoopGroup());
   }
 
   /**
@@ -528,15 +515,15 @@ public final class HBaseClient {
    * {@code "host1,host2,host3"}.
    * @param base_path The base path under which is the znode for the
    * -ROOT- region.
-   * @param channel_factory A custom factory to use to create sockets.
+   * @param event_loop_group A custom event_loop_group to use to create sockets.
    * <p>
    * Note that calling {@link #shutdown} on this client will also cause the
    * shutdown and release of the factory and its underlying thread pool.
    * @since 1.2
    */
   public HBaseClient(final String quorum_spec, final String base_path,
-                     final ClientSocketChannelFactory channel_factory) {
-    this.channel_factory = channel_factory;
+                     final EventLoopGroup event_loop_group) {
+    this.event_loop_group = event_loop_group;
     zkclient = new ZKClient(quorum_spec, base_path);
     config = new Config();
     rpc_timeout = config.getInt("hbase.rpc.timeout");
@@ -547,65 +534,37 @@ public final class HBaseClient {
     nsre_low_watermark = config.getShort("hbase.nsre.low_watermark");
     nsre_high_watermark = config.getShort("hbase.nsre.high_watermark");
   }
-  
-  /**
-   * Constructor accepting a configuration object with at least the 
-   * "hbase.zookeeper.quorum" specified in the format {@code "host1,host2,host3"}.
-   * @param config A configuration object
-   * @since 1.7
-   */
-  public HBaseClient(final Config config) {
-    this(config, defaultChannelFactory(config));
+
+  static ThreadFactory newThreadNamedThreadFactory(String suggestedNamePrefix, AtomicInteger threadIdConunt) {
+
+    class ThreadNamedThreadFactory implements ThreadFactory {
+      private final ThreadGroup group;
+      private final String namePrefix;
+      private final AtomicInteger providedThreadIdCount;
+
+      ThreadNamedThreadFactory(String suggestedNamePrefix, AtomicInteger threadIdConunt) {
+          SecurityManager s = System.getSecurityManager();
+          group = (s != null) ? s.getThreadGroup() :
+                                Thread.currentThread().getThreadGroup();
+          namePrefix = suggestedNamePrefix ;
+        providedThreadIdCount = threadIdConunt;
+      }
+
+      public Thread newThread(Runnable r) {
+          Thread t = new Thread(group, r,
+                                namePrefix + " #" + providedThreadIdCount.incrementAndGet(),
+                                0);
+          if (t.isDaemon())
+              t.setDaemon(false);
+          if (t.getPriority() != Thread.NORM_PRIORITY)
+              t.setPriority(Thread.NORM_PRIORITY);
+          return t;
+      }
+    }
+
+    return new ThreadNamedThreadFactory(suggestedNamePrefix, threadIdConunt);
   }
-  
-  /**
-   * Constructor accepting a configuration object with at least the 
-   * "hbase.zookeeper.quorum" specified in the format {@code "host1,host2,host3"}
-   * and an executor thread pool.
-   * @param config A configuration object
-   * @param The executor from which to obtain threads for NIO
-   * operations.  It is <strong>strongly</strong> encouraged to use a
-   * {@link Executors#newCachedThreadPool} or something equivalent unless
-   * you're sure to understand how Netty creates and uses threads.
-   * Using a fixed-size thread pool will not work the way you expect.
-   * <p>
-   * Note that calling {@link #shutdown} on this client will <b>NOT</b>
-   * shut down the executor.
-   * @see NioClientSocketChannelFactory
-   * @since 1.7
-   */
-  public HBaseClient(final Config config, final Executor executor) {
-    this(config, new CustomChannelFactory(executor));
-  }
-  
-  /**
-   * Constructor accepting a configuration object with at least the 
-   * "hbase.zookeeper.quorum" specified in the format {@code "host1,host2,host3"}
-   * and a custom channel factory for advanced users.
-   * <p>
-   * Most users don't need to use this constructor.
-   * @param config A configuration object
-   * @param channel_factory A custom factory to use to create sockets.
-   * <p>
-   * Note that calling {@link #shutdown} on this client will also cause the
-   * shutdown and release of the factory and its underlying thread pool.
-   * @since 1.7
-   */
-  public HBaseClient(final Config config, 
-      final ClientSocketChannelFactory channel_factory) {
-    this.channel_factory = channel_factory;
-    zkclient = new ZKClient(config.getString("hbase.zookeeper.quorum"), 
-        config.getString("hbase.zookeeper.znode.parent"));
-    this.config = config;
-    rpc_timeout = config.getInt("hbase.rpc.timeout");
-    timer = newTimer(config, "HBaseClient");
-    rpc_timeout_timer = newTimer(config, "RPC Timeout Timer");
-    flush_interval = config.getShort("hbase.rpcs.buffered_flush_interval");
-    increment_buffer_size = config.getInt("hbase.increments.buffer_size");
-    nsre_low_watermark = config.getShort("hbase.nsre.low_watermark");
-    nsre_high_watermark = config.getShort("hbase.nsre.high_watermark");
-  }
-  
+
   /**
    * Package private timer constructor that provides a useful name for the
    * timer thread.
@@ -614,67 +573,26 @@ public final class HBaseClient {
    * @return A timer
    */
   static HashedWheelTimer newTimer(final Config config, final String name) {
-    class TimerThreadNamer implements ThreadNameDeterminer {
-      @Override
-      public String determineThreadName(String currentThreadName,
-          String proposedThreadName) throws Exception {
-        return "AsyncHBase Timer " + name + " #" + TIMER_THREAD_ID.incrementAndGet();
-      }
-    }
     if (config == null) {
-      return new HashedWheelTimer(Executors.defaultThreadFactory(), 
-          new TimerThreadNamer(), 100, MILLISECONDS, 512);
+      return new HashedWheelTimer(newThreadNamedThreadFactory("AsyncHBase Timer " + name, TIMER_THREAD_ID),
+              100, MILLISECONDS, 512);
     }
-    return new HashedWheelTimer(Executors.defaultThreadFactory(), 
-        new TimerThreadNamer(), config.getShort("hbase.timer.tick"), 
-        MILLISECONDS, config.getInt("hbase.timer.ticks_per_wheel"));
+    return new HashedWheelTimer(newThreadNamedThreadFactory("AsyncHBase Timer " + name, TIMER_THREAD_ID),
+            config.getShort("hbase.timer.tick"),
+            MILLISECONDS, config.getInt("hbase.timer.ticks_per_wheel"));
   }
-  
-  /** Creates a default channel factory in case we haven't been given one. 
+
+  /** Creates a default event loop in case we haven't been given one.
    * The factory will use Netty defaults and provide thread naming rules for
    * easier debugging.
    * @param config The config to pull settings from 
    */
-  private static NioClientSocketChannelFactory defaultChannelFactory(
+  private static EventLoopGroup defaultEventLoop (
       final Config config) {
-    class BossThreadNamer implements ThreadNameDeterminer {
-      @Override
-      public String determineThreadName(String currentThreadName,
-          String proposedThreadName) throws Exception {
-        return "AsyncHBase I/O Boss #" + BOSS_THREAD_ID.incrementAndGet();
-      }
-    }
-    
-    class WorkerThreadNamer implements ThreadNameDeterminer {
-      @Override
-      public String determineThreadName(String currentThreadName,
-          String proposedThreadName) throws Exception {
-        return "AsyncHBase I/O Worker #" + WORKER_THREAD_ID.incrementAndGet();
-      }
-    }
-    
-    final Executor executor = Executors.newCachedThreadPool();
-    final NioClientBossPool boss_pool = 
-        new NioClientBossPool(executor, 1, newTimer(config, "Boss Pool"), 
-            new BossThreadNamer());
-    final int num_workers = config.hasProperty("hbase.workers.size") ? 
+    final int num_workers = config.hasProperty("hbase.workers.size") ?
         config.getInt("hbase.workers.size") : 
           Runtime.getRuntime().availableProcessors() * 2;
-    final NioWorkerPool worker_pool = new NioWorkerPool(executor, 
-        num_workers, new WorkerThreadNamer());
-    return new NioClientSocketChannelFactory(boss_pool, worker_pool);
-  }
-
-  /** A custom channel factory that doesn't shutdown its executor.  */
-  private static final class CustomChannelFactory
-    extends NioClientSocketChannelFactory {
-      CustomChannelFactory(final Executor executor) {
-        super(executor, executor);
-      }
-      @Override
-      public void releaseExternalResources() {
-        // Do nothing, we don't want to shut down the executor.
-      }
+    return new NioEventLoopGroup(num_workers, newThreadNamedThreadFactory("AsyncHBase I/O Worker", WORKER_THREAD_ID));
   }
 
   /**
@@ -995,9 +913,10 @@ public final class HBaseClient {
       }
       public void run() {
         // This terminates the Executor.
-        channel_factory.releaseExternalResources();
+        event_loop_group.shutdownGracefully();
+        event_loop_group.terminationFuture().syncUninterruptibly();
       }
-    };
+    }
 
     // 3. Release all other resources.
     final class ReleaseResourcesCB implements Callback<Object, Object> {
@@ -1459,7 +1378,6 @@ public final class HBaseClient {
   /**
    * Package-private access point for {@link Scanner}s to scan more rows.
    * @param scanner The scanner to use.
-   * @param nrows The maximum number of rows to retrieve.
    * @return A deferred row.
    */
   Deferred<Object> scanNextRows(final Scanner scanner) {
@@ -1974,7 +1892,7 @@ public final class HBaseClient {
    * region server connections where applicable.
    * @param return_locations Whether or not to return the region information
    * in the deferred result.
-   * @return A deferred to wait on for completion. If {@link return_locations}
+   * @return A deferred to wait on for completion. If return_locations
    * is true, the results will be a list of {@link RegionLocation} objects.
    * If false, the result will be null on a successful scan.
    */
@@ -2966,7 +2884,7 @@ public final class HBaseClient {
    * {@link PleaseThrottleException} (and they will fail-fast).
    * @param rpc The RPC that failed or is going to fail with an NSRE.
    * @param region_name The name of the region this RPC is going to.
-   * Obviously, this method cannot be used for RPCs that aren't targeted
+   * Obviously, this method cannot be used for RPCs that aren't targetedhttp://pos.baidu.com/cclick.php?LH6K00aR2jYXHZyN7wkaWF5Kp_rIf7uG8b82gN-ljGjtR2uZ7l_4lJq2oMzL2fOXMJFIR7fgwB4yJih97sqp6A_k17irXVEtv1sEbqdAHszwTM6O92D9GP1GOuyA.7Y_igLRPg-ktRfwsNsNeS1IKkenMWb4qtAFW6xvEvclt717MNhO-CpnpyQrVerQKzqJIj7zUq-vzz1IxvfS5H_LQDkX17wu1f34-9h9mLyUrMmC.mhwGujdArH63rjc4fRFAnDuAPYmdnWw7PRcYfYDznYmsnjT1w6KWTA-b5fKLu7tkIZF9uARqP6KLu7tzIZF9uARqPW0z0AwEUy7GU-qhpgF1I7qYTh7buHYkn0KbUvd9py4xTvNWUv4bgLwzmyw-5HDsnjD0TAtqrHb0TAnqn0KWpAdb5HD0TvPCUyfqn0K1TjYk0A7bIjYz0ZuGuANEgvPCmy48uysqn0KdTvNzgLw4TARqn0K1ugFvpy4MgLw4TARqn0K9uAP_mgP15H00IZRqIHcknjnkP1D0IAYqnH0sPWf4nsKYujYznH01nHTk0Zw9TWYs0ZP1TjYk0ZwYTjYk0APEUgK_uHYs0Aq15Hb0mMcqnHc0myI-5H00uZws5HD0IgF_5y9YIZ0lQzqBpyTdQMIGpvb3QhPEUiqVmy-_pgGCUv4Mg1csPWnsQsKLpywYpjY1n1m0pANGuv9Y5Hc3n0K9uZ9xmh-bgvPsUHY3PWc0TLw9IA-WgLKzULK-TMw45fKWThnqnWDzPfK
    * at a particular region.
    * @param e The exception that caused (or may cause) this RPC to fail.
    */
@@ -3226,7 +3144,7 @@ public final class HBaseClient {
 
   /**
    * Some arbitrary junk that is unlikely to appear in a real row key.
-   * @see probeKey
+   * see probeKey
    */
   protected static byte[] PROBE_SUFFIX = {
     ':', 'A', 's', 'y', 'n', 'c', 'H', 'B', 'a', 's', 'e',
@@ -3249,6 +3167,65 @@ public final class HBaseClient {
                      testKey, testKey.length - PROBE_SUFFIX.length,
                      PROBE_SUFFIX.length);
     return testKey;
+  }
+
+  private void bootstrapConnect(final Bootstrap b, final String host, final int port) {
+    // Start the client.
+    try {
+      if (autoConnectDuringBootstrap) {
+        LOG.info("Bootstrap starts connection to  {}:{}", host, port);
+        b.connect(host, port).sync();
+      } else {
+        LOG.info("Bootstrap skip connection to  {}:{} as autoConnectDuringBootstrap is false", host, port);
+      }
+    } catch (InterruptedException ire) {
+      throw new RuntimeException(ire);
+    }
+  }
+
+  private void bootstrapRegionClient(final RegionClient client, final String host, final int port) {
+    Bootstrap b = new Bootstrap();
+    b.group(event_loop_group);
+    b.channel(NioSocketChannel.class);
+    // Unfortunately there is no way to override the keep-alive timeout in
+    // Java since the JRE doesn't expose any way to call setsockopt() with
+    // TCP_KEEPIDLE.  And of course the default timeout is >2h.  Sigh.
+    b = b.option(ChannelOption.SO_KEEPALIVE,
+            config.getBoolean("hbase.ipc.client.tcpkeepalive"));
+    b = b.option(ChannelOption.CONNECT_TIMEOUT_MILLIS,
+            config.getInt("hbase.ipc.client.socket.timeout.connect"));
+    b = b.option(ChannelOption.TCP_NODELAY,
+            config.getBoolean("hbase.ipc.client.tcpnodelay"));
+    if (config.hasProperty("hbase.ipc.client.socket.write.high_watermark")) {
+      b.option(ChannelOption.WRITE_BUFFER_HIGH_WATER_MARK,
+              config.getInt("hbase.ipc.client.socket.write.high_watermark"));
+    }
+    if (config.hasProperty("hbase.ipc.client.socket.write.low_watermark")) {
+      b.option(ChannelOption.WRITE_BUFFER_LOW_WATER_MARK,
+              config.getInt("hbase.ipc.client.socket.write.low_watermark"));
+    }
+    if (config.hasProperty("hbase.ipc.client.socket.sendBufferSize")) {
+      b.option(ChannelOption.SO_SNDBUF,
+              config.getInt("hbase.ipc.client.socket.sendBufferSize"));
+    }
+    if (config.hasProperty("hbase.ipc.client.socket.receiveBufferSize")) {
+      b.option(ChannelOption.SO_RCVBUF,
+              config.getInt("hbase.ipc.client.socket.receiveBufferSize"));
+    }
+    b.handler(new ChannelInitializer<SocketChannel>() {
+
+      @Override
+      public void initChannel(final SocketChannel ch) throws Exception {
+
+        ch.pipeline().addLast(new IdleStateHandler(0, 0,
+                config.getInt("hbase.hbase.ipc.client.connection.idle_timeout")));
+        ch.pipeline().addLast(new RegionClientPipeline(client));
+        ch.pipeline().addLast(client);
+        ip2client.put(host + ':' + port, client);
+      }
+    });
+
+    bootstrapConnect(b, host, port);
   }
 
   // ----------------------------------------------------------------- //
@@ -3276,56 +3253,21 @@ public final class HBaseClient {
     // could both test the map at the same time and create 2 instances.
     final String hostport = host + ':' + port;
 
-    RegionClient client;
-    SocketChannel chan = null;
     synchronized (ip2client) {
-      client = ip2client.get(hostport);
-      if (client != null && client.isAlive()) {
-        return client;
-      }
+      // TODO: remove after netty4 merge
+      RegionClient existingClient = ip2client.get(hostport);
+      if (existingClient != null && existingClient.isAlive()) {
+        return existingClient;
 
-      // We don't use Netty's ClientBootstrap class because it makes it
-      // unnecessarily complicated to have control over which ChannelPipeline
-      // exactly will be given to the channel.  It's over-designed.
-      final RegionClientPipeline pipeline = new RegionClientPipeline();
-      client = pipeline.init();
-      chan = channel_factory.newChannel(pipeline);
-      ip2client.put(hostport, client);  // This is guaranteed to return null.
+      } else {
+        final RegionClient client = new RegionClient(HBaseClient.this);
+        bootstrapRegionClient(client, host, port);
+        client2regions.put(client, new ArrayList<RegionInfo>());
+        num_connections_created.increment();
+        return client;
+
+      }
     }
-    client2regions.put(client, new ArrayList<RegionInfo>());
-    num_connections_created.increment();
-    // Configure and connect the channel without locking ip2client.
-    final SocketChannelConfig socket_config = chan.getConfig();
-    socket_config.setConnectTimeoutMillis(
-        config.getInt("hbase.ipc.client.socket.timeout.connect"));
-    socket_config.setTcpNoDelay(
-        config.getBoolean("hbase.ipc.client.tcpnodelay"));
-    // Unfortunately there is no way to override the keep-alive timeout in
-    // Java since the JRE doesn't expose any way to call setsockopt() with
-    // TCP_KEEPIDLE.  And of course the default timeout is >2h.  Sigh.
-    socket_config.setKeepAlive(
-        config.getBoolean("hbase.ipc.client.tcpkeepalive"));
-    
-    // socket overrides using system defaults instead of setting them in a conf
-    if (config.hasProperty("hbase.ipc.client.socket.write.high_watermark")) {
-      ((NioChannelConfig)config).setWriteBufferHighWaterMark(
-          config.getInt("hbase.ipc.client.socket.write.high_watermark"));
-    }
-    if (config.hasProperty("hbase.ipc.client.socket.write.low_watermark")) {
-      ((NioChannelConfig)config).setWriteBufferLowWaterMark(
-          config.getInt("hbase.ipc.client.socket.write.low_watermark"));
-    }
-    if (config.hasProperty("hbase.ipc.client.socket.sendBufferSize")) {
-      socket_config.setOption("sendBufferSize", 
-          config.getInt("hbase.ipc.client.socket.sendBufferSize"));
-    }
-    if (config.hasProperty("hbase.ipc.client.socket.receiveBufferSize")) {
-      socket_config.setOption("receiveBufferSize", 
-          config.getInt("hbase.ipc.client.socket.receiveBufferSize"));
-    }
-    
-    chan.connect(new InetSocketAddress(host, port));  // Won't block.
-    return client;
   }
 
   /**
@@ -3340,7 +3282,14 @@ public final class HBaseClient {
    * disconnection events, to which we'd need to pass a callback to invoke
    * to report the event back to the {@link HBaseClient}.
    */
-  private final class RegionClientPipeline extends DefaultChannelPipeline {
+  private final class RegionClientPipeline extends ChannelOutboundHandlerAdapter {
+
+    private final RegionClient client;
+
+
+    RegionClientPipeline(RegionClient client) {
+      this.client = client;
+    }
 
     /**
      * Have we already disconnected?.
@@ -3352,76 +3301,28 @@ public final class HBaseClient {
      */
     private boolean disconnected = false;
 
-    /** A handler to close the connection if we haven't used it in some time */
-    private final ChannelHandler timeout_handler;
-    
-    RegionClientPipeline() {
-      timeout_handler = new IdleStateHandler(timer, 0, 0, 
-          config.getInt("hbase.hbase.ipc.client.connection.idle_timeout"));
-    }
-
-    /**
-     * Initializes this pipeline.
-     * This method <strong>MUST</strong> be called on each new instance
-     * before it's used as a pipeline for a channel.
-     */
-    RegionClient init() {
-      final RegionClient client = new RegionClient(HBaseClient.this);
-      super.addLast("idle_handler", this.timeout_handler);
-      super.addLast("idle_cleanup", new RegionClientIdleStateHandler());
-      super.addLast("handler", client);
-      return client;
+    @Override
+    public void close(ChannelHandlerContext ctx, ChannelPromise promise) throws Exception {
+      handleDisconnect(ctx);
+      super.close(ctx, promise);
     }
 
     @Override
-    public void sendDownstream(final ChannelEvent event) {
-      //LoggerFactory.getLogger(RegionClientPipeline.class)
-      //  .debug("hooked sendDownstream " + event);
-      if (event instanceof ChannelStateEvent) {
-        handleDisconnect((ChannelStateEvent) event);
-      }
-      super.sendDownstream(event);
+    public void disconnect(ChannelHandlerContext ctx, ChannelPromise promise) throws Exception {
+      handleDisconnect(ctx);
+      super.disconnect(ctx, promise);
     }
 
-    @Override
-    public void sendUpstream(final ChannelEvent event) {
-      //LoggerFactory.getLogger(RegionClientPipeline.class)
-      //  .debug("hooked sendUpstream " + event);
-      if (event instanceof ChannelStateEvent) {
-        handleDisconnect((ChannelStateEvent) event);
-      }
-      super.sendUpstream(event);
-    }
+    void handleDisconnect(ChannelHandlerContext ctx) {
 
-    private void handleDisconnect(final ChannelStateEvent state_event) {
       if (disconnected) {
         return;
       }
-      if (LOG.isDebugEnabled()) {
-        LOG.debug("Channel " + state_event.getChannel().toString() + 
-            "'s state changed: " + state_event);
-      }
-      switch (state_event.getState()) {
-        case OPEN:
-          if (state_event.getValue() == Boolean.FALSE) {
-            break;  // CLOSED
-          }
-          return;
-        case CONNECTED:
-          if (state_event.getValue() == null) {
-            break;  // DISCONNECTED
-          }
-          return;
-        default:
-          return;  // Not an event we're interested in, ignore it.
-      }
-
-      LOG.info("Channel " + state_event.getChannel().toString() + 
-          " is disconnecting: " + state_event);
+      LOG.info("Channel " + ctx.channel().toString() + " is disconnecting. ");
       disconnected = true;  // So we don't clean up the same client twice.
+
       try {
-        final RegionClient client = super.get(RegionClient.class);
-        SocketAddress remote = super.getChannel().getRemoteAddress();
+        SocketAddress remote = ctx.channel().remoteAddress();
         // At this point Netty gives us no easy way to access the
         // SocketAddress of the peer we tried to connect to, so we need to
         // find which entry in the map was used for the rootregion.  This
@@ -3436,35 +3337,34 @@ public final class HBaseClient {
           removeClientFromCache(client, remote);
         }
       } catch (Exception e) {
-        LoggerFactory.getLogger(RegionClientPipeline.class)
-          .error("Uncaught exception when handling a disconnection of "
-                 + getChannel(), e);
+        LoggerFactory.getLogger(RegionClient.class)
+                .error("Uncaught exception when handling a disconnection of " + ctx.channel(), e);
       }
     }
-
   }
 
   /**
    * Handles the cases where sockets are either idle or leaked due to
    * connections closed from HBase or no data flowing downstream.
    */
-  private final class RegionClientIdleStateHandler
-          extends IdleStateAwareChannelHandler {
+  private final class RegionClientIdleStateHandler extends ChannelDuplexHandler {
 
     /** Empty constructor */
     public RegionClientIdleStateHandler() {
     }
 
     @Override
-    public void channelIdle(ChannelHandlerContext ctx, IdleStateEvent e)
-            throws Exception {
-      if(e.getState() == IdleState.ALL_IDLE) {
-        idle_connections_closed.increment();
-        LOG.info("Closing idle connection to HBase region server: " 
-            + e.getChannel());
-        // RegionClientPipeline's disconnect method will handle cleaning up
-        // any outstanding RPCs and removing the client from caches
-        e.getChannel().close();
+    public void userEventTriggered(ChannelHandlerContext ctx, Object evt) throws Exception {
+      if (evt instanceof IdleStateEvent) {
+        IdleStateEvent e = (IdleStateEvent) evt;
+        if (e.state() == IdleState.ALL_IDLE) {
+          idle_connections_closed.increment();
+          LOG.info("Closing idle connection to HBase region server: "
+                  + ctx.channel());
+          // RegionClientPipeline's disconnect method will handle cleaning up
+          // any outstanding RPCs and removing the client from caches
+          ctx.channel().close();
+        }
       }
     }
   }
@@ -3499,7 +3399,7 @@ public final class HBaseClient {
       return null;
     }
 
-    LOG.warn("Couldn't connect to the RegionServer @ " + hostport);
+    // LOG.warn("Couldn't connect to the RegionServer @ " + hostport);
     final int colon = hostport.indexOf(':', 1);
     if (colon < 1) {
       LOG.error("WTF?  Should never happen!  No `:' found in " + hostport);
@@ -3525,7 +3425,7 @@ public final class HBaseClient {
   private void removeClientFromCache(final RegionClient client,
                                      final SocketAddress remote) {
     if (client == rootregion) {
-      LOG.info("Lost connection with the "
+      LOG.info("Remove connection with the "
                + (has_root ? "-ROOT-" : ".META.") + " region");
       rootregion = null;
     }
@@ -3694,7 +3594,7 @@ public final class HBaseClient {
     }
 
     /**
-     * Like {@link getDeferredRoot} but returns null if we're not already
+     * Like getDeferredRoot but returns null if we're not already
      * trying to find -ROOT-.
      * In other words calling this method doesn't trigger a -ROOT- lookup
      * unless there's already one in flight.

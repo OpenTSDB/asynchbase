@@ -26,16 +26,14 @@
  */
 package org.hbase.async;
 
-import java.net.SocketAddress;
-
-import org.jboss.netty.buffer.ChannelBuffer;
-import org.jboss.netty.buffer.ChannelBuffers;
-import org.jboss.netty.channel.Channel;
-import org.jboss.netty.channel.Channels;
+import io.netty.buffer.ByteBuf;
+import io.netty.buffer.ByteBufAllocator;
+import io.netty.channel.Channel;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import javax.security.sasl.Sasl;
+import java.net.SocketAddress;
 
 /**
  * Implementation for 0.94-security.
@@ -67,13 +65,11 @@ class SecureRpcHelper94 extends SecureRpcHelper {
   @Override
   public void sendHello(final Channel channel) {
     final byte[] connectionHeader = {'s', 'r', 'p', 'c', 4};
-    byte[] buf = new byte[4 + 1 + 1];
-    ChannelBuffer buffer = ChannelBuffers.wrappedBuffer(buf);
-    buffer.clear();
+    ByteBuf buffer = ByteBufAllocator.DEFAULT.ioBuffer(connectionHeader.length + 1);
     buffer.writeBytes(connectionHeader);
     //code for Kerberos AuthMethod enum in HBaseRPC
     buffer.writeByte(client_auth_provider.getAuthMethodCode());
-    Channels.write(channel, buffer);
+    channel.writeAndFlush(buffer);
 
     // sasl_client is null for Simple Auth case
     if(sasl_client != null)  {
@@ -82,16 +78,14 @@ class SecureRpcHelper94 extends SecureRpcHelper {
         challengeBytes = processChallenge(new byte[0]);
       }
       if (challengeBytes != null) {
-        buf = new byte[4 + challengeBytes.length];
-        buffer = ChannelBuffers.wrappedBuffer(buf);
-        buffer.clear();
+        buffer = ByteBufAllocator.DEFAULT.ioBuffer(4 + challengeBytes.length);
         buffer.writeInt(challengeBytes.length);
         buffer.writeBytes(challengeBytes);
 
         //if (LOG.isDebugEnabled()) {
-        //  LOG.debug("Sending initial SASL Challenge: "+Bytes.pretty(buf));
+        //  LOG.debug("Sending initial SASL Challenge: "+Bytes.pretty(buffer));
         //}
-        Channels.write(channel, buffer);
+        channel.writeAndFlush(buffer);
       }
     } else {
       sendRPCHeader(channel);
@@ -100,7 +94,7 @@ class SecureRpcHelper94 extends SecureRpcHelper {
   }
 
   @Override
-  public ChannelBuffer handleResponse(ChannelBuffer buf, Channel chan) {
+  public ByteBuf handleResponse(ByteBuf buf, Channel chan) {
     if (sasl_client == null) {
       return buf;
     }
@@ -141,15 +135,10 @@ class SecureRpcHelper94 extends SecureRpcHelper {
       final byte[] challengeBytes = processChallenge(b);
 
       if (challengeBytes != null) {
-        final byte[] outBytes = new byte[4 + challengeBytes.length];
-        //if (LOG.isDebugEnabled()) {
-        //  LOG.debug("Sending SASL response: " + Bytes.pretty(outBytes));
-        //}
-        ChannelBuffer outBuffer = ChannelBuffers.wrappedBuffer(outBytes);
-        outBuffer.clear();
+        ByteBuf outBuffer = ByteBufAllocator.DEFAULT.ioBuffer(4 + challengeBytes.length);
         outBuffer.writeInt(challengeBytes.length);
         outBuffer.writeBytes(challengeBytes);
-        Channels.write(chan, outBuffer);
+        chan.writeAndFlush(outBuffer);
       }
 
       if (sasl_client.isComplete()) {
@@ -169,12 +158,9 @@ class SecureRpcHelper94 extends SecureRpcHelper {
     final byte[] user_bytes = Bytes.UTF8(client_auth_provider.getClientUsername());
     final String klass = "org.apache.hadoop.hbase.ipc.HRegionInterface";
     final byte[] class_bytes = Bytes.UTF8(klass);
-    final byte[] buf = new byte[
-               4 + 1 + class_bytes.length + 1 + 2 + user_bytes.length + 1];
 
-    ChannelBuffer out_buffer = ChannelBuffers.wrappedBuffer(buf);
-    out_buffer.clear();
-    out_buffer.writerIndex(out_buffer.writerIndex() + 4);
+    ByteBuf out_buffer = ByteBufAllocator.DEFAULT.ioBuffer(4 + 1 + class_bytes.length + 1 + 2 + user_bytes.length + 1);
+    out_buffer.writerIndex(out_buffer.writerIndex() + 4);  // skip first 4 bytes which is the data length
     out_buffer.writeByte(class_bytes.length);              // 1
     out_buffer.writeBytes(class_bytes);      // 44
     //This is part of protocol header
@@ -186,12 +172,12 @@ class SecureRpcHelper94 extends SecureRpcHelper {
     //true if a realUser field exists
     out_buffer.writeByte(0);
     //write length
-    out_buffer.setInt(0, out_buffer.writerIndex() - 4);
+    out_buffer.setInt(0, out_buffer.writerIndex() - 4);  // set data length
     out_buffer = wrap(out_buffer);
     //if(LOG.isDebugEnabled()) {
     //  LOG.debug("Sending RPC Header: " + Bytes.pretty(out_buffer));
     //}
-    Channels.write(channel, out_buffer);
+    channel.writeAndFlush(out_buffer);
   }
 
 }
