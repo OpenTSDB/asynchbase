@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2010-2012  The Async HBase Authors.  All rights reserved.
+ * Copyright (C) 2010-2016  The Async HBase Authors.  All rights reserved.
  * This file is part of Async HBase.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -30,6 +30,7 @@ import java.util.ArrayList;
 
 import org.jboss.netty.buffer.ChannelBuffer;
 import org.hbase.async.generated.ClientPB;
+import org.hbase.async.generated.ClientPB.MutationProto;
 import org.hbase.async.generated.FilterPB;
 import org.hbase.async.generated.HBasePB.TimeRange;
 
@@ -42,7 +43,7 @@ import org.hbase.async.generated.HBasePB.TimeRange;
  * <h1>A note on passing {@code String}s in argument</h1>
  * All strings are assumed to use the platform's default charset.
  */
-public final class GetRequest extends HBaseRpc
+public final class GetRequest extends BatchableRpc
   implements HBaseRpc.HasTable, HBaseRpc.HasKey,
              HBaseRpc.HasFamily, HBaseRpc.HasQualifiers {
 
@@ -85,6 +86,7 @@ public final class GetRequest extends HBaseRpc
    */
   public GetRequest(final byte[] table, final byte[] key) {
     super(table, key);
+    this.bufferable = false; //don't buffer get request
   }
 
   /**
@@ -119,6 +121,7 @@ public final class GetRequest extends HBaseRpc
                     final byte[] family) {
     super(table, key);
     this.family(family);
+    this.bufferable = false; //don't buffer get request
   }
 
   /**
@@ -133,6 +136,7 @@ public final class GetRequest extends HBaseRpc
                     final String family) {
     this(table, key);
     this.family(family);
+    this.bufferable = false; //don't buffer get request
   }
 
   /**
@@ -151,6 +155,7 @@ public final class GetRequest extends HBaseRpc
     super(table, key);
     this.family(family);
     this.qualifier(qualifier);
+    this.bufferable = false; //don't buffer get request
   }
 
   /**
@@ -168,6 +173,7 @@ public final class GetRequest extends HBaseRpc
     this(table, key);
     this.family(family);
     this.qualifier(qualifier);
+    this.bufferable = false; //don't buffer get request
   }
 
   /**
@@ -181,6 +187,7 @@ public final class GetRequest extends HBaseRpc
                      final byte[] key) {
     super(table, key);
     this.versions |= EXIST_FLAG;
+    this.bufferable = false; //don't buffer get request
   }
 
   /**
@@ -453,12 +460,7 @@ public final class GetRequest extends HBaseRpc
   public byte[] key() {
     return key;
   }
-
-  @Override
-  public byte[] family() {
-    return family;
-  }
-
+  
   @Override
   public byte[][] qualifiers() {
     return qualifiers;
@@ -579,6 +581,20 @@ public final class GetRequest extends HBaseRpc
     if (server_version < RegionClient.SERVER_VERSION_095_OR_ABOVE) {
       return serializeOld(server_version);
     }
+    
+    final ClientPB.GetRequest.Builder get = ClientPB.GetRequest.newBuilder()
+      .setRegion(region.toProtobuf())
+      .setGet(getPB().build());
+
+    return toChannelBuffer(GetRequest.GGET, get.build());
+  }
+
+  /**
+   * Generates the get request protobuf object.
+   * @return A Get Request protobuf builder object build from this RPC.
+   * @since 1.8
+   */
+  ClientPB.Get.Builder getPB() {
     final ClientPB.Get.Builder getpb = ClientPB.Get.newBuilder()
       .setRow(Bytes.wrap(key));
 
@@ -626,12 +642,8 @@ public final class GetRequest extends HBaseRpc
     if (!populate_blockcache) {
       getpb.setCacheBlocks(false);
     }
-
-    final ClientPB.GetRequest.Builder get = ClientPB.GetRequest.newBuilder()
-      .setRegion(region.toProtobuf())
-      .setGet(getpb.build());
-
-    return toChannelBuffer(GetRequest.GGET, get.build());
+    
+    return getpb;
   }
 
   /** Serializes this request for HBase 0.94 and before.  */
@@ -751,4 +763,71 @@ public final class GetRequest extends HBaseRpc
     return rows;
   }
 
+  /**
+   * Converts a protobuf result into a list of {@link KeyValue} and parses a
+   * list of cells.
+   * @param The protobuf'ed results from which to extract the KVs.
+   * @param buf The buffer from which the protobuf was read.
+   * @param cell_size The number of bytes of the cell block that follows,
+   * in the buffer.
+   * @return A non-null array list of KeyValue objects. May be empty.
+   * @since 1.8
+   */
+  static ArrayList<KeyValue> convertResultWithAssociatedCells(
+        final ClientPB.Result res,
+        final ChannelBuffer buf,
+        final int cell_size) {
+    final int associated_cell_cnt = res.getAssociatedCellCount();
+    final int pb_cell_cnt = res.getCellCount();
+    final ArrayList<KeyValue> cells = 
+        new ArrayList<KeyValue>(pb_cell_cnt + associated_cell_cnt);
+    KeyValue kv = null;
+    for (int i = 0; i < pb_cell_cnt; ++i) {
+      kv = KeyValue.fromCell(res.getCell(i), kv);
+      cells.add(kv);
+    }
+    
+    for (int i = 0; i < associated_cell_cnt; ++i) {
+      final int kv_length = buf.readInt();
+      kv = KeyValue.fromBuffer(buf, kv);
+      cells.add(kv);
+    }
+    
+    return cells;
+  }
+  
+  @Override
+  MutationProto toMutationProto() {
+    // TODO Auto-generated method stub
+    return null;
+  }
+  
+  @Override
+  byte version(byte server_version) {
+    // TODO Auto-generated method stub
+    return 0;
+  }
+  
+  @Override
+  byte code() {
+    // TODO Auto-generated method stub
+    return 0;
+  }
+  
+  @Override
+  int numKeyValues() {
+    // TODO Auto-generated method stub
+    return 0;
+  }
+  
+  @Override
+  int payloadSize() {
+    // TODO Auto-generated method stub
+    return 0;
+  }
+  
+  @Override
+  void serializePayload(ChannelBuffer buf) {
+    // TODO Auto-generated method stub
+  }
 }

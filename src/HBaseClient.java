@@ -35,7 +35,6 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.HashMap;
-import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
@@ -1220,74 +1219,129 @@ public final class HBaseClient {
       }
     };
 
-  public Deferred<List<ArrayList<KeyValue>>> get(final List<GetRequest> requests) {
+  private static final Callback<GetResultOrException, Object> MUL_GOT_ONE = 
+      new Callback<GetResultOrException, Object>() {
+        public GetResultOrException call(final Object response) {
+          if (response instanceof ArrayList) {
+            @SuppressWarnings("unchecked")
+            final ArrayList<KeyValue> row = (ArrayList<KeyValue>) response;
+            return new GetResultOrException(row);
+          } else if (response instanceof Exception) {
+            Exception e = (Exception) (response);
+            return new GetResultOrException(e);
+          } else {
+            return new GetResultOrException(new InvalidResponseException(ArrayList.class, response));
+          }
+        }
+
+        public String toString() {
+          return "type mul get one response";
+        }
+    };
+
+  public Deferred<List<GetResultOrException>> get(final List<GetRequest> requests) {
     return Deferred.groupInOrder(multiGet(requests))
         .addCallback(
-            new Callback<List<ArrayList<KeyValue>>, ArrayList<ArrayList<KeyValue>>>() {
-              public List<ArrayList<KeyValue>> call(ArrayList<ArrayList<KeyValue>> results) {
+            new Callback<List<GetResultOrException>, ArrayList<GetResultOrException>>() {
+              public List<GetResultOrException> call(ArrayList<GetResultOrException> results) {
                 return results;
               }
             }
         );
   }
 
-  public List<Deferred<ArrayList<KeyValue>>> get2defer(final List<GetRequest> requests) {
-    return multiGet(requests);
-  }
-
-  private List<Deferred<ArrayList<KeyValue>>> multiGet(
-      final List<GetRequest> requests) {
+  private List<Deferred<GetResultOrException>> multiGet(final List<GetRequest> requests) {
     
-    class ResultCallbacker implements Callback<Object, Object> {
-      BatchGet batchGet;
-
-      ResultCallbacker(BatchGet batchGet) {
-        this.batchGet = batchGet;
+    final class MultiActionCallback implements Callback<Object, Object> {
+      final MultiAction request;
+      public MultiActionCallback(final MultiAction request) {
+        this.request = request;
       }
-
-      public Object call(Object r) throws Exception {
-        if (r instanceof BatchGet.ActionResp[]) {
-          BatchGet.ActionResp[] entries = (BatchGet.ActionResp[]) r;
-
-          for (int i=0; i < entries.length; i++) {
-            BatchGet.ActionResp entry = entries[i];
-            GetRequest req = requests.get(entry.order);
-            if (entry.result instanceof ArrayList) {
-              req.callback(entry.result);
-            } else {
-              Exception e = (entry.result instanceof Exception) ?
-                            (Exception)entry.result : new InvalidResponseException(ArrayList.class, entry.result);
-              handleException(req, e);
-            }
+      
+      // TODO - double check individual RPC timer timeouts.
+      public Object call(final Object resp) {
+        if (!(resp instanceof MultiAction.Response)) {
+          if (resp instanceof BatchableRpc) {  // Single-RPC multi-action?
+            return null;  // Yes, nothing to do.  See multiActionToSingleAction.
+          } else if (resp instanceof Exception) {
+            return handleException((Exception) resp);
           }
-        } else {
-          Exception e = (r instanceof Exception) ?
-                        (Exception)r : new InvalidResponseException(BatchGet.ActionResp[].class, r);
-          for (BatchGet.ActionEntry entry: batchGet.actionEntries()) {
-            handleException(entry.rpc, e);
+          throw new InvalidResponseException(MultiAction.Response.class, resp);
+        }
+        final MultiAction.Response response = (MultiAction.Response) resp;
+        final ArrayList<BatchableRpc> batch = request.batch();
+        final int n = batch.size();
+        for (int i = 0; i < n; i++) {
+          final BatchableRpc rpc = batch.get(i);
+          final Object r = response.result(i);
+          if (r instanceof RecoverableException) {
+            if (r instanceof NotServingRegionException ||
+                r instanceof RegionMovedException || 
+                r instanceof RegionServerStoppedException) {
+              // We need to do NSRE handling here too, as the response might
+              // have come back successful, but only some parts of the batch
+              // could have encountered an NSRE.
+              try {
+              handleNSRE(rpc, rpc.getRegion().name(),
+                                      (NotServingRegionException) r);
+              } catch (RuntimeException e) {
+                LOG.error("Unexpected exception processing NSRE for RPC " + rpc, e);
+                rpc.callback(e);
+              }
+            } else {
+              // TODO - potentially retry?
+              //retryEdit(rpc, (RecoverableException) r);
+            }
+          } else {
+            rpc.callback(r);
           }
         }
+        // We're successful.  If there was a problem, the exception was
+        // delivered to the specific RPCs that failed, and they will be
+        // responsible for retrying.
         return null;
       }
 
-      private void handleException(GetRequest req, final Exception e) {
-        if (e instanceof NotServingRegionException) {
-          handleNSRE(req, req.getRegion().name(), (NotServingRegionException)e);
-        } else if (e instanceof RecoverableException && !req.failfast()) {
-          sendRpcToRegion(req);
-        } else {
-          req.callback(e);
+      private Object handleException(final Exception e) {
+        if (!(e instanceof RecoverableException)) {
+          for (final BatchableRpc rpc : request.batch()) {
+            rpc.callback(e);
+          }
+          return e;  // Can't recover from this error, let it propagate.
         }
+        if (LOG.isDebugEnabled()) {
+          LOG.debug(this + " Multi-action request failed, retrying each of the "
+                    + request.size() + " RPCs individually.", e);
+        }
+        for (final BatchableRpc rpc : request.batch()) {
+          if (e instanceof NotServingRegionException ||
+              e instanceof RegionMovedException || 
+              e instanceof RegionServerStoppedException) {
+            try {
+            handleNSRE(rpc, rpc.getRegion().name(),
+                                    (NotServingRegionException) e);
+            } catch (RuntimeException ex) {
+              LOG.error("Unexpected exception trying to NSRE the RPC " + rpc, ex);
+              rpc.callback(ex);
+            }
+          } else {
+            // TODO - potentially retry?
+            //retryEdit(rpc, (RecoverableException) e);
+          }
+        }
+        return null;  // We're retrying, so let's call it a success for now.
       }
-    }
 
-    final List<Deferred<ArrayList<KeyValue>>> result_deferreds =
-        new ArrayList<Deferred<ArrayList<KeyValue>>>(requests.size());
-
-    final Map<RegionClient, BatchGet> region_batch_gets = 
-        new HashMap<RegionClient, BatchGet>();
+      public String toString() {
+        return "multi-action response";
+      }
+    };
     
-    final HashSet<Integer> nsre_gets = new HashSet<Integer>();
+    final List<Deferred<GetResultOrException>> result_deferreds =
+        new ArrayList<Deferred<GetResultOrException>>(requests.size());
+
+    final Map<RegionClient, MultiAction> batch_by_region = 
+        new HashMap<RegionClient, MultiAction>();
     
     // Split gets according to regions.
     for (int i = 0; i < requests.size(); i++) {
@@ -1304,40 +1358,33 @@ public final class HBaseClient {
       }
 
       if (client == null || !client.isAlive()) {
-        // those nsre gets need special treatment.
-        nsre_gets.add(i);
+        // no region or client found so we need to perform the entire lookup. 
+        // Therefore these won't get the batch treatment.
+        result_deferreds.add(sendRpcToRegion(request).addBoth(MUL_GOT_ONE));
         continue;
       }
 
       request.setRegion(region);
-      BatchGet batchGet = region_batch_gets.get(client);
-      if (batchGet == null) {
-        batchGet = new BatchGet();
-        region_batch_gets.put(client, batchGet);
+      MultiAction batch = batch_by_region.get(client);
+      if (batch == null) {
+        batch = new MultiAction();
+        batch_by_region.put(client, batch);
       }
-      batchGet.add(new BatchGet.ActionEntry(request, i));
+      batch.add(request);
+      
+      result_deferreds.add(request.getDeferred().addBoth(MUL_GOT_ONE));
     }
 
-    for (int i = 0; i < requests.size(); i++) {
-      final GetRequest request = requests.get(i);
-      if (nsre_gets.contains(i)) {
-        result_deferreds.add(get(request));
-      } else {
-        result_deferreds.add(request.getDeferred()
-            .addCallbacks(got, Callback.PASSTHROUGH));
-      }
-    }
-
-    for (Map.Entry<RegionClient, BatchGet> entry : region_batch_gets.entrySet()) {
-      final BatchGet request = entry.getValue();
+    for (Map.Entry<RegionClient, MultiAction> entry : batch_by_region.entrySet()) {
+      final MultiAction request = entry.getValue();
       final Deferred<Object> d = request.getDeferred();
-      d.addBoth(new ResultCallbacker(request));
+      d.addBoth(new MultiActionCallback(request));
       entry.getKey().sendRpc(request);
     }
 
     return result_deferreds;
   }
-    
+  
   /**
    * Creates a new {@link Scanner} for a particular table.
    * @param table The name of the table you intend to scan.
@@ -1730,8 +1777,33 @@ public final class HBaseClient {
    */
   public Deferred<Object> append(final AppendRequest request) {
     num_appends.increment();
-    return sendRpcToRegion(request);
+    return sendRpcToRegion(request).addCallback(APPEND_CB);
   }
+  
+  /** Callback to type-check responses of {@link AppendRequest}.  */
+  // TODO - this should really return a KeyValue or whatever HTable returns. For
+  // now we'll keep an object as that's what OpenTSDB expects.
+  private static final class AppendCB implements Callback<Object, Object> {
+    public Object call(final Object response) {
+      if (response == null) {
+        return null;
+      } else if (response instanceof KeyValue) {
+        return (KeyValue)response;
+      } else if (response instanceof MultiAction.MultiActionSuccess) {
+        return null;
+      } else {
+        throw new InvalidResponseException(KeyValue.class, response);
+      }
+    }
+
+    public String toString() {
+      return "type append response";
+    }
+
+  }
+  
+  /** Singleton callback for responses of {@link AppendRequest}.  */
+  private static final AppendCB APPEND_CB = new AppendCB();
   
   /**
    * Atomic Compare-And-Set (CAS) on a single cell.

@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2015  The Async HBase Authors.  All rights reserved.
+ * Copyright (C) 2015-2016  The Async HBase Authors.  All rights reserved.
  * This file is part of Async HBase.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -27,10 +27,15 @@
 package org.hbase.async;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
+import static org.mockito.Matchers.any;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
+import java.util.AbstractMap;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -39,8 +44,11 @@ import org.hbase.async.generated.ClientPB.MultiResponse;
 import org.hbase.async.generated.ClientPB.RegionActionResult;
 import org.hbase.async.generated.ClientPB.ResultOrException;
 import org.hbase.async.generated.ClientPB.RegionActionResult.Builder;
+import org.jboss.netty.buffer.ChannelBuffer;
 import org.junit.Test;
 import org.junit.runner.RunWith;
+import org.mockito.invocation.InvocationOnMock;
+import org.mockito.stubbing.Answer;
 import org.powermock.core.classloader.annotations.PrepareForTest;
 import org.powermock.modules.junit4.PowerMockRunner;
 
@@ -51,6 +59,87 @@ public class TestMultiAction extends BaseTestHBaseClient {
       mkregion("table", "table,A,1234567890");
   protected static final RegionInfo region3 = 
       mkregion("table", "table,B,1234567890");
+  
+  @Test
+  public void multiComparator() throws Exception {
+    PutRequest put1 = new PutRequest(TABLE, KEY, FAMILY, QUALIFIER, VALUE);
+    put1.region = region;
+    PutRequest put2 = new PutRequest(TABLE, KEY, FAMILY, QUALIFIER, VALUE);
+    put2.region = region;
+    
+    // same
+    assertEquals(0, MultiAction.MULTI_CMP.compare(put1, put2));
+    
+    // diff region on 2
+    put2.region = mkregion("table", "table,a,1234567890");
+    assertTrue(MultiAction.MULTI_CMP.compare(put1, put2) < 0);
+    
+    // diff region on 1
+    put1.region = mkregion("table", "table,a,1234567890");
+    put2.region = region;
+    assertTrue(MultiAction.MULTI_CMP.compare(put1, put2) > 0);
+    
+    // diff table on 2
+    put1.region = region;
+    put2.region = mkregion("table", "atable,,1234567890");
+    assertTrue(MultiAction.MULTI_CMP.compare(put1, put2) > 0);
+    
+    // diff table on 1
+    put1.region = mkregion("table", "atable,,1234567890");
+    put2.region = region;
+    assertTrue(MultiAction.MULTI_CMP.compare(put1, put2) < 0);
+    
+    // different RPC types
+    DeleteRequest delete1 = new DeleteRequest(TABLE, KEY, FAMILY, QUALIFIER);
+    delete1.region = region;
+    put1.region = region;
+    put2.region = region;
+    assertTrue(MultiAction.MULTI_CMP.compare(delete1, put2) < 0);
+    assertTrue(MultiAction.MULTI_CMP.compare(put1, delete1) > 0);
+    
+    // different keys
+    put1 = new PutRequest(TABLE, KEY2, FAMILY, QUALIFIER, VALUE);
+    put1.region = region;
+    assertTrue(MultiAction.MULTI_CMP.compare(put1, put2) > 0);
+    assertTrue(MultiAction.MULTI_CMP.compare(put2, put1) < 0);
+    
+    // different families
+    put1 = new PutRequest(TABLE, KEY, "t".getBytes(), QUALIFIER, VALUE);
+    put1.region = region;
+    assertTrue(MultiAction.MULTI_CMP.compare(put1, put2) > 0);
+    assertTrue(MultiAction.MULTI_CMP.compare(put2, put1) < 0);
+    
+    // apparently we don't care about qualifiers!
+    put1 = new PutRequest(TABLE, KEY, FAMILY, "hobbes".getBytes(), VALUE);
+    put1.region = region;
+    assertEquals(0, MultiAction.MULTI_CMP.compare(put1, put2));
+  }
+
+  @Test
+  public void multiComparatorErrors() throws Exception {
+    PutRequest put1 = new PutRequest(TABLE, KEY, FAMILY, QUALIFIER, VALUE);
+    put1.region = region;
+    PutRequest put2 = new PutRequest(TABLE, KEY, FAMILY, QUALIFIER, VALUE);
+    
+    // missing region
+    try {
+      MultiAction.MULTI_CMP.compare(put1, put2);
+      fail("Excepted an NPE");
+    } catch (NullPointerException e) { }
+    
+    // null rpcs
+    try {
+      MultiAction.MULTI_CMP.compare(put1, null);
+      fail("Excepted an NPE");
+    } catch (NullPointerException e) { }
+    
+    try {
+      MultiAction.MULTI_CMP.compare(null, put1);
+      fail("Excepted an NPE");
+    } catch (NullPointerException e) { }
+    
+    // ctors for the RPCs *should* prevent null keys, codes and families
+  }
   
   @Test
   public void add() throws Exception {
@@ -406,11 +495,16 @@ public class TestMultiAction extends BaseTestHBaseClient {
   @Test
   public void deserializeAppendsWithResponse() throws Exception {
     final List<ResultOrException> results = new ArrayList<ResultOrException>(2);
-    final List<KeyValue> kvs = new ArrayList<KeyValue>(2);
+    
+    // in each result, there will be one cell data responsed
+    final List<KeyValue> kvs = new ArrayList<KeyValue>(1);
     kvs.add(new KeyValue(KEY, FAMILY, QUALIFIER, 1, VALUE));
-    kvs.add(new KeyValue(KEY, FAMILY, QUALIFIER, 2, VALUE));
     results.add(PBufResponses.kvsToROE(kvs, 0));
-    results.add(PBufResponses.kvsToROE(kvs, 1));
+    
+    // in each result, there will be one cell data responsed
+    final List<KeyValue> kvs1 = new ArrayList<KeyValue>(1);
+    kvs1.add(new KeyValue(KEY, FAMILY, QUALIFIER, 2, VALUE));
+    results.add(PBufResponses.kvsToROE(kvs1, 1));
 
     AppendRequest append1 = new AppendRequest(TABLE, KEY, FAMILY, QUALIFIER, VALUE);
     append1.region = region;
@@ -462,11 +556,16 @@ public class TestMultiAction extends BaseTestHBaseClient {
   @Test
   public void deserializAppendsMixedResponse() throws Exception {
     final List<ResultOrException> results = new ArrayList<ResultOrException>(2);
-    final List<KeyValue> kvs = new ArrayList<KeyValue>(2);
+    
+    // in each result, there will be one cell data responsed
+    final List<KeyValue> kvs = new ArrayList<KeyValue>(1);
     kvs.add(new KeyValue(KEY, FAMILY, QUALIFIER, 1, VALUE));
-    kvs.add(new KeyValue(KEY, FAMILY, QUALIFIER, 2, VALUE));
     results.add(PBufResponses.kvsToROE(kvs, 0));
-    results.add(PBufResponses.kvsToROE(kvs, 2));
+    
+    // in each result, there will be one cell data responsed
+    final List<KeyValue> kvs2 = new ArrayList<KeyValue>(1);
+    kvs2.add(new KeyValue(KEY, FAMILY, QUALIFIER, 2, VALUE));
+    results.add(PBufResponses.kvsToROE(kvs2, 2));
 
     AppendRequest append1 = new AppendRequest(TABLE, KEY, FAMILY, QUALIFIER, VALUE);
     append1.region = region;
@@ -497,12 +596,19 @@ public class TestMultiAction extends BaseTestHBaseClient {
   @Test
   public void deserializAppendsAndException() throws Exception {
     final List<ResultOrException> results = new ArrayList<ResultOrException>(2);
-    final List<KeyValue> kvs = new ArrayList<KeyValue>(2);
+    
+    // in each result, there will be one cell data responsed
+    final List<KeyValue> kvs = new ArrayList<KeyValue>(1);
     kvs.add(new KeyValue(KEY, FAMILY, QUALIFIER, 1, VALUE));
-    kvs.add(new KeyValue(KEY, FAMILY, QUALIFIER, 2, VALUE));
     results.add(PBufResponses.kvsToROE(kvs, 0));
+    
+    // in this result, there will be exception
     results.add(PBufResponses.generateException(new RuntimeException("Boo!"), 1));
-    results.add(PBufResponses.kvsToROE(kvs, 2));
+    
+    // in each result, there will be one cell data responsed
+    final List<KeyValue> kvs2 = new ArrayList<KeyValue>(1);
+    kvs2.add(new KeyValue(KEY, FAMILY, QUALIFIER, 2, VALUE));
+    results.add(PBufResponses.kvsToROE(kvs2, 2));
 
     AppendRequest append1 = new AppendRequest(TABLE, KEY, FAMILY, QUALIFIER, VALUE);
     append1.region = region;
@@ -881,4 +987,219 @@ public class TestMultiAction extends BaseTestHBaseClient {
 //    assertTrue(decoded.result(2) == MultiAction.SUCCESS);
 //    assertTrue(decoded.result(3) == MultiAction.SUCCESS);
 //  }
+  
+  @Test
+  public void deserializeGetsWithResponse() throws Exception {
+    final List<ResultOrException> results = new ArrayList<ResultOrException>(2);
+    final List<KeyValue> kvs = new ArrayList<KeyValue>(2);
+    kvs.add(new KeyValue(KEY, FAMILY, QUALIFIER, 1, VALUE));
+    kvs.add(new KeyValue(KEY, FAMILY, QUALIFIER, 2, VALUE));
+    results.add(PBufResponses.kvsToROE(kvs, 0));
+    results.add(PBufResponses.kvsToROE(kvs, 1));
+
+    GetRequest get1 = new GetRequest(TABLE, KEY, FAMILY, QUALIFIER);
+    get1.region = region;
+    GetRequest get2 = new GetRequest(TABLE, KEY, FAMILY, "myqual".getBytes());
+    get2.region = region;
+    
+    MultiAction multi = new MultiAction();
+    multi.add(get1);
+    multi.add(get2);
+    
+    final MultiAction.Response decoded = 
+        (MultiAction.Response)multi.deserialize(
+            PBufResponses.encodeResponse(
+                PBufResponses.generateMultiActionResponse(results)), 0);
+    
+    assertEquals(2, decoded.size());
+    
+    Object result1 = decoded.result(0);
+    assertTrue(result1 instanceof ArrayList<?>);
+    ArrayList<KeyValue> result1_cells = (ArrayList<KeyValue>)(result1);
+    assertEquals(2, result1_cells.size());
+    assertEquals(1, result1_cells.get(0).timestamp());
+    assertEquals(2, result1_cells.get(1).timestamp());
+    
+    Object result2 = decoded.result(1);
+    assertTrue(result2 instanceof ArrayList<?>);
+    ArrayList<KeyValue> result2_cells = (ArrayList<KeyValue>)(result2);
+    assertEquals(2, result2_cells.size());
+    assertEquals(1, result2_cells.get(0).timestamp());
+    assertEquals(2, result2_cells.get(1).timestamp());
+  }
+  
+  @Test
+  public void deserializeGetsWithResponseException() throws Exception {
+    final List<ResultOrException> results = new ArrayList<ResultOrException>(2);
+    
+    // the first result with a cell data
+    final List<KeyValue> kvs = new ArrayList<KeyValue>(2);
+    kvs.add(new KeyValue(KEY, FAMILY, QUALIFIER, 1, VALUE));
+    results.add(PBufResponses.kvsToROE(kvs, 0));
+    
+    // the second result with an runtime exception
+    results.add(PBufResponses.generateException(new RuntimeException("foo!"), 1));
+
+    GetRequest get1 = new GetRequest(TABLE, KEY, FAMILY, QUALIFIER);
+    get1.region = region;
+    GetRequest get2 = new GetRequest(TABLE, KEY, FAMILY, "myqual".getBytes());
+    get2.region = region;
+    
+    MultiAction multi = new MultiAction();
+    multi.add(get1);
+    multi.add(get2);
+    
+    final MultiAction.Response decoded = 
+        (MultiAction.Response)multi.deserialize(
+            PBufResponses.encodeResponse(
+                PBufResponses.generateMultiActionResponse(results)), 0);
+    
+    assertEquals(2, decoded.size());
+    
+    Object result1 = decoded.result(0);
+    assertTrue(result1 instanceof ArrayList<?>);
+    ArrayList<KeyValue> result1_cells = (ArrayList<KeyValue>)(result1);
+    assertEquals(1, result1_cells.size());
+    assertEquals(1, result1_cells.get(0).timestamp());
+    
+    Object result2 = decoded.result(1);
+    assertTrue(result2 instanceof HBaseException);
+  }
+  
+  @Test
+  public void deserializeGetsWithAssociatedCells() throws Exception {
+    final List<ResultOrException> results = new ArrayList<ResultOrException>(2);
+    results.add(PBufResponses.generateAssociatedROE(1, 0));
+    results.add(PBufResponses.generateAssociatedROE(1, 1));
+
+    GetRequest get1 = new GetRequest(TABLE, KEY, FAMILY, QUALIFIER);
+    get1.region = region;
+    GetRequest get2 = new GetRequest(TABLE, KEY, FAMILY, "myqual".getBytes());
+    get2.region = region;
+    
+    MultiAction multi = new MultiAction();
+    multi.add(get1);
+    multi.add(get2);
+    
+    // two associated cells following the PB response
+    final List<KeyValue> kvs = new ArrayList<KeyValue>(2);
+    kvs.add(new KeyValue(KEY, FAMILY, QUALIFIER, 1, VALUE));
+    kvs.add(new KeyValue(KEY, FAMILY, QUALIFIER, 2, VALUE));
+    AbstractMap.SimpleEntry<ChannelBuffer, Integer> cbuf_cells = PBufResponses.encodeResponseWithAssocaitedCells(
+        PBufResponses.generateMultiActionResponse(results), kvs);
+    
+    final MultiAction.Response decoded = 
+        (MultiAction.Response)multi.deserialize(cbuf_cells.getKey(), cbuf_cells.getValue().intValue());
+    
+    assertEquals(2, decoded.size());
+    
+    Object result1 = decoded.result(0);
+    assertTrue(result1 instanceof ArrayList<?>);
+    ArrayList<KeyValue> result1_cells = (ArrayList<KeyValue>)(result1);
+    assertEquals(1, result1_cells.size());
+    assertEquals(1, result1_cells.get(0).timestamp());
+    
+    Object result2 = decoded.result(1);
+    assertTrue(result2 instanceof ArrayList<?>);
+    ArrayList<KeyValue> result2_cells = (ArrayList<KeyValue>)(result2);
+    assertEquals(1, result2_cells.size());
+    assertEquals(2, result2_cells.get(0).timestamp());
+  }
+  
+  @Test
+  public void deserializeGetsWithAssociatedCellsAndException() throws Exception {
+    final List<ResultOrException> results = new ArrayList<ResultOrException>(2);
+    results.add(PBufResponses.generateAssociatedROE(1, 0));
+    results.add(PBufResponses.generateException(new RuntimeException("foo!"), 1));
+
+    GetRequest get1 = new GetRequest(TABLE, KEY, FAMILY, QUALIFIER);
+    get1.region = region;
+    GetRequest get2 = new GetRequest(TABLE, KEY, FAMILY, "myqual".getBytes());
+    get2.region = region;
+    
+    MultiAction multi = new MultiAction();
+    multi.add(get1);
+    multi.add(get2);
+    
+    // two associated cells following the PB response
+    final List<KeyValue> kvs = new ArrayList<KeyValue>(1);
+    kvs.add(new KeyValue(KEY, FAMILY, QUALIFIER, 1, VALUE));
+    AbstractMap.SimpleEntry<ChannelBuffer, Integer> cbuf_cells = PBufResponses.encodeResponseWithAssocaitedCells(
+        PBufResponses.generateMultiActionResponse(results), kvs);
+    
+    final MultiAction.Response decoded = 
+        (MultiAction.Response)multi.deserialize(cbuf_cells.getKey(), cbuf_cells.getValue().intValue());
+    
+    assertEquals(2, decoded.size());
+    
+    Object result1 = decoded.result(0);
+    assertTrue(result1 instanceof ArrayList<?>);
+    ArrayList<KeyValue> result1_cells = (ArrayList<KeyValue>)(result1);
+    assertEquals(1, result1_cells.size());
+    assertEquals(1, result1_cells.get(0).timestamp());
+    
+    Object result2 = decoded.result(1);
+    assertTrue(result2 instanceof HBaseException);
+  }
+  
+  @Test
+  public void simpleMultiGets() throws Exception {
+    final List<GetRequest> gets = new ArrayList<GetRequest>();
+    final GetRequest get = new GetRequest(TABLE, KEY);
+    gets.add(get);
+    final GetRequest get2 = new GetRequest(TABLE, KEY2);
+    gets.add(get2);
+    
+    final ArrayList<KeyValue> row = new ArrayList<KeyValue>(1);
+    row.add(KV);
+    
+    final KeyValue KV2 = new KeyValue(KEY2, FAMILY, QUALIFIER, VALUE);
+    final ArrayList<KeyValue> row2 = new ArrayList<KeyValue>(1);
+    row2.add(KV2);
+
+    when(regionclient.isAlive()).thenReturn(true);
+    doAnswer(new Answer() {
+      public Object answer(final InvocationOnMock invocation) {
+        get.getDeferred().callback(row);
+        get2.getDeferred().callback(row2);
+        return null;
+      }
+    }).when(regionclient).sendRpc(any(MultiAction.class));
+
+    List<GetResultOrException> result = client.get(gets).joinUninterruptibly();
+    assertSame(row, result.get(0).getCells());
+    assertSame(row2, result.get(1).getCells());
+  }
+  
+  @Test
+  public void simpleMultiGetsException() throws Exception {
+    final List<GetRequest> gets = new ArrayList<GetRequest>();
+    final GetRequest get = new GetRequest(TABLE, KEY);
+    gets.add(get);
+    final GetRequest get2 = new GetRequest(TABLE, KEY2);
+    gets.add(get2);
+    
+    final ArrayList<KeyValue> row = new ArrayList<KeyValue>(1);
+    row.add(KV);
+    
+    final KeyValue KV2 = new KeyValue(KEY2, FAMILY, QUALIFIER, VALUE);
+    final ArrayList<KeyValue> row2 = new ArrayList<KeyValue>(1);
+    row2.add(KV2);
+
+    when(regionclient.isAlive()).thenReturn(true);
+    doAnswer(new Answer() {
+      public Object answer(final InvocationOnMock invocation) {
+        get.getDeferred().callback(row);
+        get2.getDeferred().callback(new NoSuchColumnFamilyException("boo", get2));
+        return null;
+      }
+    }).when(regionclient).sendRpc(any(MultiAction.class));
+
+    List<GetResultOrException> result = client.get(gets).joinUninterruptibly();
+    assertSame(row, result.get(0).getCells());
+    assertTrue(null == result.get(0).getException());
+    assertTrue(null == result.get(1).getCells());
+    assertTrue(result.get(1).getException() != null);
+  }
+  
 }

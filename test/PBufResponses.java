@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2015  The Async HBase Authors.  All rights reserved.
+ * Copyright (C) 2015-2016  The Async HBase Authors.  All rights reserved.
  * This file is part of Async HBase.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -26,6 +26,7 @@
  */
 package org.hbase.async;
 
+import java.util.AbstractMap;
 import java.util.List;
 
 import org.hbase.async.generated.ClientPB;
@@ -181,6 +182,13 @@ public class PBufResponses {
         .setResult(result).setIndex(i).build();
   }
   
+  static ResultOrException generateAssociatedROE(final int associated_cell_cnt, 
+      final int result_index) {
+    final Result.Builder result = Result.newBuilder();
+    result.setAssociatedCellCount(associated_cell_cnt);
+    return ResultOrException.newBuilder().setResult(result).setIndex(result_index).build();
+  }
+  
   /**
    * Generates an empty result for an RPC such as returned from a PUT or DELETE
    * @param i The index of the parent RPC in the multi-action batch
@@ -202,6 +210,20 @@ public class PBufResponses {
   }
   
   /**
+   * Override that returns an exception with the proper HBase class name for a 
+   * multi action response.
+   * @param class_name The name of the remote class
+   * @param msg The message to encode
+   * @param i The index of the parent RPC in the batch
+   * @return The exception
+   */
+  static ResultOrException generateException(final String class_name, 
+      final String msg, final int i) {
+    return ResultOrException.newBuilder()
+        .setException(buildException(class_name, msg)).setIndex(i).build();
+  }
+  
+  /**
    * Encodes a response WITHOUT the frame length or header. Useful for 
    * individual parsing calls
    * @param response The response to serialize
@@ -220,6 +242,36 @@ public class PBufResponses {
   }
   
   /**
+   * Encodes a response with associated cells, WITHOUT the frame length or header. It should be 
+   * used for the {@link HBaseRpc} deserialize parsing.
+   * @param response
+   * @param associated_cells
+   * @return
+   * @throws Exception
+   */
+  static AbstractMap.SimpleEntry<ChannelBuffer, Integer> encodeResponseWithAssocaitedCells(
+      final GeneratedMessageLite response, final List<KeyValue> associated_cells) throws Exception {
+    final int pblen = response.getSerializedSize();
+    final int vlen = CodedOutputStream.computeRawVarint32Size(pblen);
+    final byte[] buf = new byte[vlen + pblen];
+    final CodedOutputStream out = CodedOutputStream.newInstance(buf, 0, vlen + pblen);
+
+    out.writeMessageNoTag(response);
+    ChannelBuffer cbuf = ChannelBuffers.dynamicBuffer();
+    cbuf.writeBytes(buf);
+
+    int rbyte_cnt = cbuf.readableBytes();
+
+    for (KeyValue kv : associated_cells) {
+      // we don't care the type, useless
+      kv.serialize(cbuf, KeyValue.PUT);
+    } // end for
+    int cells_block_size = cbuf.readableBytes() - rbyte_cnt;
+    return new AbstractMap.SimpleEntry<ChannelBuffer, Integer>(
+        cbuf, cells_block_size);
+  }
+  
+  /**
    * Shamelessly pulled from org.apache.hadoop.hbase.protobuf.ResponseConverter
    * to encode an exception as a PBuf response
    * @param t The exception to encode
@@ -234,6 +286,20 @@ public class PBufResponses {
     return parameterBuilder.build();
   }
 
+  /**
+   * Override that uses the proper remote class name
+   * @param class_name The exception to encode
+   * @param msg The message to encode
+   * @return A NameBytesPair to store in a response
+   */
+  static NameBytesPair buildException(final String class_name, final String msg) {
+    NameBytesPair.Builder parameterBuilder = NameBytesPair.newBuilder();
+    parameterBuilder.setName(class_name);
+    parameterBuilder.setValue(
+      ByteString.copyFromUtf8(msg));
+    return parameterBuilder.build();
+  }
+  
   /**
    * Generates a single PBuf with an exception instead of a response. For use,
    * e.g., in responding to a GetRequest with an NSRE

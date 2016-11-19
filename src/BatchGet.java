@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2010-2012  The Async HBase Authors.  All rights reserved.
+ * Copyright (C) 2016  The Async HBase Authors.  All rights reserved.
  * This file is part of Async HBase.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -33,17 +33,10 @@ import org.hbase.async.generated.ClientPB;
 import org.hbase.async.generated.FilterPB;
 import org.hbase.async.generated.HBasePB;
 import org.jboss.netty.buffer.ChannelBuffer;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 final class BatchGet extends HBaseRpc {
   private static final byte[] EMPTY_BYTES = new byte[] { 0 };
-
-  /** RPC method name for HBase before 0.92.  */
-  private static final byte[] MULTI_PUT = {
-      'm', 'u', 'l', 't', 'i', 'P', 'u', 't'
-  };
-
+  
   /** RPC method name for HBase 0.92 to 0.94.  */
   private static final byte[] MULTI = { 'm', 'u', 'l', 't', 'i' };
 
