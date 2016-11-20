@@ -1219,6 +1219,7 @@ public final class HBaseClient {
       }
     };
 
+  /** Singleton callback to handle responses of multi-get RPCs. */ 
   private static final Callback<GetResultOrException, Object> MUL_GOT_ONE = 
       new Callback<GetResultOrException, Object>() {
         public GetResultOrException call(final Object response) {
@@ -1239,6 +1240,14 @@ public final class HBaseClient {
         }
     };
 
+  /**
+   * Method to issue multiple get requests to HBase in a batch. This can avoid
+   * bottlenecks in region clients and improve response time.
+   * @param requests A list of one or more GetRequests.
+   * @return A deferred grouping of result or exceptions. Note that this API may
+   * return a DeferredGroupException if one or more calls failed.
+   * @since 1.8
+   */
   public Deferred<List<GetResultOrException>> get(final List<GetRequest> requests) {
     return Deferred.groupInOrder(multiGet(requests))
         .addCallback(
@@ -1250,6 +1259,14 @@ public final class HBaseClient {
         );
   }
 
+  /**
+   * Method to issue multiple get requests to HBase in a batch. This can avoid
+   * bottlenecks in region clients and improve response time.
+   * @param requests A list of one or more get requests.
+   * @return A list of individual deferred get requests that may contain a result,
+   * exception or throw an exception.
+   * @since 1.8
+   */
   private List<Deferred<GetResultOrException>> multiGet(final List<GetRequest> requests) {
     
     final class MultiActionCallback implements Callback<Object, Object> {
