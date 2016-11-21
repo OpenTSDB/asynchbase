@@ -61,12 +61,14 @@ BUILT_SOURCES := $(asynchbase_PROTOS:protobuf/%.proto=$(PROTOBUF_GEN_DIR)/%PB.ja
 asynchbase_SOURCES := \
 	src/AppendRequest.java	\
 	src/AtomicIncrementRequest.java	\
+	src/MultiColumnAtomicIncrementRequest.java	\
 	src/BatchableRpc.java	\
 	src/BinaryComparator.java	\
 	src/BinaryPrefixComparator.java	\
 	src/BitComparator.java	\
 	src/BrokenMetaException.java	\
 	src/BufferedIncrement.java	\
+	src/BufferedMultiColumnIncrement.java	\
 	src/Bytes.java	\
 	src/ClientStats.java	\
 	src/ColumnPaginationFilter.java	\

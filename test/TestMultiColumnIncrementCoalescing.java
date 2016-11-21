@@ -35,15 +35,15 @@ import java.util.ArrayList;
 import java.util.Random;
 
 /**
- * Integration test for increment coalescing.
+ * Integration test for multi-column increment coalescing.
  *
  * Requires a locally running HBase cluster.
  */
 @Ignore // ignore for test runners
-final class TestIncrementCoalescing {
+final class TestMultiColumnIncrementCoalescing {
 
   private static final Logger LOG =
-    Common.logger(TestIncrementCoalescing.class);
+    Common.logger(TestMultiColumnIncrementCoalescing.class);
 
   public static void main(final String[] args) throws Exception {
     if (LOG.isDebugEnabled()) {
@@ -54,7 +54,7 @@ final class TestIncrementCoalescing {
       LOG.error("Use JVM_ARGS='-Xmx2g -Xms2g'.");
       System.exit(3);
     }
-    final HBaseClient client = Common.getOpt(TestIncrementCoalescing.class,
+    final HBaseClient client = Common.getOpt(TestMultiColumnIncrementCoalescing.class,
                                              args);
     final byte[] table = args[0].getBytes();
     final byte[] family = args[1].getBytes();
@@ -81,7 +81,7 @@ final class TestIncrementCoalescing {
   /** Number of different keys we'll do increments on.  */
   private static final int NUM_ROWS = 1000;
 
-  private static final byte[] QUALIFIER = {'c', 'n', 't'};
+  private static final byte[][] QUALIFIERS = { new byte[] {'c', 'n', 't', '1'}, new byte[] {'c', 'n', 't', '2'}};
 
   private static void test(final HBaseClient client,
                            final byte[] table,
@@ -102,16 +102,16 @@ final class TestIncrementCoalescing {
           final int r = rnd.nextInt(NUM_ROWS);
           final int n = r + NUM_ROWS;
           for (int i = r; i < n; i++) {
-            icv(i);
+            micv(i);
           }
         }
       }
 
-      private void icv(final int i) {
+      private void micv(final int i) {
         final byte[] key = key(i);
-        final AtomicIncrementRequest incr =
-          new AtomicIncrementRequest(table, key, family, QUALIFIER);
-        client.bufferAtomicIncrement(incr).addErrback(LOG_ERROR);
+        final MultiColumnAtomicIncrementRequest incr =
+          new MultiColumnAtomicIncrementRequest(table, key, family, QUALIFIERS);
+        client.bufferMultiColumnAtomicIncrement(incr).addErrback(LOG_ERROR);
       }
 
     }
@@ -120,8 +120,10 @@ final class TestIncrementCoalescing {
 
     LOG.info("Deleting existing rows...");
     for (int i = 0; i < NUM_ROWS; i++) {
-      client.delete(new DeleteRequest(table, key(i), family, QUALIFIER))
-        .addErrback(LOG_ERROR);
+      for (byte[] qualifier: QUALIFIERS) {
+        client.delete(new DeleteRequest(table, key(i), family, qualifier))
+            .addErrback(LOG_ERROR);
+      }
     }
     client.flush().join();
     LOG.info("Done deleting existing rows.");
@@ -149,19 +151,21 @@ final class TestIncrementCoalescing {
     LOG.info("  due to cache evictions: " + stats.evictionCount());
 
     LOG.info("Reading all counters back from HBase and checking values...");
-    final Scanner scanner = client.newScanner(table);
-    scanner.setStartKey(key(0));
-    scanner.setStopKey(key(NUM_ROWS));
-    scanner.setFamily(family);
-    scanner.setQualifier(QUALIFIER);
-    ArrayList<ArrayList<KeyValue>> rows;
-    final long expected = nthreads * ICV_PER_ROW;
-    while ((rows = scanner.nextRows().join()) != null) {
-      for (final ArrayList<KeyValue> row : rows) {
-        final long value = Bytes.getLong(row.get(0).value());
-        if (value != expected) {
-          LOG.error("Invalid count in " + row.get(0) + ": " + value);
-          failed = true;
+    for (byte[] qualifier: QUALIFIERS) {
+      final Scanner scanner = client.newScanner(table);
+      scanner.setStartKey(key(0));
+      scanner.setStopKey(key(NUM_ROWS));
+      scanner.setFamily(family);
+      scanner.setQualifier(qualifier);
+      ArrayList<ArrayList<KeyValue>> rows;
+      final long expected = nthreads * ICV_PER_ROW;
+      while ((rows = scanner.nextRows().join()) != null) {
+        for (final ArrayList<KeyValue> row : rows) {
+          final long value = Bytes.getLong(row.get(0).value());
+          if (value != expected) {
+            LOG.error("Invalid count in " + row.get(0) + ": " + value);
+            failed = true;
+          }
         }
       }
     }
