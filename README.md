@@ -21,12 +21,14 @@ application.
 The [GitHub repo branches](https://github.com/OpenTSDB/asynchbase) are laid 
 out as follows:
 
-* `maintenance`: This was the last stable version of AsyncHBase and should only
-  have bug fix PRs created against it. Bugs should also be patched in master and
-  next.
+* [`maintenance`](https://github.com/OpenTSDB/opentsdb/tree/maintenance): This
+  was the last stable version of AsyncHBase and should only have bug fix PRs
+  created against it. Bugs should also be patched in master and next.
 
-* `master`: This is the current stable version of AsyncHBase and should only have
-  bug fix PRs created against it. Bug should also be patched in the next branch.
+* [`master`](https://github.com/OpenTSDB/opentsdb/tree/master): This is the
+  current stable version of AsyncHBase and should only have bug fix PRs created
+  against it. Bug should also be patched in the next branch.
 
-* `next`: This is the development version of AsyncHBase and all new features or
-  API changes should be written against this.
+* [`next`](https://github.com/OpenTSDB/opentsdb/tree/next): This is the
+  development version of AsyncHBase and all new features or API changes should
+  be written against this.
