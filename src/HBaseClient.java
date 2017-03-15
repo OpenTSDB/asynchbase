@@ -3228,15 +3228,15 @@ public final class HBaseClient {
     }
 
     LOG.warn("Couldn't connect to the RegionServer @ " + hostport);
-    final int colon = hostport.indexOf(':', 1);
-    if (colon < 1) {
+    final int lastColon = hostport.lastIndexOf(':');
+    if (lastColon < 1) {
       LOG.error("WTF?  Should never happen!  No `:' found in " + hostport);
       return null;
     }
-    final String host = getIP(hostport.substring(0, colon));
+    final String host = getIP(hostport.substring(0, lastColon));
     int port;
     try {
-      port = parsePortNumber(hostport.substring(colon + 1,
+      port = parsePortNumber(hostport.substring(lastColon + 1,
                                                 hostport.length()));
     } catch (NumberFormatException e) {
       LOG.error("WTF?  Should never happen!  Bad port in " + hostport, e);
