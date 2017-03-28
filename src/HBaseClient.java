@@ -28,6 +28,7 @@ package org.hbase.async;
 
 import java.io.IOException;
 import java.net.InetAddress;
+import java.net.Inet6Address;
 import java.net.InetSocketAddress;
 import java.net.SocketAddress;
 import java.net.UnknownHostException;
@@ -3811,6 +3812,13 @@ public final class HBaseClient {
    * <p>
    * <strong>This method can block</strong> as there is no API for
    * asynchronous DNS resolution in the JDK.
+   *
+   * IPv4 / IPv6 handling:
+   *
+   * if (JVM is running with -Djava.net.preferIPv6Addresses=true &&
+   *   remote host has IPv6 address) -> return IPv6 address
+   * otherwise return first address that remote host has (probably v4).
+   *
    * @param host The hostname to resolve.
    * @return The IP address associated with the given hostname,
    * or {@code null} if the address couldn't be resolved.
@@ -3818,7 +3826,23 @@ public final class HBaseClient {
   private static String getIP(final String host) {
     final long start = System.nanoTime();
     try {
-      final String ip = InetAddress.getByName(host).getHostAddress();
+      boolean preferV6 = Boolean.valueOf(
+        System.getProperty("java.net.preferIPv6Addresses"));
+      final String ip;
+      if (preferV6) {
+        InetAddress ipv6 = null;
+        for (InetAddress ia : InetAddress.getAllByName(host))  {
+          if (ia instanceof Inet6Address) {
+            ipv6 = ia;
+            break;
+          }
+        }
+        ip = (ipv6 != null)? ipv6.getHostAddress() :
+          InetAddress.getByName(host).getHostAddress();
+      } else {
+        ip = InetAddress.getByName(host).getHostAddress();
+      }
+
       final long latency = System.nanoTime() - start;
       if (latency > 500000/*ns*/ && LOG.isDebugEnabled()) {
         LOG.debug("Resolved IP of `" + host + "' to "
