@@ -3830,7 +3830,10 @@ public final class HBaseClient {
         System.getProperty("java.net.preferIPv6Addresses"));
       final String ip;
       if (preferV6) {
+        LOG.debug("Trying to get IPv6 address for host: " + host);
         InetAddress ipv6 = null;
+        LOG.debug("All resolved IPs for host: " + host + " are: " +
+          Arrays.toString(InetAddress.getAllByName(host)));
         for (InetAddress ia : InetAddress.getAllByName(host))  {
           if (ia instanceof Inet6Address) {
             ipv6 = ia;
@@ -3840,8 +3843,11 @@ public final class HBaseClient {
         ip = (ipv6 != null)? ipv6.getHostAddress() :
           InetAddress.getByName(host).getHostAddress();
       } else {
+        LOG.debug("Trying to get IPv4 address for host: " + host);
         ip = InetAddress.getByName(host).getHostAddress();
       }
+      LOG.info("Resolved IP address for host: " + host + " is: " + ip);
+
 
       final long latency = System.nanoTime() - start;
       if (latency > 500000/*ns*/ && LOG.isDebugEnabled()) {
