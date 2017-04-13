@@ -65,17 +65,17 @@ public final class KeyValue implements Comparable<KeyValue> {
   private final byte[] qualifier;
   private final byte[] value;
   private final long timestamp;
-  //private final byte type;  // Not needed for us ATM.
+  private final byte type;
 
   // Note: type can be one of:
   //   -  4  0b00000100  Put
-  static final byte PUT = 4;
+  public static final byte PUT = 4;
   //   -  8  0b00001000  Delete        (delete the specified version of a cell)
-  static final byte DELETE = 8;
+  public static final byte DELETE = 8;
   //   - 12  0b00001100  DeleteColumn  (delete all previous versions of a cell)
-  static final byte DELETE_COLUMN = 12;
+  public static final byte DELETE_COLUMN = 12;
   //   - 14  0b01110010  DeleteFamily  (delete all cells within a family)
-  static final byte DELETE_FAMILY = 14;
+  public static final byte DELETE_FAMILY = 14;
   // (Not sure how those have been assigned...  Randomly maybe?)
 
   /**
@@ -95,19 +95,20 @@ public final class KeyValue implements Comparable<KeyValue> {
   public KeyValue(final byte[] key,
                   final byte[] family, final byte[] qualifier,
                   final long timestamp,
-                  //final byte type,
+                  final byte type,
                   final byte[] value) {
     checkKey(key);
     checkFamily(family);
     checkQualifier(qualifier);
     checkTimestamp(timestamp);
     checkValue(value);
+    checkType(type);
     this.key = key;
     this.family = family;
     this.qualifier = qualifier;
     this.value = value;
     this.timestamp = timestamp;
-    //this.type = type;
+    this.type = type;
   }
 
   /**
@@ -125,8 +126,9 @@ public final class KeyValue implements Comparable<KeyValue> {
    */
   public KeyValue(final byte[] key,
                   final byte[] family, final byte[] qualifier,
+                  final byte type,
                   final byte[] value) {
-    this(key, family, qualifier, TIMESTAMP_NOW, value);
+    this(key, family, qualifier, TIMESTAMP_NOW, type, value);
   }
 
   /** Returns the row key.  */
@@ -152,9 +154,12 @@ public final class KeyValue implements Comparable<KeyValue> {
     return timestamp;
   }
 
-  //public byte type() {
-  //  return type;
-  //}
+  /**
+   * Returns the type of this KeyValue.
+   */
+  public byte type() {
+    return type;
+  }
 
   /** Returns the value, the contents of the cell.  */
   public byte[] value() {
@@ -174,8 +179,9 @@ public final class KeyValue implements Comparable<KeyValue> {
     //  return d;
     } else if ((d = Long.signum(timestamp - other.timestamp)) != 0) {
       return d;
+    } else if ((d = type - other.type) != 0) {
+        return d;
     } else {
-    //  d = type - other.type;
       d = Bytes.memcmp(value, other.value);
     }
     return d;
@@ -212,7 +218,7 @@ public final class KeyValue implements Comparable<KeyValue> {
     buf.append(", value=");
     Bytes.pretty(buf, value);
     buf.append(", timestamp=").append(timestamp);
-    //  .append(", type=").append(type);
+    buf.append(", type=").append(type);
     buf.append(')');
     return buf.toString();
   }
@@ -280,13 +286,13 @@ public final class KeyValue implements Comparable<KeyValue> {
               + qual_length + " + 8 + 1" + " != kl:" + rowkey_length);
     }
     if (prev == null) {
-      return new KeyValue(key, family, qualifier, timestamp, /*key_type,*/
+      return new KeyValue(key, family, qualifier, timestamp, key_type,
                           value);
     } else {
       return new KeyValue(Bytes.deDup(prev.key, key),
                           Bytes.deDup(prev.family, family),
                           Bytes.deDup(prev.qualifier, qualifier),
-                          timestamp, /*key_type,*/ value);
+                          timestamp, key_type, value);
     }
   }
 
@@ -313,14 +319,15 @@ public final class KeyValue implements Comparable<KeyValue> {
     final byte[] qualifier = Bytes.get(cell.getQualifier());
     final long timestamp = cell.getTimestamp();
     final byte[] value = Bytes.get(cell.getValue());
+    final byte key_type = (byte)cell.getCellType().getNumber();
     if (prev == null) {
-      return new KeyValue(key, family, qualifier, timestamp, /*key_type,*/
+      return new KeyValue(key, family, qualifier, timestamp, key_type,
                           value);
     } else {
       return new KeyValue(Bytes.deDup(prev.key, key),
                           Bytes.deDup(prev.family, family),
                           Bytes.deDup(prev.qualifier, qualifier),
-                          timestamp, /*key_type,*/ value);
+                          timestamp, key_type, value);
     }
   }
 
@@ -387,6 +394,21 @@ public final class KeyValue implements Comparable<KeyValue> {
       throw new IllegalArgumentException("Negative timestamp: " + timestamp);
     }
   }
+
+  /**
+   * Validates a type (the type of an HBase cell).
+   * @throws IllegalArgumentException if the type is invalid.
+   */
+  static void checkType(final byte type) {
+    switch (type) {
+      case 4:
+      case 8:
+      case 12:
+      case 14: return;
+    }
+    throw new IllegalArgumentException("Invalid type: " + type);
+  }
+
 
   /**
    * Validates a value (the contents of an HBase cell).
