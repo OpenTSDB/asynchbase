@@ -481,13 +481,13 @@ public abstract class HBaseRpc {
    * If true, this RPC is a probe which checks if the destination region is
    * online.
    */
-  boolean probe = false;
+  private boolean probe = false;
 
-  public boolean isProbe() {
+  boolean isProbe() {
     return probe;
   }
 
-  public void setProbe(boolean probe) {
+  void setProbe(boolean probe) {
     this.probe = probe;
   }
 
