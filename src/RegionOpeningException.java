@@ -31,37 +31,18 @@ package org.hbase.async;
  * opened or altered.
  * @since 1.7
  */
-public final class RegionOpeningException extends RecoverableException
-  implements HasFailedRpcException {
-  
+public final class RegionOpeningException extends NotServingRegionException {
+
   static final String REMOTE_CLASS =
       "org.apache.hadoop.hbase.exceptions.RegionOpeningException";
-  
-  final HBaseRpc failed_rpc;
-  
+
   /**
    * Constructor.
    * @param msg The message of the exception, potentially with a stack trace.
    * @param failed_rpc The RPC that caused this exception, if known, or null.
    */
   RegionOpeningException(final String msg, final HBaseRpc failed_rpc) {
-    super(msg);
-    this.failed_rpc = failed_rpc;
-  }
-
-  @Override
-  public String getMessage() {
-    // In many cases this exception never makes it to the outside world, thus
-    // its toString / getMessage methods are never called.  When it's called,
-    // it's typically called only once.  So it makes sense to lazily generate
-    // the message instead of always concatenating the toString representation
-    // of the RPC, which is easily large because it tends to contain long byte
-    // arrays.
-    return super.getMessage() + "\nCaused by RPC: " + failed_rpc;
-  }
-
-  public HBaseRpc getFailedRpc() {
-    return failed_rpc;
+    super(msg, failed_rpc);
   }
 
   @Override
@@ -73,5 +54,5 @@ public final class RegionOpeningException extends RecoverableException
     return new RegionOpeningException(msg.toString(), rpc);
   }
 
-  private static final long serialVersionUID = 3535495091647558710L;
+  private static final long serialVersionUID = 3886029827039374556L;
 }
