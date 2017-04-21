@@ -2015,12 +2015,13 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
       .append("(chan=")                   // = 6
       .append(chan)                       // ~64 (up to 66 when using IPv4)
       .append(", #pending_rpcs=");        // =16
-    int npending_rpcs;
-    int nedits;
-    synchronized (this) {
-      npending_rpcs = pending_rpcs == null ? 0 : pending_rpcs.size();
-      nedits = batched_rpcs == null ? 0 : batched_rpcs.size();
-    }
+    
+    // avoid synchronization
+    ArrayList<HBaseRpc> pending_rpcs = this.pending_rpcs;
+    MultiAction batched_rpcs = this.batched_rpcs;
+    int npending_rpcs = pending_rpcs == null ? 0 : pending_rpcs.size();
+    int nedits = batched_rpcs == null ? 0 : batched_rpcs.size();
+    
     buf.append(npending_rpcs)             // = 1
       .append(", #batched=")              // = 9
       .append(nedits);                    // ~ 2
