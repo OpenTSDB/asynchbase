@@ -233,7 +233,7 @@ public final class HBaseClient {
   /** New for HBase 0.95 and up: the region info for META is fixed.  */
   protected static final RegionInfo META_REGION =
     new RegionInfo(HBASE96_META, META_REGION_NAME, EMPTY_ARRAY);
-
+  private Boolean IncrementBufferDurable = true;
   /**
    * In HBase 0.95 and up, this magic number is found in a couple places.
    * It's used in the znode that points to the .META. region, to
@@ -249,26 +249,26 @@ public final class HBaseClient {
    * TODO(tsuna): Get it through the ctor to share it with others.
    */
   private final HashedWheelTimer timer;
-  
+
   /** A separate timer thread used for processing RPC timeout callbacks. We
-   * keep it separate as a bad HBase server can cause a timeout storm and we 
+   * keep it separate as a bad HBase server can cause a timeout storm and we
    * don't want to block any flushes and operations on other region servers.
    */
   private final HashedWheelTimer rpc_timeout_timer;
 
   /** Up to how many milliseconds can we buffer an edit on the client side.  */
   private volatile short flush_interval;
-  
+
   /** How many different counters do we want to keep in memory for buffering. */
   private volatile int increment_buffer_size;
-  
+
   /**
    * Low and high watermarks when buffering RPCs due to an NSRE.
    * @see #handleNSRE
    */
   private int nsre_low_watermark;
   private int nsre_high_watermark;
-  
+
   /**
    * Factory through which we will create all its channels / sockets.
    */
@@ -409,15 +409,15 @@ public final class HBaseClient {
 
   /** The configuration for this client */
   private final Config config;
-  
+
   /** Integers for thread naming */
   final static AtomicInteger BOSS_THREAD_ID = new AtomicInteger();
   final static AtomicInteger WORKER_THREAD_ID = new AtomicInteger();
   final static AtomicInteger TIMER_THREAD_ID = new AtomicInteger();
-  
+
   /** Default RPC timeout in milliseconds from the config */
   private final int rpc_timeout;
-  
+
   // ------------------------ //
   // Client usage statistics. //
   // ------------------------ //
@@ -460,7 +460,7 @@ public final class HBaseClient {
 
   /** Number calls to {@link #append}.  */
   private final Counter num_appends = new Counter();
-  
+
   /** Number calls to {@link #lockRow}.  */
   private final Counter num_row_locks = new Counter();
 
@@ -469,7 +469,7 @@ public final class HBaseClient {
 
   /** Number of {@link AtomicIncrementRequest} sent.  */
   private final Counter num_atomic_increments = new Counter();
-  
+
   /** Number of region clients closed due to being idle.  */
   private final Counter idle_connections_closed = new Counter();
 
@@ -546,10 +546,13 @@ public final class HBaseClient {
     increment_buffer_size = config.getInt("hbase.increments.buffer_size");
     nsre_low_watermark = config.getInt("hbase.nsre.low_watermark");
     nsre_high_watermark = config.getInt("hbase.nsre.high_watermark");
+    if(config.properties.containsKey("hbase.increments.durable")) {
+      this.IncrementBufferDurable = config.getBoolean("hbase.increments.durable");
+    }
   }
-  
+
   /**
-   * Constructor accepting a configuration object with at least the 
+   * Constructor accepting a configuration object with at least the
    * "asynchbase.zk.quorum" specified in the format {@code "host1,host2,host3"}.
    * @param config A configuration object
    * @since 1.7
@@ -557,9 +560,9 @@ public final class HBaseClient {
   public HBaseClient(final Config config) {
     this(config, defaultChannelFactory(config));
   }
-  
+
   /**
-   * Constructor accepting a configuration object with at least the 
+   * Constructor accepting a configuration object with at least the
    * "asynchbase.zk.quorum" specified in the format {@code "host1,host2,host3"}
    * and an executor thread pool.
    * @param config A configuration object
@@ -577,9 +580,9 @@ public final class HBaseClient {
   public HBaseClient(final Config config, final Executor executor) {
     this(config, new CustomChannelFactory(executor));
   }
-  
+
   /**
-   * Constructor accepting a configuration object with at least the 
+   * Constructor accepting a configuration object with at least the
    * "hbase.zookeeper.quorum" specified in the format {@code "host1,host2,host3"}
    * and a custom channel factory for advanced users.
    * <p>
@@ -591,10 +594,10 @@ public final class HBaseClient {
    * shutdown and release of the factory and its underlying thread pool.
    * @since 1.7
    */
-  public HBaseClient(final Config config, 
+  public HBaseClient(final Config config,
       final ClientSocketChannelFactory channel_factory) {
     this.channel_factory = channel_factory;
-    zkclient = new ZKClient(config.getString("hbase.zookeeper.quorum"), 
+    zkclient = new ZKClient(config.getString("hbase.zookeeper.quorum"),
         config.getString("hbase.zookeeper.znode.parent"));
     this.config = config;
     rpc_timeout = config.getInt("hbase.rpc.timeout");
@@ -604,8 +607,11 @@ public final class HBaseClient {
     increment_buffer_size = config.getInt("hbase.increments.buffer_size");
     nsre_low_watermark = config.getInt("hbase.nsre.low_watermark");
     nsre_high_watermark = config.getInt("hbase.nsre.high_watermark");
+    if(config.properties.containsKey("hbase.increments.durable")) {
+      this.IncrementBufferDurable = config.getBoolean("hbase.increments.durable");
+    }
   }
-  
+
   /**
    * Package private timer constructor that provides a useful name for the
    * timer thread.
@@ -622,18 +628,18 @@ public final class HBaseClient {
       }
     }
     if (config == null) {
-      return new HashedWheelTimer(Executors.defaultThreadFactory(), 
+      return new HashedWheelTimer(Executors.defaultThreadFactory(),
           new TimerThreadNamer(), 100, MILLISECONDS, 512);
     }
-    return new HashedWheelTimer(Executors.defaultThreadFactory(), 
-        new TimerThreadNamer(), config.getShort("hbase.timer.tick"), 
+    return new HashedWheelTimer(Executors.defaultThreadFactory(),
+        new TimerThreadNamer(), config.getShort("hbase.timer.tick"),
         MILLISECONDS, config.getInt("hbase.timer.ticks_per_wheel"));
   }
-  
-  /** Creates a default channel factory in case we haven't been given one. 
+
+  /** Creates a default channel factory in case we haven't been given one.
    * The factory will use Netty defaults and provide thread naming rules for
    * easier debugging.
-   * @param config The config to pull settings from 
+   * @param config The config to pull settings from
    */
   private static NioClientSocketChannelFactory defaultChannelFactory(
       final Config config) {
@@ -644,7 +650,7 @@ public final class HBaseClient {
         return "AsyncHBase I/O Boss #" + BOSS_THREAD_ID.incrementAndGet();
       }
     }
-    
+
     class WorkerThreadNamer implements ThreadNameDeterminer {
       @Override
       public String determineThreadName(String currentThreadName,
@@ -652,15 +658,15 @@ public final class HBaseClient {
         return "AsyncHBase I/O Worker #" + WORKER_THREAD_ID.incrementAndGet();
       }
     }
-    
+
     final Executor executor = Executors.newCachedThreadPool();
-    final NioClientBossPool boss_pool = 
-        new NioClientBossPool(executor, 1, newTimer(config, "Boss Pool"), 
+    final NioClientBossPool boss_pool =
+        new NioClientBossPool(executor, 1, newTimer(config, "Boss Pool"),
             new BossThreadNamer());
-    final int num_workers = config.hasProperty("hbase.workers.size") ? 
-        config.getInt("hbase.workers.size") : 
+    final int num_workers = config.hasProperty("hbase.workers.size") ?
+        config.getInt("hbase.workers.size") :
           Runtime.getRuntime().availableProcessors() * 2;
-    final NioWorkerPool worker_pool = new NioWorkerPool(executor, 
+    final NioWorkerPool worker_pool = new NioWorkerPool(executor,
         num_workers, new WorkerThreadNamer());
     return new NioClientSocketChannelFactory(boss_pool, worker_pool);
   }
@@ -684,14 +690,14 @@ public final class HBaseClient {
   public ClientStats stats() {
     final LoadingCache<BufferedIncrement, BufferedIncrement.Amount> cache =
       increment_buffer;
-    
+
     long inflight_rpcs = 0;
     long pending_rpcs = 0;
     long pending_batched_rpcs = 0;
     int dead_region_clients = 0;
-    
+
     final Collection<RegionClient> region_clients = client2regions.keySet();
-    
+
     for (final RegionClient rc : region_clients) {
       final RegionClientStats stats = rc.stats();
       inflight_rpcs += stats.inflightRPCs();
@@ -701,7 +707,7 @@ public final class HBaseClient {
         dead_region_clients++;
       }
     }
-    
+
     return new ClientStats(
       num_connections_created.get(),
       root_lookups.get(),
@@ -736,14 +742,14 @@ public final class HBaseClient {
    */
   public List<RegionClientStats> regionStats() {
     final Collection<RegionClient> region_clients = client2regions.keySet();
-    final List<RegionClientStats> stats = 
+    final List<RegionClientStats> stats =
         new ArrayList<RegionClientStats>(region_clients.size());
     for (final RegionClient rc : region_clients) {
       stats.add(rc.stats());
     }
     return stats;
   }
-  
+
   /**
    * Flushes to HBase any buffered client-side write operation.
    * <p>
@@ -840,9 +846,9 @@ public final class HBaseClient {
       throw new IllegalArgumentException("Negative: " + flush_interval);
     }
     final short prev = config.getShort("hbase.rpcs.buffered_flush_interval");
-    config.overrideConfig("hbase.rpcs.buffered_flush_interval", 
+    config.overrideConfig("hbase.rpcs.buffered_flush_interval",
         Short.toString(flush_interval));
-    this.flush_interval = flush_interval; 
+    this.flush_interval = flush_interval;
     return prev;
   }
 
@@ -877,7 +883,7 @@ public final class HBaseClient {
     if (current == increment_buffer_size) {
       return current;
     }
-    config.overrideConfig("hbase.increments.buffer_size", 
+    config.overrideConfig("hbase.increments.buffer_size",
         Integer.toString(increment_buffer_size));
     this.increment_buffer_size = increment_buffer_size;
     final LoadingCache<BufferedIncrement, BufferedIncrement.Amount> prev =
@@ -914,7 +920,7 @@ public final class HBaseClient {
   public Config getConfig() {
     return config;
   }
-  
+
   /**
    * Schedules a new timeout.
    * @param task The task to execute when the timer times out.
@@ -951,7 +957,7 @@ public final class HBaseClient {
   public int getDefaultRpcTimeout() {
     return rpc_timeout;
   }
-  
+
   /**
    * Returns the capacity of the increment buffer.
    * <p>
@@ -1497,7 +1503,7 @@ public final class HBaseClient {
    */
   private void makeIncrementBuffer() {
     final int size = increment_buffer_size;
-    increment_buffer = BufferedIncrement.newCache(this, size);
+    increment_buffer = BufferedIncrement.newCache(this, size,IncrementBufferDurable);
     if (LOG.isDebugEnabled()) {
       LOG.debug("Created increment buffer of " + size + " entries");
     }
@@ -1555,7 +1561,7 @@ public final class HBaseClient {
    * Appends data to (or creates) one or more columns in HBase.
    * <p>
    * Note that this provides no guarantee as to the order in which subsequent
-   * {@code append} requests are going to be applied to the column(s).  If you 
+   * {@code append} requests are going to be applied to the column(s).  If you
    * need ordering, you must enforce it manually yourself by starting the next
    * {@code append} once the {@link Deferred} of this one completes successfully.
    * @param request The {@code append} request.
@@ -1569,7 +1575,7 @@ public final class HBaseClient {
     num_appends.increment();
     return sendRpcToRegion(request);
   }
-  
+
   /**
    * Atomic Compare-And-Set (CAS) on a single cell.
    * <p>
@@ -1796,7 +1802,7 @@ public final class HBaseClient {
                                        final byte[] stop) {
     return findTableRegions(table, start, stop, true, false);
   }
-  
+
   /**
    * Scans the meta table for regions belonging to the given table.
    * It can be used to prefetch the region information and/or return the actual
@@ -1817,18 +1823,18 @@ public final class HBaseClient {
    */
   private Deferred<Object> findTableRegions(final byte[] table,
                                         final byte[] start,
-                                        final byte[] stop, 
+                                        final byte[] stop,
                                         final boolean cache,
                                         final boolean return_locations) {
     // We're going to scan .META. for the table between the row keys and filter
     // out all but the latest entries on the client side.  Whatever remains
     // will be inserted into the region cache.
     // But we don't want to do this for hbase:meta, .META. or -ROOT-.
-    if (Bytes.equals(table, HBASE96_META) || Bytes.equals(table, META) 
+    if (Bytes.equals(table, HBASE96_META) || Bytes.equals(table, META)
         || Bytes.equals(table, ROOT)) {
       return Deferred.fromResult(null);
     }
-    
+
     // Create the scan bounds.
     final byte[] meta_start = createRegionSearchKey(table, start);
     // In this case, we want the scan to start immediately at the
@@ -1848,7 +1854,7 @@ public final class HBaseClient {
     } else {
       meta_stop = createRegionSearchKey(table, stop);
     }
-    
+
     if (rootregion == null) {
       // If we don't know where the root region is, we don't yet know whether
       // there is even a -ROOT- region at all (pre HBase 0.95).  So we can't
@@ -1869,14 +1875,14 @@ public final class HBaseClient {
       }
       return ensureTableExists(table).addCallback(new Retry());
     }
-    
-    final List<RegionLocation> regions = 
+
+    final List<RegionLocation> regions =
         return_locations ? new ArrayList<RegionLocation>() : null;
 
     final Scanner meta_scanner = newScanner(has_root ? META : HBASE96_META);
     meta_scanner.setStartKey(meta_start);
     meta_scanner.setStopKey(meta_stop);
-    
+
     class MetaScanner
       implements Callback<Object, ArrayList<ArrayList<KeyValue>>> {
       @Override
@@ -1905,7 +1911,7 @@ public final class HBaseClient {
 
     return meta_scanner.nextRows().addCallback(new MetaScanner());
   }
-  
+
   /**
    * Sends an RPC targeted at a particular region to the right RegionServer.
    * <p>
@@ -2078,7 +2084,7 @@ public final class HBaseClient {
     int port = -1;
     RegionInfo region = null;
     byte[] start_key = null;
-    
+
     for (final KeyValue kv : meta_row) {
       final byte[] qualifier = kv.qualifier();
       if (Arrays.equals(REGIONINFO, qualifier)) {
@@ -2114,10 +2120,10 @@ public final class HBaseClient {
       throw new BrokenMetaException(null, "It didn't contain any"
               + " `info:regioninfo' cell:  " + meta_row);
     }
-    
+
     return new RegionLocation(region, start_key, host, port);
   }
-  
+
   /**
    * Searches the meta table for all of the regions associated with the given
    * table. This method does not use the cache, rather it will scan HBase every
@@ -2132,7 +2138,7 @@ public final class HBaseClient {
   public Deferred<List<RegionLocation>> locateRegions(final String table) {
     return locateRegions(table.getBytes());
   }
-  
+
   /**
    * Searches the meta table for all of the regions associated with the given
    * table. This method does not use the cache, rather it will scan HBase every
@@ -2148,7 +2154,7 @@ public final class HBaseClient {
     class TypeCB implements Callback<Deferred<List<RegionLocation>>, Object> {
       @SuppressWarnings("unchecked")
       @Override
-      public Deferred<List<RegionLocation>> call(final Object results) 
+      public Deferred<List<RegionLocation>> call(final Object results)
           throws Exception {
         if (results == null) {
           return Deferred.fromResult(null);
@@ -2171,7 +2177,7 @@ public final class HBaseClient {
   HashedWheelTimer getRpcTimeoutTimer() {
     return rpc_timeout_timer;
   }
-  
+
   // --------------------------------------------------- //
   // Code that find regions (in our cache or using RPCs) //
   // --------------------------------------------------- //
@@ -2188,7 +2194,7 @@ public final class HBaseClient {
    * carries an unspecified result.
    * @see #discoverRegion
    */
-  private Deferred<Object> locateRegion(final HBaseRpc request, 
+  private Deferred<Object> locateRegion(final HBaseRpc request,
       final byte[] table, final byte[] key) {
     final boolean is_meta = Bytes.equals(table, META);
     final boolean is_root = !is_meta && Bytes.equals(table, ROOT);
@@ -3034,7 +3040,7 @@ public final class HBaseClient {
     // TCP_KEEPIDLE.  And of course the default timeout is >2h.  Sigh.
     socket_config.setKeepAlive(
         config.getBoolean("hbase.ipc.client.tcpkeepalive"));
-    
+
     // socket overrides using system defaults instead of setting them in a conf
     if (config.hasProperty("hbase.ipc.client.socket.write.high_watermark")) {
       ((NioChannelConfig)config).setWriteBufferHighWaterMark(
@@ -3045,14 +3051,14 @@ public final class HBaseClient {
           config.getInt("hbase.ipc.client.socket.write.low_watermark"));
     }
     if (config.hasProperty("hbase.ipc.client.socket.sendBufferSize")) {
-      socket_config.setOption("sendBufferSize", 
+      socket_config.setOption("sendBufferSize",
           config.getInt("hbase.ipc.client.socket.sendBufferSize"));
     }
     if (config.hasProperty("hbase.ipc.client.socket.receiveBufferSize")) {
-      socket_config.setOption("receiveBufferSize", 
+      socket_config.setOption("receiveBufferSize",
           config.getInt("hbase.ipc.client.socket.receiveBufferSize"));
     }
-    
+
     chan.connect(new InetSocketAddress(host, port));  // Won't block.
     return client;
   }
@@ -3083,9 +3089,9 @@ public final class HBaseClient {
 
     /** A handler to close the connection if we haven't used it in some time */
     private final ChannelHandler timeout_handler;
-    
+
     RegionClientPipeline() {
-      timeout_handler = new IdleStateHandler(timer, 0, 0, 
+      timeout_handler = new IdleStateHandler(timer, 0, 0,
           config.getInt("hbase.hbase.ipc.client.connection.idle_timeout"));
     }
 
@@ -3127,7 +3133,7 @@ public final class HBaseClient {
         return;
       }
       if (LOG.isDebugEnabled()) {
-        LOG.debug("Channel " + state_event.getChannel().toString() + 
+        LOG.debug("Channel " + state_event.getChannel().toString() +
             "'s state changed: " + state_event);
       }
       switch (state_event.getState()) {
@@ -3145,7 +3151,7 @@ public final class HBaseClient {
           return;  // Not an event we're interested in, ignore it.
       }
 
-      LOG.info("Channel " + state_event.getChannel().toString() + 
+      LOG.info("Channel " + state_event.getChannel().toString() +
           " is disconnecting: " + state_event);
       disconnected = true;  // So we don't clean up the same client twice.
       try {
@@ -3189,7 +3195,7 @@ public final class HBaseClient {
             throws Exception {
       if(e.getState() == IdleState.ALL_IDLE) {
         idle_connections_closed.increment();
-        LOG.info("Closing idle connection to HBase region server: " 
+        LOG.info("Closing idle connection to HBase region server: "
             + e.getChannel());
         // RegionClientPipeline's disconnect method will handle cleaning up
         // any outstanding RPCs and removing the client from caches
@@ -3197,7 +3203,7 @@ public final class HBaseClient {
       }
     }
   }
-  
+
   /**
    * Performs a slow search of the IP used by the given client.
    * <p>
@@ -3502,7 +3508,7 @@ public final class HBaseClient {
           if (zk != null) {  // Already connected.
             return;
           }
-          zk = new ZooKeeper(quorum_spec, 
+          zk = new ZooKeeper(quorum_spec,
               config.getInt("hbase.zookeeper.session.timeout"), this);
         }
       } catch (UnknownHostException e) {
@@ -3558,7 +3564,7 @@ public final class HBaseClient {
               connectZK();  // unless we need to connect first.
             }
           }
-        }, config.getInt("hbase.zookeeper.getroot.retry_delay") 
+        }, config.getInt("hbase.zookeeper.getroot.retry_delay")
           /* milliseconds */);
     }
 
