@@ -1,3 +1,4 @@
+添加可以跳过wal的incrementbuffer
   ,--------------------.
   | Asynchronous HBase |
   `--------------------'
