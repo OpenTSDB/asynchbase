@@ -38,7 +38,9 @@ import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collection;
+import java.util.List;
 
 import org.slf4j.Logger;
 import org.junit.After;
@@ -349,6 +351,57 @@ final public class TestIntegration {
     assertEq("val2ndv", kv.value());
     final double kvts = kv.timestamp();
     assertEquals(write_time, kvts, 5000.0);  // Within five seconds.
+  }
+
+  @Test
+  public void basicScanMultipleRegions() throws Exception {
+    splitTable(table, "s10");
+    splitTable(table, "s20");
+    splitTable(table, "s30");
+    List<Deferred<Object>> list = new ArrayList<>();
+    for(int i = 0 ; i < 40; i++) {
+      String key = String.format("s%02d", i);
+      PutRequest putRequest = new PutRequest(table, key, family, "q" + i, "v" + i);
+      list.add(client.put(putRequest));
+    }
+
+    Deferred.groupInOrder(list).join();
+
+    Scanner scanner = client.newScanner(table);
+    scanner.setFamily(family);
+    scanner.setStartKey("s15");
+    scanner.setStopKey("s35");
+
+    class cb implements Callback<Object, ArrayList<ArrayList<KeyValue>>> {
+      private int n = 15;
+      public Object call(final ArrayList<ArrayList<KeyValue>> rows) {
+        if (rows == null) {
+          return null;
+        }
+
+        try {
+          assertSizeIs(5, rows);
+          final ArrayList<KeyValue> kvs = rows.get(0);
+          final KeyValue kv = kvs.get(0);
+          assertSizeIs(1, kvs);
+          assertEq(String.format("s%02d", n), kv.key());
+          assertEq("q" + n, kv.qualifier());
+          assertEq("v" + n, kv.value());
+          n += 5;
+          return scanner.nextRows(5).addCallback(this);
+        } catch (AssertionError e) {
+          // Deferred doesn't catch Errors on purpose, so transform any
+          // assertion failure into an Exception.
+          throw new RuntimeException("Asynchronous failure", e);
+        }
+      }
+    }
+
+    try {
+      scanner.nextRows(5).addCallback(new cb()).join();
+    } finally {
+      scanner.close().join();
+    }
   }
 
   /** Basic scan test. */
