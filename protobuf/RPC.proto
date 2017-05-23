@@ -86,6 +86,7 @@ message ConnectionHeader {
   // Compressor we will use if cell block is compressed.  Server will throw exception if not supported.
   // Class must implement hadoop's CompressionCodec Interface.  Can't compress if no codec.
   optional string cell_block_compressor_class = 4;
+  optional VersionInfo version_info = 5;
 }
 
 // Optional Cell block Message.  Included in client RequestHeader
@@ -119,9 +120,10 @@ message RequestHeader {
   optional bool request_param = 4;
   // If present, then an encoded data block follows.
   optional CellBlockMeta cell_block_meta = 5;
-  // 0 is NORMAL priority.  100 is HIGH.  If no priority, treat it as NORMAL.
+  // 0 is NORMAL priority.  200 is HIGH.  If no priority, treat it as NORMAL.
   // See HConstants.
   optional uint32 priority = 6;
+  optional uint32 timeout = 7;
 }
 
 message ResponseHeader {

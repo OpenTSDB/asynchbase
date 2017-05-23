@@ -53,7 +53,11 @@ asynchbase_PROTOS := \
 	protobuf/Tracing.proto	\
 	protobuf/ZooKeeper.proto	\
 	protobuf/HBase.proto	\
-
+        protobuf/ClusterId.proto \
+        protobuf/ClusterStatus.proto \
+        protobuf/FS.proto \
+        protobuf/MapReduce.proto \
+ 
 PROTOBUF_GEN_DIR = $(top_builddir)/src/org/hbase/async/generated
 
 BUILT_SOURCES := $(asynchbase_PROTOS:protobuf/%.proto=$(PROTOBUF_GEN_DIR)/%PB.java)
