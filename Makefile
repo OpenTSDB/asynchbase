@@ -1,6 +1,6 @@
 # Copyright (C) 2010-2012  The Async HBase Authors.  All rights reserved.
 # This file is part of Async HBase.
-# 
+#
 # Redistribution and use in source and binary forms, with or without
 # modification, are permitted provided that the following conditions are met:
 #   - Redistributions of source code must retain the above copyright notice,
@@ -99,6 +99,7 @@ asynchbase_SOURCES := \
 	src/KeyRegexpFilter.java	\
 	src/KeyValue.java	\
 	src/MultiAction.java	\
+	src/MultipleColumnPrefixFilter.java	\
 	src/NoSuchColumnFamilyException.java	\
 	src/NonRecoverableException.java	\
 	src/NotServingRegionException.java	\
