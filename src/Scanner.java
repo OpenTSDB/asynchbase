@@ -1579,9 +1579,13 @@ public final class Scanner {
       final ScanResponse resp = readProtobuf(buf, ScanResponse.PARSER);
       final long id = resp.getScannerId();
       if (scanner_id != id) {
-        throw new InvalidResponseException("Scan RPC response was for scanner"
-                                           + " ID " + id + " but we expected"
-                                           + scanner_id, resp);
+        if (LOG.isDebugEnabled()) {
+          LOG.debug("Scan RPC response was for scanner ID " + id 
+              + " but we expected " + scanner_id, resp);
+        }
+        //throw new InvalidResponseException("Scan RPC response was for scanner"
+        //                                   + " ID " + id + " but we expected"
+        //                                   + scanner_id, resp);
       }
       return null;
     }
