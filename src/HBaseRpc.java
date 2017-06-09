@@ -494,7 +494,7 @@ public abstract class HBaseRpc {
   /**
    * Whether or not if this RPC is a probe that is suspended by an NSRE
    */
-  private boolean suspended_probe = false;
+  private volatile boolean suspended_probe = false;
 
   boolean isSuspendedProbe() {
     // since the key doesn't change, we are safe to lock on it and we avoid 
