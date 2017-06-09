@@ -1,6 +1,22 @@
 AsyncHBase - User visible and noteworthy changes.
 This project uses Semantic Versioning (see http://semver.org/).
 
+* Version 1.8.0 (2017-06-09)
+
+This is feature release with new APIs and behaviors.
+
+New Features:
+  - Support HBase 1.3.0 and later where scanner behavior changed.
+  - Add optional support for buffered AtomicIncrement calls to bypass the WAL
+    for quicker writes.
+  - Add an API for writing AtomicIncrements over multiple columns in a single
+    RPC.
+  - Add the MultipleColumnPrefixFilter.
+  - Add a "multi-get" API that allows for batching GetRequests and sending them
+    in a single request. Useful if the client wants to fetch a number of 
+    disparate rows when scanning would be less efficient.
+  - Support for reverse scanning
+
 * Version 1.7.3 (2017-06-09)
 
 This is a bug fix release.
