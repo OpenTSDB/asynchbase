@@ -418,6 +418,8 @@ public final class HBaseClient {
   /** Default RPC timeout in milliseconds from the config */
   private final int rpc_timeout;
   
+  private boolean increment_buffer_durable = false;
+  
   // ------------------------ //
   // Client usage statistics. //
   // ------------------------ //
@@ -546,6 +548,9 @@ public final class HBaseClient {
     increment_buffer_size = config.getInt("hbase.increments.buffer_size");
     nsre_low_watermark = config.getShort("hbase.nsre.low_watermark");
     nsre_high_watermark = config.getShort("hbase.nsre.high_watermark");
+    if (config.properties.containsKey("hbase.increments.durable")) {
+      increment_buffer_durable = config.getBoolean("hbase.increments.durable");
+    }
   }
   
   /**
@@ -604,6 +609,9 @@ public final class HBaseClient {
     increment_buffer_size = config.getInt("hbase.increments.buffer_size");
     nsre_low_watermark = config.getShort("hbase.nsre.low_watermark");
     nsre_high_watermark = config.getShort("hbase.nsre.high_watermark");
+    if (config.properties.containsKey("hbase.increments.durable")) {
+      increment_buffer_durable = config.getBoolean("hbase.increments.durable");
+    }
   }
   
   /**
@@ -1725,7 +1733,8 @@ public final class HBaseClient {
    */
   private void makeIncrementBuffer() {
     final int size = increment_buffer_size;
-    increment_buffer = BufferedIncrement.newCache(this, size);
+    increment_buffer = BufferedIncrement.newCache(this, size, 
+        increment_buffer_durable);
     if (LOG.isDebugEnabled()) {
       LOG.debug("Created increment buffer of " + size + " entries");
     }

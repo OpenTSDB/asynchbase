@@ -225,7 +225,7 @@ final class BufferedIncrement {
    * @param size Max number of entries of the cache.
    */
   static LoadingCache<BufferedIncrement, Amount>
-    newCache(final HBaseClient client, final int size) {
+    newCache(final HBaseClient client, final int size, final boolean durable) {
     final int ncpu = Runtime.getRuntime().availableProcessors();
     return CacheBuilder.newBuilder()
       // Beef up the concurrency level as this is the number of internal
@@ -244,7 +244,7 @@ final class BufferedIncrement {
       .concurrencyLevel(ncpu * 4)
       .maximumSize(size)
       .recordStats()  // As of Guava 12, stats are disabled by default.
-      .removalListener(new EvictionHandler(client))
+      .removalListener(new EvictionHandler(client, durable))
       .build(LOADER);
   }
 
@@ -272,9 +272,11 @@ final class BufferedIncrement {
     implements RemovalListener<BufferedIncrement, Amount> {
 
     private final HBaseClient client;
-
-    EvictionHandler(final HBaseClient client) {
+    private final boolean durable;
+    
+    EvictionHandler(final HBaseClient client, final boolean durable) {
       this.client = client;
+      this.durable = durable;
     }
 
     @Override
@@ -294,7 +296,7 @@ final class BufferedIncrement {
       final AtomicIncrementRequest req =
         new AtomicIncrementRequest(incr.table, incr.key, incr.family,
                                    incr.qualifier, delta);
-      client.atomicIncrement(req).chain(amount.deferred);
+      client.atomicIncrement(req, durable).chain(amount.deferred);
     }
 
   }
