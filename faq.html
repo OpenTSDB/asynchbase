@@ -61,7 +61,7 @@ to process it.
 <h4>Will this work with version <em>X</em> of HBase?</h4>
 Probably. One of the nicest features of AsyncHBase is that you don't have to
 upgrade the JAR every time you upgrade HBase. The client is compatible with
-HBase from versions 0.92 to 0.94 and 0.96 to 1.0. Be sure to test the client
+HBase from versions 0.92 to 0.94 and 0.96 to 1.3. Be sure to test the client
 with HBase before upgrading in case something does change with the HBase protocols.
 
 <h4>Can I use this with a secured HBase cluster?</h4>
@@ -76,8 +76,11 @@ various versions of Cloudera and Hortonworks.
 Probably, as long as the hosted HBase isn't heavily customized with proprietary 
 security or other changes.
 <p>
-<b>NOTE:</b> At this time AsyncHBase is not compatible with Google's cloud
-Big Table. Some folks are working on a similar async client.
+<b>NOTE:</b> Google's hosted Bigtable offering has an HBase compatible API layer
+for porting applications. However under the hood, the Bigtable client is much
+different than the HBase RPC implementation. Therefore AsyncHBase cannot be used
+to write to Bigtable. Instead, use the native asynchronous APIs of the Bigtable
+client.
 
 <h4>What are some of the major differences between HTable and AsyncHBase?</h4>
 <ul>
@@ -92,7 +95,9 @@ mutations may not have been committed to HBase.</li>
 <li>Batch mutations are not, directly, supported yet.</li>
 <li>A number of exceptions thrown by the client are different.</li>
 <li>AsyncHBase has finer grained control over RPC behavior.</li>
-<li>... um, AsyncHBase is asynchronous?</li>
+<li>... um, AsyncHBase is asynchronous? (Though HTable is growing increasingly
+asynchronous over the years and may eventually obviate the need for this client.
+)</li>
 </ul>
 
 <a name="meta"></a><h2>Meta</h2>
@@ -118,8 +123,8 @@ how the Linux kernel is developed, then this is pretty similar.
 
 <h4>Who commits to AsyncHBase?</h4>
 Anyone can commit to AsyncHBase, provided that the changes are accepted
-in the main repository after getting reviewed.  There is no notion of
-"commit access", or no list of committers.
+in the main repository after getting reviewed. If you have a few substantial
+PRs that have been merged and would like to become a committer, just let us know.
 
 <h4>Why does AsyncHBase use the LGPL?</h4>
 One of the most frequent "holy war" that plague open-source communities is
@@ -176,7 +181,7 @@ and
 </section>
       <hr>
       <div class="footer">
-        <p><a href="https://groups.google.com/forum/#!forum/asynchbase"><i class="glyphicon glyphicon-envelope"></i> Mailing List</a>  | <i class="glyphicon glyphicon-user"></i> IRC: Freenode #opentsdb  |  &copy; 2010 - 2015 The AsyncHBase Authors | Travis CI Status: <img src="https://api.travis-ci.org/OpenTSDB/asynchbase.svg">
+        <p><a href="https://groups.google.com/forum/#!forum/asynchbase"><i class="glyphicon glyphicon-envelope"></i> Mailing List</a>  | <i class="glyphicon glyphicon-user"></i> IRC: Freenode #opentsdb  |  &copy; 2010 - 2017 The AsyncHBase Authors | Travis CI Status: <img src="https://api.travis-ci.org/OpenTSDB/asynchbase.svg">
       </div>
     </div> <!-- /container -->
     <!-- jQuery (necessary for Bootstrap's JavaScript plugins) -->

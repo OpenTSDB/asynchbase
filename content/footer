@@ -1,6 +1,6 @@
       <hr>
       <div class="footer">
-        <p><a href="https://groups.google.com/forum/#!forum/asynchbase"><i class="glyphicon glyphicon-envelope"></i> Mailing List</a>  | <i class="glyphicon glyphicon-user"></i> IRC: Freenode #opentsdb  |  &copy; 2010 - 2015 The AsyncHBase Authors | Travis CI Status: <img src="https://api.travis-ci.org/OpenTSDB/asynchbase.svg">
+        <p><a href="https://groups.google.com/forum/#!forum/asynchbase"><i class="glyphicon glyphicon-envelope"></i> Mailing List</a>  | <i class="glyphicon glyphicon-user"></i> IRC: Freenode #opentsdb  |  &copy; 2010 - 2017 The AsyncHBase Authors | Travis CI Status: <img src="https://api.travis-ci.org/OpenTSDB/asynchbase.svg">
       </div>
     </div> <!-- /container -->
     <!-- jQuery (necessary for Bootstrap's JavaScript plugins) -->

@@ -18,6 +18,7 @@ The following is a table of configuration options for AsyncHBase. Some of the va
 
    "hbase.client.retries.number", "Integer", "The number of times an RPC will be retried when a recoverable exception occurs, e.g. a region moving or splitting. Non-recoverable exceptions will fail the RPC immediately.", "10"
    "hbase.increments.buffer_size", "Integer", "How many unique counters to maintain in memory when using ``BufferedIncrement`` RPCs. Once this limit is reached, new buffered increments are immediately sent to the region server.", "65,535"
+   "hbase.increments.durable", "Boolean", "Whether or not to write to the WAL for every atomic increment request.", "true"
    "hbase.ipc.client.connection.idle_timeout", "Integer", "How long, in seconds, to wait before closing an idle connection to a region server. Idle means no writes or reads to the socket.", "300"
    "hbase.ipc.client.socket.receiveBufferSize", "Integer", "The size of the region server socket receive buffer in bytes.", "System dependent"
    "hbase.ipc.client.socket.sendBufferSize", "Integer", "The size of the region server socket send buffer in bytes.", "System dependent"

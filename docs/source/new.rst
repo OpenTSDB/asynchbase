@@ -1,6 +1,16 @@
 What's New
 ==========
 
+1.8
+---
+
+* Reverse Scanning - By default, scanners iterate in ascending key order. This feature mimic's HTable's reverse scanning to allow for iteration in descending key order.
+* Multi-Gets - Allows for batching GetRequests into single calls (distributed to the appropriate region servers). This can save query time when specific, widely dispersed rows are fetched and scanning is inefficient.
+* Bypass WAL on AtomicIncrements - For buffered increments (where counts are accumulated in memory for a small period of time before flushing to storage) the WAL can now be bypassed optionally.
+* Multi-column AtomicIncrements - Now instead of sending one AtomicIncrement request per column you can batch them into a single call.
+* MultipleColumnPrefixFilter - New filter from HTable.
+* HBase 1.3.x Compatibility - The scanning behavior changed with HBase 1.3 as the server can close the scanner. Now we'll handle that gracefully.
+
 1.7
 ---
 

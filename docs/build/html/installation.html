@@ -23,6 +23,7 @@
     <script type="text/javascript" src="_static/underscore.js"></script>
     <script type="text/javascript" src="_static/doctools.js"></script>
     <link rel="top" title="AsyncHBase 1.7 documentation" href="index.html" />
+    <link rel="next" title="Configuration" href="configuration.html" />
     <link rel="prev" title="What&#39;s New" href="new.html" /><link href='http://fonts.googleapis.com/css?family=Source+Code+Pro|Open+Sans:300italic,400italic,700italic,400,300,700' rel='stylesheet' type='text/css'>
 <link href="_static/solarized-dark.css" rel="stylesheet">
 <script type="text/javascript">
@@ -38,20 +39,23 @@
   })();
 </script>
   </head>
-  <body>
-    <div class="related">
+  <body role="document">
+    <div class="related" role="navigation" aria-label="related navigation">
       <h3>Navigation</h3>
       <ul>
         <li class="right" style="margin-right: 10px">
           <a href="genindex.html" title="General Index"
              accesskey="I">index</a></li>
         <li class="right" >
+          <a href="configuration.html" title="Configuration"
+             accesskey="N">next</a> |</li>
+        <li class="right" >
           <a href="new.html" title="What&#39;s New"
              accesskey="P">previous</a> |</li>
-        <li><a href="index.html">AsyncHBase 1.7 documentation</a> &raquo;</li> 
+        <li class="nav-item nav-item-0"><a href="index.html">AsyncHBase 1.7 documentation</a> &raquo;</li> 
       </ul>
     </div>
-      <div class="sphinxsidebar">
+      <div class="sphinxsidebar" role="navigation" aria-label="main navigation">
         <div class="sphinxsidebarwrapper">
   <h3><a href="index.html">Table Of Contents</a></h3>
   <ul>
@@ -70,7 +74,10 @@
   <h4>Previous topic</h4>
   <p class="topless"><a href="new.html"
                         title="previous chapter">What's New</a></p>
-<div id="searchbox" style="display: none">
+  <h4>Next topic</h4>
+  <p class="topless"><a href="configuration.html"
+                        title="next chapter">Configuration</a></p>
+<div id="searchbox" style="display: none" role="search">
   <h3>Quick search</h3>
     <form class="search" action="search.html" method="get">
       <input type="text" name="q" />
@@ -89,7 +96,7 @@
     <div class="document">
       <div class="documentwrapper">
         <div class="bodywrapper">
-          <div class="body">
+          <div class="body" role="main">
             
   <div class="section" id="installation">
 <h1>Installation</h1>
@@ -113,29 +120,29 @@
 <li>An Internet connection</li>
 <li>Maven (Optional)</li>
 </ul>
-<p>Download the latest version using <tt class="docutils literal"><span class="pre">git</span> <span class="pre">clone</span></tt> command or download a release from the site or Github. Then cd into the repo's directory and <tt class="docutils literal"><span class="pre">git</span> <span class="pre">checkout</span> <span class="pre">&lt;branch&gt;</span></tt> the proper branch you want to build from. Then just run <tt class="docutils literal"><span class="pre">make</span></tt>.</p>
+<p>Download the latest version using <code class="docutils literal"><span class="pre">git</span> <span class="pre">clone</span></code> command or download a release from the site or Github. Then cd into the repo's directory and <code class="docutils literal"><span class="pre">git</span> <span class="pre">checkout</span> <span class="pre">&lt;branch&gt;</span></code> the proper branch you want to build from. Then just run <code class="docutils literal"><span class="pre">make</span></code>.</p>
 <div class="highlight-python"><div class="highlight"><pre>git clone git://github.com/OpenTSDB/asynchbase.git
 cd asynchbase
 make
 ls build
 </pre></div>
 </div>
-<p>If compilation was successful, you should have a jar file in <tt class="docutils literal"><span class="pre">./build</span></tt> that you can include in your project. Jars that AsyncHBase depends on are downloaded to the <tt class="docutils literal"><span class="pre">third_party/</span></tt> sub directories under the main repo directory.</p>
+<p>If compilation was successful, you should have a jar file in <code class="docutils literal"><span class="pre">./build</span></code> that you can include in your project. Jars that AsyncHBase depends on are downloaded to the <code class="docutils literal"><span class="pre">third_party/</span></code> sub directories under the main repo directory.</p>
 <div class="admonition note">
 <p class="first admonition-title">Note</p>
-<p class="last">Yes, we're aware that using Make for a java project is rather odd. But it allows for some nifty tricks that aren't as easily performed using a standard Java build tool. That being said, if you prefer Maven, simply execute <tt class="docutils literal"><span class="pre">make</span> <span class="pre">pom.xml</span></tt> from the repo directory and continue as you normally would. E.g. <tt class="docutils literal"><span class="pre">mvn</span> <span class="pre">clean</span> <span class="pre">package</span></tt> and you'll wind up with the jar and associated files in <tt class="docutils literal"><span class="pre">target/</span></tt>.</p>
+<p class="last">Yes, we're aware that using Make for a java project is rather odd. But it allows for some nifty tricks that aren't as easily performed using a standard Java build tool. That being said, if you prefer Maven, simply execute <code class="docutils literal"><span class="pre">make</span> <span class="pre">pom.xml</span></code> from the repo directory and continue as you normally would. E.g. <code class="docutils literal"><span class="pre">mvn</span> <span class="pre">clean</span> <span class="pre">package</span></code> and you'll wind up with the jar and associated files in <code class="docutils literal"><span class="pre">target/</span></code>.</p>
 </div>
 <p><strong>Testing</strong></p>
-<p>Simply running <tt class="docutils literal"><span class="pre">make</span></tt> will build the jar but won't run various tests. For unit tests, run <tt class="docutils literal"><span class="pre">make</span> <span class="pre">check</span></tt>. This will download jars required for testing and run all of the unit tests in <tt class="docutils literal"><span class="pre">test</span></tt>.</p>
-<p>For integration testing, first start up an HBase instance on the local host with default ports (e.g. Zookeeper on port 2181) and without authentication. Then export the path to HBase's home directory. This is needed as the integration tests use the shell to create and truncate tables. E.g. <tt class="docutils literal"><span class="pre">export</span> <span class="pre">HBASE_HOME=/usr/local/hbase</span></tt>. Then run <tt class="docutils literal"><span class="pre">make</span> <span class="pre">integration</span></tt>.</p>
+<p>Simply running <code class="docutils literal"><span class="pre">make</span></code> will build the jar but won't run various tests. For unit tests, run <code class="docutils literal"><span class="pre">make</span> <span class="pre">check</span></code>. This will download jars required for testing and run all of the unit tests in <code class="docutils literal"><span class="pre">test</span></code>.</p>
+<p>For integration testing, first start up an HBase instance on the local host with default ports (e.g. Zookeeper on port 2181) and without authentication. Then export the path to HBase's home directory. This is needed as the integration tests use the shell to create and truncate tables. E.g. <code class="docutils literal"><span class="pre">export</span> <span class="pre">HBASE_HOME=/usr/local/hbase</span></code>. Then run <code class="docutils literal"><span class="pre">make</span> <span class="pre">integration</span></code>.</p>
 <div class="admonition warning">
 <p class="first admonition-title">Warning</p>
-<p class="last">The integration tests will create and/or truncate data in various tables starting with <tt class="docutils literal"><span class="pre">test</span></tt> such as <tt class="docutils literal"><span class="pre">test</span></tt>, <tt class="docutils literal"><span class="pre">test1</span></tt>, etc. Make sure you don't have any important information in your local HBase instance.</p>
+<p class="last">The integration tests will create and/or truncate data in various tables starting with <code class="docutils literal"><span class="pre">test</span></code> such as <code class="docutils literal"><span class="pre">test</span></code>, <code class="docutils literal"><span class="pre">test1</span></code>, etc. Make sure you don't have any important information in your local HBase instance.</p>
 </div>
 </div>
 <div class="section" id="source-layout">
 <h3>Source Layout</h3>
-<p>There are two main branches in the GIT repo. The <tt class="docutils literal"><span class="pre">master</span></tt> branch is the latest stable release along with any bug fixes that have been committed between releases. The <tt class="docutils literal"><span class="pre">next</span></tt> branch is the next major or minor version of AsyncHBase with new features and development. When <tt class="docutils literal"><span class="pre">next</span></tt> is stable, it will be merged into <tt class="docutils literal"><span class="pre">master</span></tt>. Additional branches may be present and are used for testing or developing specific features.</p>
+<p>There are two main branches in the GIT repo. The <code class="docutils literal"><span class="pre">master</span></code> branch is the latest stable release along with any bug fixes that have been committed between releases. The <code class="docutils literal"><span class="pre">next</span></code> branch is the next major or minor version of AsyncHBase with new features and development. When <code class="docutils literal"><span class="pre">next</span></code> is stable, it will be merged into <code class="docutils literal"><span class="pre">master</span></code>. Additional branches may be present and are used for testing or developing specific features.</p>
 </div>
 </div>
 <div class="section" id="upgrading">
@@ -151,16 +158,19 @@ ls build
       </div>
       <div class="clearer"></div>
     </div>
-    <div class="related">
+    <div class="related" role="navigation" aria-label="related navigation">
       <h3>Navigation</h3>
       <ul>
         <li class="right" style="margin-right: 10px">
           <a href="genindex.html" title="General Index"
              >index</a></li>
         <li class="right" >
+          <a href="configuration.html" title="Configuration"
+             >next</a> |</li>
+        <li class="right" >
           <a href="new.html" title="What&#39;s New"
              >previous</a> |</li>
-        <li><a href="index.html">AsyncHBase 1.7 documentation</a> &raquo;</li> 
+        <li class="nav-item nav-item-0"><a href="index.html">AsyncHBase 1.7 documentation</a> &raquo;</li> 
       </ul>
     </div>
     <div class="footer">
