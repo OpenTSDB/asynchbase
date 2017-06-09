@@ -1,6 +1,6 @@
 # Copyright (C) 2010-2016  The Async HBase Authors.  All rights reserved.
 # This file is part of Async HBase.
-# 
+#
 # Redistribution and use in source and binary forms, with or without
 # modification, are permitted provided that the following conditions are met:
 #   - Redistributions of source code must retain the above copyright notice,
@@ -39,7 +39,7 @@ proto_builddir := $(top_builddir)/protobuf
 spec_title := Asynchronous HBase Client
 spec_vendor := The Async HBase Authors
 # Semantic Versioning (see http://semver.org/).
-spec_version := 1.7.3
+spec_version := 1.8.0-SNAPSHOT
 jar := $(top_builddir)/asynchbase-$(spec_version).jar
 
 asynchbase_PROTOS := \
@@ -53,7 +53,11 @@ asynchbase_PROTOS := \
 	protobuf/Tracing.proto	\
 	protobuf/ZooKeeper.proto	\
 	protobuf/HBase.proto	\
-
+        protobuf/ClusterId.proto \
+        protobuf/ClusterStatus.proto \
+        protobuf/FS.proto \
+        protobuf/MapReduce.proto \
+ 
 PROTOBUF_GEN_DIR = $(top_builddir)/src/org/hbase/async/generated
 
 BUILT_SOURCES := $(asynchbase_PROTOS:protobuf/%.proto=$(PROTOBUF_GEN_DIR)/%PB.java)
@@ -61,12 +65,14 @@ BUILT_SOURCES := $(asynchbase_PROTOS:protobuf/%.proto=$(PROTOBUF_GEN_DIR)/%PB.ja
 asynchbase_SOURCES := \
 	src/AppendRequest.java	\
 	src/AtomicIncrementRequest.java	\
+	src/MultiColumnAtomicIncrementRequest.java	\
 	src/BatchableRpc.java	\
 	src/BinaryComparator.java	\
 	src/BinaryPrefixComparator.java	\
 	src/BitComparator.java	\
 	src/BrokenMetaException.java	\
 	src/BufferedIncrement.java	\
+	src/BufferedMultiColumnIncrement.java	\
 	src/Bytes.java	\
 	src/ClientStats.java	\
 	src/ColumnPaginationFilter.java	\
@@ -85,6 +91,7 @@ asynchbase_SOURCES := \
 	src/FirstKeyOnlyFilter.java	\
 	src/FuzzyRowFilter.java \
 	src/GetRequest.java	\
+	src/GetResultOrException.java	\
 	src/HBaseClient.java	\
 	src/HBaseException.java	\
 	src/HBaseRpc.java	\
@@ -94,6 +101,7 @@ asynchbase_SOURCES := \
 	src/KeyRegexpFilter.java	\
 	src/KeyValue.java	\
 	src/MultiAction.java	\
+	src/MultipleColumnPrefixFilter.java	\
 	src/NoSuchColumnFamilyException.java	\
 	src/NonRecoverableException.java	\
 	src/NotServingRegionException.java	\

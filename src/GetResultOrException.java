@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2012  The Async HBase Authors.  All rights reserved.
+ * Copyright (C) 2016  The Async HBase Authors.  All rights reserved.
  * This file is part of Async HBase.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -26,40 +26,37 @@
  */
 package org.hbase.async;
 
-import org.jboss.netty.logging.InternalLoggerFactory;
-import org.jboss.netty.logging.Slf4JLoggerFactory;
-import org.junit.Ignore;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import java.util.ArrayList;
 
-@Ignore // ignore for test runners
-final class Common {
+public class GetResultOrException {
+  final private ArrayList<KeyValue> cells;
+  final private Exception exception;
 
-  static {
-    InternalLoggerFactory.setDefaultFactory(new Slf4JLoggerFactory());
+  public GetResultOrException(final ArrayList<KeyValue> cells) {
+    this.cells = cells;
+    this.exception = null;
   }
 
-  static Logger logger(final Class<?> klass) {
-    return LoggerFactory.getLogger(klass);
+  public GetResultOrException(final Exception exp) {
+    this.exception = exp;
+    this.cells = null;
   }
 
-  static HBaseClient getOpt(final Class<?> klass, final String[] args) {
-    if (args.length < 2) {
-      System.err.println("Usage: " + klass.getSimpleName()
-                         + " <table> <family> [zkquorum] [znode]");
-      System.exit(1);
-    }
-    final String zkquorum;
-    if (args.length > 2) {
-      zkquorum = args[2];
-    } else {
-      zkquorum = "localhost";
-    }
-    if (args.length > 3) {
-      return new HBaseClient(zkquorum, args[3]);
-    } else {
-      return new HBaseClient(zkquorum);  // Default znode
-    }
+  public ArrayList<KeyValue> getCells() {
+    return this.cells;
   }
 
+  public Exception getException() {
+    return this.exception;
+  }
+  
+  public String toString() {
+    StringBuilder sb = new StringBuilder();
+    sb.append("{");
+    sb.append("cells : ").append(this.cells == null ? "null" : this.cells);
+    sb.append("; exception: ").append(this.exception == null ? "null" : this.exception);
+    sb.append("}");
+    return sb.toString();
+  }
 }
+

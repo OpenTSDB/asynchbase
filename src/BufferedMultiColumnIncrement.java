@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2012  The Async HBase Authors.  All rights reserved.
+ * Copyright (C) 2016  The Async HBase Authors.  All rights reserved.
  * This file is part of Async HBase.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -26,45 +26,79 @@
  */
 package org.hbase.async;
 
-import java.util.Arrays;
-import java.util.concurrent.atomic.AtomicLong;
-
 import com.google.common.cache.CacheBuilder;
 import com.google.common.cache.CacheLoader;
 import com.google.common.cache.CacheStats;
 import com.google.common.cache.LoadingCache;
 import com.google.common.cache.RemovalListener;
 import com.google.common.cache.RemovalNotification;
-
 import com.stumbleupon.async.Deferred;
 
+import java.util.Arrays;
+import java.util.Map;
+import java.util.concurrent.atomic.AtomicLong;
+
 /**
- * Package-private class to uniquely identify a buffered atomic increment.
- * @since 1.3
+ * Package-private class to uniquely identify a buffered multi-column atomic increment.
+ * @since 1.8
  */
-final class BufferedIncrement {
+final class BufferedMultiColumnIncrement {
+
+  private static boolean byteArrayEquals(byte[][] self, byte[][] other) {
+    if (self.length != other.length) {
+      return false;
+    }
+    for (int i = 0; i < self.length; i++) {
+      if (Bytes.memcmp(self[i], other[i]) != 0) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  private static int byteArrayHashCode(byte[][] self) {
+    int hashCode = 1;
+    for (byte[] aSelf : self) {
+      hashCode = Arrays.hashCode(aSelf) + 41 * hashCode;
+    }
+    return hashCode;
+  }
+
+  private static int byteArrayLength(byte[][] self) {
+    int len = 0;
+    for (byte[] aSelf : self) {
+      len += aSelf.length;
+    }
+    return len;
+  }
+
+  private static void byteArrayToString(StringBuilder sb, byte[][] self) {
+    for (byte[] aSelf : self) {
+      sb.append(Bytes.pretty(aSelf));
+    }
+  }
 
   private final byte[] table;
   private final byte[] key;
   private final byte[] family;
-  private final byte[] qualifier;
+  private final byte[][] qualifiers;
 
-  BufferedIncrement(final byte[] table, final byte[] key,
-                    final byte[] family, final byte[] qualifier) {
+  BufferedMultiColumnIncrement(final byte[] table, final byte[] key,
+                               final byte[] family, final byte[][] qualifiers) {
     this.table = table;
     this.key = key;
     this.family = family;
-    this.qualifier = qualifier;
+    this.qualifiers = qualifiers;
   }
 
   public boolean equals(final Object other) {
-    if (other == null || !(other instanceof BufferedIncrement)) {
+    if (other == null || !(other instanceof BufferedMultiColumnIncrement)) {
       return false;
     }
-    final BufferedIncrement incr = (BufferedIncrement) other;
+    final BufferedMultiColumnIncrement incr = (BufferedMultiColumnIncrement) other;
     // Compare fields most likely to be different first.
-    return Bytes.equals(qualifier, incr.qualifier)
-      && Bytes.equals(key, incr.key)
+    return Bytes.equals(key, incr.key)
+      && byteArrayEquals(qualifiers, incr.qualifiers)
       && Bytes.equals(family, incr.family)
       && Bytes.equals(table, incr.table);
   }
@@ -74,7 +108,7 @@ final class BufferedIncrement {
       Arrays.hashCode(table) + 41 * (
         Arrays.hashCode(key) + 41 * (
           Arrays.hashCode(family) + 41 * (
-            Arrays.hashCode(qualifier) + 41
+              byteArrayHashCode(qualifiers) + 41
           )
         )
       );
@@ -83,7 +117,7 @@ final class BufferedIncrement {
   public String toString() {
     final StringBuilder buf =
       new StringBuilder(52 + table.length + key.length * 2 + family.length
-                        + qualifier.length);
+                        + byteArrayLength(qualifiers));
     buf.append("BufferedIncrement(table=");
     Bytes.pretty(buf, table);
     buf.append(", key=");
@@ -91,13 +125,13 @@ final class BufferedIncrement {
     buf.append(", family=");
     Bytes.pretty(buf, family);
     buf.append(", qualifier=");
-    Bytes.pretty(buf, qualifier);
+    byteArrayToString(buf, qualifiers);
     buf.append(')');
     return buf.toString();
   }
 
   /**
-   * Atomic increment amount.
+   * Atomic increment amounts.
    * <p>
    * This behaves like a signed 49 bit atomic integer that
    * can only be incremented/decremented a specific number
@@ -108,8 +142,7 @@ final class BufferedIncrement {
    * reserved to keep track of how many times the value
    * got changed.
    * <p>
-   * Implementation details:
-   * <p>
+   * Implementation details:<br/>
    * The first 49 most significant bits are the value of
    * the amount (including 1 bit for the sign), the last
    * 15 least significant bits are the number of times
@@ -119,7 +152,7 @@ final class BufferedIncrement {
    * {@link AtomicLong}, but <strong>don't call methods
    * from the parent class directly</strong>.
    */
-  static final class Amount extends AtomicLong {
+  static final class Amounts  {
 
     /** Number of least-significant bits (LSB) we reserve to track updates.  */
     private final static int UPDATE_BITS = 15;
@@ -129,8 +162,10 @@ final class BufferedIncrement {
     private final static long OVERFLOW_MASK = (UPDATE_MASK << (64 - UPDATE_BITS)
                                                >> 1); // Reserve the sign bit.
 
+    final AtomicLong[] values;
+
     /** Everyone waiting for this increment is queued up here.  */
-    final Deferred<Long> deferred = new Deferred<Long>();
+    final Deferred<Map<byte[], Long>> deferred = new Deferred<Map<byte[], Long>>();
 
     /**
      * Creates a new atomic amount.
@@ -138,9 +173,12 @@ final class BufferedIncrement {
      * can be called.  Beyond this number of calls, the method will return
      * {@code false}.
      */
-    Amount(final short max_updates) {
-      super(max_updates);
+    Amounts(final short max_updates, final int numColumns) {
       assert max_updates > 0 : "WTF: max_updates=" + max_updates;
+      values = new AtomicLong[numColumns];
+      for(int i = 0; i < numColumns; i++) {
+        values[i] = new AtomicLong(max_updates);
+      }
     }
 
     /**
@@ -152,23 +190,34 @@ final class BufferedIncrement {
      * it couldn't due to an overflow/underflow or due to reaching the
      * maximum number of times this Amount could be incremented.
      */
-    final boolean update(final long delta) {
-      while (true) {
-        final long current = super.get();
-        final int updates = numUpdatesLeft(current);
-        if (updates == 0) {
-          return false;  // Already too many increments.
+    final boolean update(final long[] delta) {
+      assert (delta.length == values.length);
+
+      boolean okToUpdate = true;
+      for(int i = 0; i < delta.length && okToUpdate; i++) {
+        while (true) {
+          final long current = values[i].get();
+          final int updates = numUpdatesLeft(current);
+          if (updates == 0) {
+            okToUpdate = false;
+            break;  // Already too many increments.
+          }
+          final long new_amount = amount(current) + delta[i];
+          if (!checkOverflow(new_amount)) {
+            okToUpdate = false;
+            break;  // Overflow, new amount doesn't fit on 49 bits.
+          }
+          final long next = (new_amount << UPDATE_BITS) | (updates - 1);
+          if (values[i].compareAndSet(current, next)) {
+            // we need to reset it to 0. In case it is a partial failure, the value that has been
+            // successfully applied won't be inc'ed again
+            delta[i] = 0L;
+            break;
+          }
+          // else: CAS failed, loop again.
         }
-        final long new_amount = amount(current) + delta;
-        if (!checkOverflow(new_amount)) {
-          return false;  // Overflow, new amount doesn't fit on 49 bits.
-        }
-        final long next = (new_amount << UPDATE_BITS) | (updates - 1);
-        if (super.compareAndSet(current, next)) {
-          return true;
-        }
-        // else: CAS failed, loop again.
       }
+      return okToUpdate;
     }
 
     /**
@@ -176,17 +225,22 @@ final class BufferedIncrement {
      * @return The raw value, not the amount by which to increment.
      * To get the raw value, use {@link #amount} on the value returned.
      */
-    final long getRawAndInvalidate() {
-      while (true) {
-        final long current = super.get();
-        // Technically, we could leave the whole value set to 0 here, but
-        // to help when debugging with toString(), we restore the amount.
-        final long next = amount(current) << UPDATE_BITS;
-        if (super.compareAndSet(current, next)) {  // => sets updates left to 0.
-          return current;
+    final long[] getRawAndInvalidate() {
+      long[] currents = new long[values.length];
+      for(int i = 0; i < currents.length; i++) {
+        while (true) {
+          final long current = values[i].get();
+          // Technically, we could leave the whole value set to 0 here, but
+          // to help when debugging with toString(), we restore the amount.
+          final long next = amount(current) << UPDATE_BITS;
+          if (values[i].compareAndSet(current, next)) {  // => sets updates left to 0.
+            currents[i] = current;
+            break;
+          }
+          // else: CAS failed, loop again.
         }
-        // else: CAS failed, loop again.
       }
+      return currents;
     }
 
     /** The amount by which we're going to increment the value in HBase.  */
@@ -212,12 +266,23 @@ final class BufferedIncrement {
     }
 
     public String toString() {
-      final long n = super.get();
-      return "Amount(" + amount(n) + ", "
-        + numUpdatesLeft(n) + " updates left, " + deferred + ')';
+      long[] currents = new long[values.length];
+      StringBuilder sb = new StringBuilder();
+
+      sb.append("Amounts: ");
+      for(int i = 0; i < values.length; i++) {
+        currents[i] = values[i].get();
+        sb.append(amount(currents[i]));
+        sb.append("|");
+        sb.append(numUpdatesLeft(currents[i]));
+        sb.append(",");
+      }
+      sb.append("Deferred: ");
+      sb.append(deferred);
+      return sb.toString();
     }
 
-    private static final long serialVersionUID = 1333868942;
+    private static final long serialVersionUID = 1333868962;
   }
 
   /**
@@ -225,8 +290,8 @@ final class BufferedIncrement {
    * @param client The client to work with.
    * @param size Max number of entries of the cache.
    */
-  static LoadingCache<BufferedIncrement, Amount>
-    newCache(final HBaseClient client, final int size, final boolean durable) {
+  static LoadingCache<BufferedMultiColumnIncrement, Amounts>
+    newCache(final HBaseClient client, final int size) {
     final int ncpu = Runtime.getRuntime().availableProcessors();
     return CacheBuilder.newBuilder()
       // Beef up the concurrency level as this is the number of internal
@@ -245,12 +310,12 @@ final class BufferedIncrement {
       .concurrencyLevel(ncpu * 4)
       .maximumSize(size)
       .recordStats()  // As of Guava 12, stats are disabled by default.
-      .removalListener(new EvictionHandler(client, durable))
+      .removalListener(new EvictionHandler(client))
       .build(LOADER);
   }
 
   /** Creates new zero-Amount for new BufferedIncrements.  */
-  static final class Loader extends CacheLoader<BufferedIncrement, Amount> {
+  static final class Loader extends CacheLoader<BufferedMultiColumnIncrement, Amounts> {
 
     /**
      * Max number of increments/decrements per counter before we force-flush.
@@ -259,8 +324,8 @@ final class BufferedIncrement {
     private static final short MAX_UPDATES = 16383;
 
     @Override
-    public Amount load(final BufferedIncrement key) {
-      return new Amount(MAX_UPDATES);
+    public Amounts load(final BufferedMultiColumnIncrement key) {
+      return new Amounts(MAX_UPDATES, key.qualifiers.length);
     }
 
   }
@@ -270,34 +335,41 @@ final class BufferedIncrement {
 
   /** Handles cache evictions (also called on flushes).  */
   private static final class EvictionHandler
-    implements RemovalListener<BufferedIncrement, Amount> {
+    implements RemovalListener<BufferedMultiColumnIncrement, Amounts> {
 
     private final HBaseClient client;
-    private final boolean durable;
-    
-    EvictionHandler(final HBaseClient client, final boolean durable) {
+
+    EvictionHandler(final HBaseClient client) {
       this.client = client;
-      this.durable = durable;
     }
 
     @Override
-    public void onRemoval(final RemovalNotification<BufferedIncrement, Amount> entry) {
-      final Amount amount = entry.getValue();
-      final long raw = amount.getRawAndInvalidate();
-      final long delta = Amount.amount(raw);
-      if (Amount.numUpdatesLeft(raw) == Loader.MAX_UPDATES) {
-        // This amount was never incremented, because the number of updates
-        // left is still the original number.  Therefore this is an Amount
-        // that has been evicted before anyone could attach any update to
-        // it, so the delta must be 0, and we don't need to send this RPC.
-        assert delta == 0 : "WTF? Pristine Amount with non-0 delta: " + amount;
-        return;
+    public void onRemoval(final RemovalNotification<BufferedMultiColumnIncrement, Amounts> entry) {
+
+      final Amounts amounts = entry.getValue();
+      assert(amounts != null);
+
+      final long[] raw = amounts.getRawAndInvalidate();
+      final long[] delta = new long[raw.length];
+      boolean hasUpdates = false;
+      for(int i = 0; i < raw.length; i++) {
+        delta[i] = Amounts.amount(raw[i]);
+        if (Amounts.numUpdatesLeft(raw[i]) < Loader.MAX_UPDATES) {
+          // This amount was never incremented, because the number of updates
+          // left is still the original number.  Therefore this is an Amount
+          // that has been evicted before anyone could attach any update to
+          // it, so the delta must be 0, and we don't need to send this RPC.
+          hasUpdates = true;
+        }
       }
-      final BufferedIncrement incr = entry.getKey();
-      final AtomicIncrementRequest req =
-        new AtomicIncrementRequest(incr.table, incr.key, incr.family,
-                                   incr.qualifier, delta);
-      client.atomicIncrement(req, durable).chain(amount.deferred);
+
+      if (hasUpdates) {
+        final BufferedMultiColumnIncrement incr = entry.getKey();
+        final MultiColumnAtomicIncrementRequest req =
+            new MultiColumnAtomicIncrementRequest(incr.table, incr.key, incr.family,
+                incr.qualifiers, delta);
+        client.atomicIncrement(req).chain(amounts.deferred);
+      }
     }
 
   }

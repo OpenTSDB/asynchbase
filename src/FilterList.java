@@ -30,6 +30,8 @@ import org.jboss.netty.buffer.ChannelBuffer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import com.google.common.collect.ImmutableList;
+
 import java.util.List;
 
 import org.hbase.async.generated.FilterPB;
@@ -80,7 +82,21 @@ public final class FilterList extends ScanFilter {
     this.filters = filters;
     this.op = op;
   }
-
+  
+  /** @return the number of filters in the filter list
+   *  @since 1.8 */
+  public int size() {
+    // filter's can't be null here and shouldn't even be empty
+    return filters.size();
+  }
+  
+  /** @return An immutable copy of the filter list (though each filter could 
+   * still be modified)
+   *  @since 1.8 */
+  public List<ScanFilter> filters() {
+    return ImmutableList.copyOf(filters);
+  }
+  
   @Override
   byte[] serialize() {
     final FilterPB.FilterList.Builder filter =

@@ -46,6 +46,7 @@ import org.hbase.async.generated.FilterPB;
 import org.hbase.async.generated.HBasePB.TimeRange;
 import static org.hbase.async.HBaseClient.EMPTY_ARRAY;
 
+
 /**
  * Creates a scanner to read data sequentially from HBase.
  * <p>
@@ -111,6 +112,9 @@ public final class Scanner {
 
   private final HBaseClient client;
   private final byte[] table;
+
+  private boolean is_reversed = false;
+  private boolean is_first_reverse_region = true;
 
   /**
    * The key to start scanning from.  An empty array means "start from the
@@ -191,6 +195,9 @@ public final class Scanner {
    */
   private GetNextRowsRequest get_next_rows_request;
 
+  private boolean moreRows;
+  private boolean scannerClosedOnServer;
+
   /**
    * Constructor.
    * <strong>This byte array will NOT be copied.</strong>
@@ -200,6 +207,41 @@ public final class Scanner {
     KeyValue.checkTable(table);
     this.client = client;
     this.table = table;
+  }
+
+  /**
+  * Returns boolean indicating if scanner is in reversed direction
+  */
+  public boolean isReversed(){
+    return is_reversed;
+  }
+
+  /**
+  * Specifies if the scan will be in reverse or not
+  * @param reversed Indication of scan direction. If this is not
+  * invoked, scanning will default to not being reversed.
+  *
+  * In a reversed scan, the first Scanner opened is opened on the region
+  * that the Scanner start key is in (the same as forward scan). But
+  * subsequent scanners are opened via the overloaded
+  * {@link OpenScannerRequest} and the region to be opened on is
+  * found through a META lookup using
+   * {@link HBaseClient#locateRegionClosestBeforeKey}.
+  *
+  */
+  public void setReversed(boolean reversed){
+    checkScanningNotStarted();
+    is_reversed = true;
+  }
+
+  /**
+  * Returns boolean indicating if this is the first scanner opened on
+  * a reverse scan. This is different from the subsequent scanners opened
+  * in reverse scan because it is the only scanner whose region is found by
+  * looking up the key
+  */
+  public boolean isFirstReverseRegion(){
+    return is_first_reverse_region;
   }
 
   /**
@@ -698,8 +740,35 @@ public final class Scanner {
     if (region == DONE) {  // We're already done scanning.
       return Deferred.fromResult(null);
     } else if (region == null) {  // We need to open the scanner first.
-      return client.openScanner(this).addCallbackDeferring(
-        new Callback<Deferred<ArrayList<ArrayList<KeyValue>>>, Object>() {
+      if (this.isReversed() && !this.isFirstReverseRegion()){
+        return client.openReverseScanner(this)
+                .addCallbackDeferring(opened_scanner);
+      } else {
+        if (is_reversed && start_key == EMPTY_ARRAY){
+          start_key = Bytes.createMaxByteArray(Short.MAX_VALUE - table.length
+                  - 3);
+        }
+        return client.openScanner(this).addCallbackDeferring(opened_scanner);
+      }
+    }
+    if(scannerClosedOnServer) {
+      return scanFinished(moreRows);
+    }
+    // Need to silence this warning because the callback `got_next_row'
+    // declares its return type to be Object, because its return value
+    // may or may not be deferred.
+    @SuppressWarnings("unchecked")
+    final Deferred<ArrayList<ArrayList<KeyValue>>> d = (Deferred)
+      client.scanNextRows(this).addCallbacks(got_next_row, nextRowErrback());
+    return d;
+  }
+
+  /**
+   * Callback to handle response from opening a scanner
+   */
+  private final Callback<Deferred<ArrayList<ArrayList<KeyValue>>>, Object>
+    opened_scanner =
+      new Callback<Deferred<ArrayList<ArrayList<KeyValue>>>, Object>() {
           public Deferred<ArrayList<ArrayList<KeyValue>>> call(final Object arg) {
             final Response resp;
             if (arg instanceof Long) {
@@ -708,6 +777,8 @@ public final class Scanner {
             } else if (arg instanceof Response) {
               resp = (Response) arg;
               scanner_id = resp.scanner_id;
+              scannerClosedOnServer = resp.scannerClosedOnServer;
+              moreRows = resp.more;
             } else {
               throw new IllegalStateException("WTF? Scanner open callback"
                                               + " invoked with impossible"
@@ -718,7 +789,7 @@ public final class Scanner {
             }
             if (resp != null) {
               if (resp.rows == null) {
-                return scanFinished(resp);
+                return scanFinished(!resp.more);
               }
               return Deferred.fromResult(resp.rows);
             }
@@ -727,17 +798,8 @@ public final class Scanner {
           public String toString() {
             return "scanner opened";
           }
-        });
-    }
+        };
 
-    // Need to silence this warning because the callback `got_next_row'
-    // declares its return type to be Object, because its return value
-    // may or may not be deferred.
-    @SuppressWarnings("unchecked")
-    final Deferred<ArrayList<ArrayList<KeyValue>>> d = (Deferred)
-      client.scanNextRows(this).addCallbacks(got_next_row, nextRowErrback());
-    return d;
-  }
 
   /**
    * Singleton callback to handle responses of "next" RPCs.
@@ -752,6 +814,8 @@ public final class Scanner {
         if (response instanceof Response) {  // HBase 0.95 and up
           resp = (Response) response;
           rows = resp.rows;
+          scannerClosedOnServer = resp.scannerClosedOnServer;
+          moreRows = resp.more;
         } else if (response instanceof ArrayList) {  // HBase 0.94 and before.
           @SuppressWarnings("unchecked")  // I 3>> generics.
           final ArrayList<ArrayList<KeyValue>> r =
@@ -762,7 +826,7 @@ public final class Scanner {
         }
 
         if (rows == null) {  // We're done scanning this region.
-          return scanFinished(resp);
+          return scanFinished(resp != null && !resp.more);
         }
 
         final ArrayList<KeyValue> lastrow = rows.get(rows.size() - 1);
@@ -869,21 +933,32 @@ public final class Scanner {
     };
   }
 
-  private Deferred<ArrayList<ArrayList<KeyValue>>> scanFinished(final Response resp) {
+  private Deferred<ArrayList<ArrayList<KeyValue>>> scanFinished(boolean end) {
     final byte[] region_stop_key = region.stopKey();
+    final byte[] region_start_key = RegionInfo.startKeyFromRegionName(
+            region.name());
     // Check to see if this region is the last we should scan (either
     // because (1) it's the last region or (3) because its stop_key is
     // greater than or equal to the stop_key of this scanner provided
     // that (2) we're not trying to scan until the end of the table).
-    if (region_stop_key == EMPTY_ARRAY                           // (1)
-        || (stop_key != EMPTY_ARRAY                              // (2)
-            && Bytes.memcmp(stop_key, region_stop_key) <= 0)) {  // (3)
+    // or if the scanner is reversed, (4) it's the first region or
+    // (6) scanner is in reverse and stop_key is after the region start_key
+    // provided that (5) we are not trying to scan until the beginning.
+    if ((!is_reversed &&
+        (region_stop_key == EMPTY_ARRAY ||                            // (1)
+          (stop_key != EMPTY_ARRAY &&                                 // (2)
+          Bytes.memcmp(stop_key, region_stop_key) <= 0 )))            // (3)
+      || (is_reversed &&
+        (region_start_key == EMPTY_ARRAY ||                           // (4)
+          (stop_key != EMPTY_ARRAY &&                                 // (5)
+          Bytes.memcmp(stop_key, region_start_key) >= 0)))){          // (6)
+
       get_next_rows_request = null;        // free();
       families = null;                     // free();
       qualifiers = null;                   // free();
       start_key = stop_key = EMPTY_ARRAY;  // free() but mustn't be null.
-      if (resp != null && !resp.more) {
-        return null;  // The server already closed the scanner for us.
+      if (end) {
+        return Deferred.fromResult(null);  // The server already closed the scanner for us.
       }
       return close()  // Auto-close the scanner.
         .addCallback(new Callback<ArrayList<ArrayList<KeyValue>>, Object>() {
@@ -913,24 +988,31 @@ public final class Scanner {
     // "closure" below even after we've changed them.
     final long old_scanner_id = scanner_id;
     final RegionInfo old_region = region;
-    if (LOG.isDebugEnabled()) {
+    if(LOG.isDebugEnabled()) {
       LOG.debug("Scanner " + Bytes.hex(old_scanner_id) + " done scanning "
-                + old_region);
+              + old_region);
     }
     client.closeScanner(this).addCallback(new Callback<Object, Object>() {
       public Object call(final Object arg) {
-        if (LOG.isDebugEnabled()) {
+        if(LOG.isDebugEnabled()) {
           LOG.debug("Scanner " + Bytes.hex(old_scanner_id) + " closed on "
-                    + old_region);
+                  + old_region);
         }
         return arg;
       }
+
       public String toString() {
         return "scanner moved";
       }
     });
-    // Continue scanning from the next region's start key.
-    start_key = region.stopKey();
+    // Continue scanning from the next region's start key
+    // Dependent on direction of scan
+    if (is_reversed){
+      start_key = RegionInfo.startKeyFromRegionName(region.name());
+    } else{
+      start_key = region.stopKey();
+    }
+
     scanner_id = 0xDEAD000AA000DEADL;   // Make debugging easier.
     invalidate();
     return nextRows();
@@ -1030,6 +1112,7 @@ public final class Scanner {
    */
   void invalidate() {
     region = null;
+    scannerClosedOnServer = false;
   }
 
   /**
@@ -1054,6 +1137,16 @@ public final class Scanner {
    */
   HBaseRpc getOpenRequest() {
     return new OpenScannerRequest();
+  }
+
+  /**
+   * Returns an RPC to open this scanner for reverse scan.
+   * Reverse scan requires to open scanner with region start key,
+   * but have to preserve start key for real scan.
+   * @param region_start_key region's start key
+   */
+  HBaseRpc getOpenRequestForReverseScan(final byte[] region_start_key) {
+    return new OpenScannerRequest(table, region_start_key);
   }
 
   /**
@@ -1092,17 +1185,20 @@ public final class Scanner {
      */
     private final boolean more;
 
+    private final boolean scannerClosedOnServer;
+
     Response(final long scanner_id,
              final ArrayList<ArrayList<KeyValue>> rows,
-             final boolean more) {
+             final boolean more, final boolean scannerClosedOnServer) {
       this.scanner_id = scanner_id;
       this.rows = rows;
       this.more = more;
+      this.scannerClosedOnServer = scannerClosedOnServer;
     }
 
     public String toString() {
       return "Scanner$Response(scanner_id=" + Bytes.hex(scanner_id)
-        + ", rows=" + rows + ", more=" + more + ")";
+        + ", rows=" + rows + ", more=" + more + ", scannerClosedOnServer=" + scannerClosedOnServer +")";
     }
   }
 
@@ -1157,10 +1253,23 @@ public final class Scanner {
   /**
    * RPC sent out to open a scanner on a RegionServer.
    */
-  private final class OpenScannerRequest extends HBaseRpc {
+  final class OpenScannerRequest extends HBaseRpc {
 
+    /**
+     * Default constructor that is used for every forward Scanner and
+     * for the first Scanner in a reverse Scan
+     */
     public OpenScannerRequest() {
       super(Scanner.this.table, start_key);
+      is_first_reverse_region = false;
+    }
+
+    /**
+     * Overloaded constructor for the second to last Scanners in a reverse scan
+     * when scanning multiple regions.
+     */
+    public OpenScannerRequest(final byte[] table, final byte[] row){
+      super(table, row);
     }
 
     @Override
@@ -1227,13 +1336,13 @@ public final class Scanner {
       // Save the region in the Scanner.  This kind of a kludge but it really
       // is the easiest way to give the Scanner the RegionInfo it needs.
       Scanner.this.region = super.region;
-
       if (server_version < RegionClient.SERVER_VERSION_095_OR_ABOVE) {
         return serializeOld(server_version);
       }
       final Scan.Builder scan = Scan.newBuilder()
         .setStartRow(Bytes.wrap(start_key))
-        .setStopRow(Bytes.wrap(stop_key));
+        .setStopRow(Bytes.wrap(stop_key))
+        .setReversed(is_reversed);
       if (families != null) {
         for (int i = 0; i < families.length; i++) {
           final Column.Builder columns = Column.newBuilder();
@@ -1276,6 +1385,9 @@ public final class Scanner {
         .setRegion(region.toProtobuf())
         .setScan(scan.build())
         .setNumberOfRows(max_num_rows)
+        // Hardcoded these parameters to false since AsyncHBase cannot support them
+        .setClientHandlesHeartbeats(false)
+        .setClientHandlesPartials(false)
         .build();
       return toChannelBuffer(SCAN, req);
     }
@@ -1351,9 +1463,10 @@ public final class Scanner {
         throw new InvalidResponseException("Scan RPC response doesn't contain a"
                                            + " scanner ID", resp);
       }
+      final boolean scannerClosedOnServer = resp.hasMoreResultsInRegion() && !resp.getMoreResultsInRegion();
       return new Response(resp.getScannerId(),
                           getRows(resp, buf, cell_size),
-                          resp.getMoreResults());
+                          resp.getMoreResults(), scannerClosedOnServer);
     }
 
     public String toString() {
@@ -1367,7 +1480,7 @@ public final class Scanner {
   /**
    * RPC sent out to fetch the next rows from the RegionServer.
    */
-  private final class GetNextRowsRequest extends HBaseRpc {
+  final class GetNextRowsRequest extends HBaseRpc {
 
     @Override
     byte[] method(final byte server_version) {
@@ -1390,6 +1503,9 @@ public final class Scanner {
       final ScanRequest req = ScanRequest.newBuilder()
         .setScannerId(scanner_id)
         .setNumberOfRows(max_num_rows)
+        // Hardcoded these parameters to false since AsyncHBase cannot support them
+        .setClientHandlesHeartbeats(false)
+        .setClientHandlesPartials(false)
         .build();
       return toChannelBuffer(SCAN, req);
     }
@@ -1407,7 +1523,8 @@ public final class Scanner {
       if (rows == null) {
         return null;
       }
-      return new Response(resp.getScannerId(), rows, resp.getMoreResults());
+      final boolean scannerClosedOnServer = resp.hasMoreResultsInRegion() && !resp.getMoreResultsInRegion();
+      return new Response(resp.getScannerId(), rows, resp.getMoreResults(), scannerClosedOnServer);
     }
 
     public String toString() {
@@ -1422,7 +1539,7 @@ public final class Scanner {
   /**
    * RPC sent out to close a scanner on a RegionServer.
    */
-  private static final class CloseScannerRequest extends HBaseRpc {
+  static final class CloseScannerRequest extends HBaseRpc {
 
     private static final byte[] CLOSE = new byte[] { 'c', 'l', 'o', 's', 'e' };
 
@@ -1448,7 +1565,6 @@ public final class Scanner {
         writeHBaseLong(buf, scanner_id);
         return buf;
       }
-
       final ScanRequest req = ScanRequest.newBuilder()
         .setScannerId(scanner_id)
         .setCloseScanner(true)
@@ -1463,9 +1579,13 @@ public final class Scanner {
       final ScanResponse resp = readProtobuf(buf, ScanResponse.PARSER);
       final long id = resp.getScannerId();
       if (scanner_id != id) {
-        throw new InvalidResponseException("Scan RPC response was for scanner"
-                                           + " ID " + id + " but we expected"
-                                           + scanner_id, resp);
+        if (LOG.isDebugEnabled()) {
+          LOG.debug("Scan RPC response was for scanner ID " + id 
+              + " but we expected " + scanner_id, resp);
+        }
+        //throw new InvalidResponseException("Scan RPC response was for scanner"
+        //                                   + " ID " + id + " but we expected"
+        //                                   + scanner_id, resp);
       }
       return null;
     }

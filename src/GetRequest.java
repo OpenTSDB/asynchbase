@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2010-2012  The Async HBase Authors.  All rights reserved.
+ * Copyright (C) 2010-2016  The Async HBase Authors.  All rights reserved.
  * This file is part of Async HBase.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -30,6 +30,7 @@ import java.util.ArrayList;
 
 import org.jboss.netty.buffer.ChannelBuffer;
 import org.hbase.async.generated.ClientPB;
+import org.hbase.async.generated.ClientPB.MutationProto;
 import org.hbase.async.generated.FilterPB;
 import org.hbase.async.generated.HBasePB.TimeRange;
 
@@ -42,7 +43,7 @@ import org.hbase.async.generated.HBasePB.TimeRange;
  * <h1>A note on passing {@code String}s in argument</h1>
  * All strings are assumed to use the platform's default charset.
  */
-public final class GetRequest extends HBaseRpc
+public final class GetRequest extends BatchableRpc
   implements HBaseRpc.HasTable, HBaseRpc.HasKey,
              HBaseRpc.HasFamily, HBaseRpc.HasQualifiers {
 
@@ -54,6 +55,7 @@ public final class GetRequest extends HBaseRpc
   private byte[] family;     // TODO(tsuna): Handle multiple families?
   private byte[][] qualifiers;
   private long lockid = RowLock.NO_LOCK;
+  private boolean populate_blockcache = true;
 
   /**
    * How many versions of each cell to retrieve.
@@ -84,6 +86,7 @@ public final class GetRequest extends HBaseRpc
    */
   public GetRequest(final byte[] table, final byte[] key) {
     super(table, key);
+    this.bufferable = false; //don't buffer get request
   }
 
   /**
@@ -118,6 +121,7 @@ public final class GetRequest extends HBaseRpc
                     final byte[] family) {
     super(table, key);
     this.family(family);
+    this.bufferable = false; //don't buffer get request
   }
 
   /**
@@ -132,6 +136,7 @@ public final class GetRequest extends HBaseRpc
                     final String family) {
     this(table, key);
     this.family(family);
+    this.bufferable = false; //don't buffer get request
   }
 
   /**
@@ -150,6 +155,7 @@ public final class GetRequest extends HBaseRpc
     super(table, key);
     this.family(family);
     this.qualifier(qualifier);
+    this.bufferable = false; //don't buffer get request
   }
 
   /**
@@ -167,6 +173,7 @@ public final class GetRequest extends HBaseRpc
     this(table, key);
     this.family(family);
     this.qualifier(qualifier);
+    this.bufferable = false; //don't buffer get request
   }
 
   /**
@@ -180,6 +187,7 @@ public final class GetRequest extends HBaseRpc
                      final byte[] key) {
     super(table, key);
     this.versions |= EXIST_FLAG;
+    this.bufferable = false; //don't buffer get request
   }
 
   /**
@@ -212,7 +220,8 @@ public final class GetRequest extends HBaseRpc
   }
 
   /** Returns true if this is actually an "Get" RPC. */
-  private boolean isGetRequest() {
+  // change this to package level since batchGet need to use this as well
+  boolean isGetRequest() {
     return (versions & EXIST_FLAG) == 0;
   }
 
@@ -313,7 +322,7 @@ public final class GetRequest extends HBaseRpc
    * will not be returned by the scanner.  HBase has internal optimizations to
    * avoid loading in memory data filtered out in some cases.
    * @param timestamp The minimum timestamp to scan (inclusive).
- * @return
+   * @return
    * @throws IllegalArgumentException if {@code timestamp < 0}.
    * @throws IllegalArgumentException if {@code timestamp > getMaxTimestamp()}.
    * @see #setTimeRange
@@ -451,12 +460,7 @@ public final class GetRequest extends HBaseRpc
   public byte[] key() {
     return key;
   }
-
-  @Override
-  public byte[] family() {
-    return family;
-  }
-
+  
   @Override
   public byte[][] qualifiers() {
     return qualifiers;
@@ -477,7 +481,7 @@ public final class GetRequest extends HBaseRpc
   // ---------------------- //
   // Package private stuff. //
   // ---------------------- //
-
+  
   /**
    * Predicts a lower bound on the serialized size of this RPC.
    * This is to avoid using a dynamic buffer, to avoid re-sizing the buffer.
@@ -485,7 +489,7 @@ public final class GetRequest extends HBaseRpc
    * to be less than what we need, there will be an exception which will
    * prevent the RPC from being serialized.  That'd be a severe bug.
    */
-  private int predictSerializedSize(final byte server_version) {
+  int predictSerializedSize(final byte server_version) {
     int size = 0;
     size += 4;  // int:  Number of parameters.
     size += 1;  // byte: Type of the 1st parameter.
@@ -528,11 +532,69 @@ public final class GetRequest extends HBaseRpc
     return size;
   }
 
+  /** Serialize the raw underlying `Put' into the given buffer.  */
+  void serializePayloadInto(final byte server_version, final ChannelBuffer buf) {
+    buf.writeByte(1);    // Get#GET_VERSION.  Undocumented versioning of Get.
+    writeByteArray(buf, key);
+    buf.writeLong(lockid);  // Lock ID.
+    buf.writeInt(maxVersions()); // Max number of versions to return.
+    buf.writeByte(0x00); // boolean (false): whether or not to use a filter.
+    // If the previous boolean was true:
+    //   writeByteArray(buf, filter name as byte array);
+    //   write the filter itself
+
+    if (server_version >= 26) {  // New in 0.90 (because of HBASE-3174).
+      // boolean: whether to cache the blocks.
+      buf.writeByte(populate_blockcache ? 0x01 : 0x00);
+    }
+
+    // TimeRange
+    buf.writeLong(0);               // Minimum timestamp.
+    buf.writeLong(Long.MAX_VALUE);  // Maximum timestamp.
+    buf.writeByte(0x01);            // Boolean: "all time".
+    // The "all time" boolean indicates whether or not this time range covers
+    // all possible times.  Not sure why it's part of the serialized RPC...
+
+    // Families.
+    buf.writeInt(family != null ? 1 : 0);  // Number of families that follow.
+
+    if (family != null) {
+      // Each family is then written like so:
+      writeByteArray(buf, family);  // Column family name.
+      if (qualifiers != null) {
+        buf.writeByte(0x01);  // Boolean: We want specific qualifiers.
+        buf.writeInt(qualifiers.length);   // How many qualifiers do we want?
+        for (final byte[] qualifier : qualifiers) {
+          writeByteArray(buf, qualifier);  // Column qualifier name.
+        }
+      } else {
+        buf.writeByte(0x00);  // Boolean: we don't want specific qualifiers.
+      }
+    }
+    if (server_version >= RegionClient.SERVER_VERSION_092_OR_ABOVE) {
+      buf.writeInt(0);  // Attributes map: number of elements.
+    }
+  }
+
   /** Serializes this request.  */
   ChannelBuffer serialize(final byte server_version) {
     if (server_version < RegionClient.SERVER_VERSION_095_OR_ABOVE) {
       return serializeOld(server_version);
     }
+    
+    final ClientPB.GetRequest.Builder get = ClientPB.GetRequest.newBuilder()
+      .setRegion(region.toProtobuf())
+      .setGet(getPB().build());
+
+    return toChannelBuffer(GetRequest.GGET, get.build());
+  }
+
+  /**
+   * Generates the get request protobuf object.
+   * @return A Get Request protobuf builder object build from this RPC.
+   * @since 1.8
+   */
+  ClientPB.Get.Builder getPB() {
     final ClientPB.Get.Builder getpb = ClientPB.Get.newBuilder()
       .setRow(Bytes.wrap(key));
 
@@ -577,11 +639,11 @@ public final class GetRequest extends HBaseRpc
       getpb.setExistenceOnly(true);
     }
 
-    final ClientPB.GetRequest.Builder get = ClientPB.GetRequest.newBuilder()
-      .setRegion(region.toProtobuf())
-      .setGet(getpb.build());
-
-    return toChannelBuffer(GetRequest.GGET, get.build());
+    if (!populate_blockcache) {
+      getpb.setCacheBlocks(false);
+    }
+    
+    return getpb;
   }
 
   /** Serializes this request for HBase 0.94 and before.  */
@@ -653,6 +715,11 @@ public final class GetRequest extends HBaseRpc
     }
   }
 
+
+  public void setServerBlockCache(final boolean populate_blockcache) {
+    this.populate_blockcache = populate_blockcache;
+  }
+
   /**
    * Transforms a protobuf get response into a list of {@link KeyValue}.
    * @param resp The protobuf response from which to extract the KVs.
@@ -696,4 +763,71 @@ public final class GetRequest extends HBaseRpc
     return rows;
   }
 
+  /**
+   * Converts a protobuf result into a list of {@link KeyValue} and parses a
+   * list of cells.
+   * @param The protobuf'ed results from which to extract the KVs.
+   * @param buf The buffer from which the protobuf was read.
+   * @param cell_size The number of bytes of the cell block that follows,
+   * in the buffer.
+   * @return A non-null array list of KeyValue objects. May be empty.
+   * @since 1.8
+   */
+  static ArrayList<KeyValue> convertResultWithAssociatedCells(
+        final ClientPB.Result res,
+        final ChannelBuffer buf,
+        final int cell_size) {
+    final int associated_cell_cnt = res.getAssociatedCellCount();
+    final int pb_cell_cnt = res.getCellCount();
+    final ArrayList<KeyValue> cells = 
+        new ArrayList<KeyValue>(pb_cell_cnt + associated_cell_cnt);
+    KeyValue kv = null;
+    for (int i = 0; i < pb_cell_cnt; ++i) {
+      kv = KeyValue.fromCell(res.getCell(i), kv);
+      cells.add(kv);
+    }
+    
+    for (int i = 0; i < associated_cell_cnt; ++i) {
+      final int kv_length = buf.readInt();
+      kv = KeyValue.fromBuffer(buf, kv);
+      cells.add(kv);
+    }
+    
+    return cells;
+  }
+  
+  @Override
+  MutationProto toMutationProto() {
+    // TODO Auto-generated method stub
+    return null;
+  }
+  
+  @Override
+  byte version(byte server_version) {
+    // TODO Auto-generated method stub
+    return 0;
+  }
+  
+  @Override
+  byte code() {
+    // TODO Auto-generated method stub
+    return 0;
+  }
+  
+  @Override
+  int numKeyValues() {
+    // TODO Auto-generated method stub
+    return 0;
+  }
+  
+  @Override
+  int payloadSize() {
+    // TODO Auto-generated method stub
+    return 0;
+  }
+  
+  @Override
+  void serializePayload(ChannelBuffer buf) {
+    // TODO Auto-generated method stub
+  }
 }

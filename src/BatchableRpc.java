@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2012-2012  The Async HBase Authors.  All rights reserved.
+ * Copyright (C) 2012-2016  The Async HBase Authors.  All rights reserved.
  * This file is part of Async HBase.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -85,7 +85,20 @@ abstract class BatchableRpc extends HBaseRpc
     this.timestamp = timestamp;
     this.lockid = lockid;
   }
-
+  
+  /**
+   * Package private constructor overload.
+   * @param table The name of the table this RPC is for.
+   * @param key The row key for this RPC.
+   * @since 1.8
+   */
+  BatchableRpc(final byte[] table, final byte[] key) {
+    super(table, key);
+    this.family = null;
+    this.timestamp = Long.MAX_VALUE;
+    this.lockid = RowLock.NO_LOCK;
+  }
+  
   /**
    * Sets whether or not this RPC is can be buffered on the client side.
    * The default is {@code true}.

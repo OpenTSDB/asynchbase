@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2010-2012  The Async HBase Authors.  All rights reserved.
+ * Copyright (C) 2010-2016  The Async HBase Authors.  All rights reserved.
  * This file is part of Async HBase.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -108,7 +108,8 @@ final class MultiAction extends HBaseRpc implements HBaseRpc.IsEdit {
    * Adds an RPC to this batch.
    * <p>
    * @param rpc The RPC to add in this batch.
-   * Any edit added <b>must not</b> specify an explicit row lock.
+   * @throws IllegalArgumentException if the edit specifies an explicit row lock.
+   * Edits with locks cannot be batched
    * @throws IllegalArgumentException if the region was missing from the RPC
    */
   public void add(final BatchableRpc rpc) {
@@ -212,6 +213,7 @@ final class MultiAction extends HBaseRpc implements HBaseRpc.IsEdit {
       return serializeOld(server_version);
     }
 
+    // we create a new RegionAction for each region.
     Collections.sort(batch, SORT_BY_REGION);
     final MultiRequest.Builder req = MultiRequest.newBuilder();
     RegionAction.Builder actions = null;
@@ -228,10 +230,12 @@ final class MultiAction extends HBaseRpc implements HBaseRpc.IsEdit {
         actions.setRegion(rpc.getRegion().toProtobuf());
         prev_region = region.name();
       }
-      final Action action = Action.newBuilder()
-        .setIndex(i++)
-        .setMutation(rpc.toMutationProto())
-        .build();
+      final Action.Builder action = Action.newBuilder().setIndex(i++);
+      if (rpc instanceof GetRequest) {
+        action.setGet(((GetRequest)rpc).getPB());
+      } else {
+        action.setMutation(rpc.toMutationProto());
+      }
       actions.addAction(action);
     }
     req.addRegionAction(actions.build());
@@ -476,7 +480,7 @@ final class MultiAction extends HBaseRpc implements HBaseRpc.IsEdit {
    * Sorts {@link BatchableRpc}s appropriately for the `multi' RPC.
    * Used with HBase 0.94 and earlier only.
    */
-  private static final class MultiActionComparator
+  static final class MultiActionComparator
     implements Comparator<BatchableRpc> {
 
     private MultiActionComparator() {  // Can't instantiate outside of this class.
@@ -526,6 +530,21 @@ final class MultiAction extends HBaseRpc implements HBaseRpc.IsEdit {
 
   }
 
+  /**
+   * So this guy is a little messy now that we want to start batching things like
+   * increments and appends that could return data. If all of the calls are homogeneous
+   * then it isn't too bad. BUT if we mix things, then it's kinda gross. e.g. if
+   * we have rpcs like
+   * 
+   * 1 => append with response
+   * 2 => append without response
+   * 3 => put (no response)
+   * 4 => increment with response
+   * 
+   * we have to parse those out. To compound matters, HBase will "helpfully"
+   * return null responses to append requests if you don't ask for a result
+   * so we have to account for that in our indexing.
+   */
   @Override
   Object deserialize(final ChannelBuffer buf, final int cell_size) {
     final MultiResponse resp = readProtobuf(buf, MultiResponse.PARSER);
@@ -534,8 +553,6 @@ final class MultiAction extends HBaseRpc implements HBaseRpc.IsEdit {
     final Object[] resps = new Object[nrpcs];
     int n = 0;  // Index in `batch'.
     int r = 0;  // Index in `regionActionResult' in the PB.
-    ArrayList<KeyValue> kvs = null;
-    int kv_index = 0;
     
     while (n < nrpcs && r < responses) {
       final RegionActionResult results = resp.getRegionActionResult(r++);
@@ -618,14 +635,16 @@ final class MultiAction extends HBaseRpc implements HBaseRpc.IsEdit {
           // a batch
           if (batch.get(n) instanceof AppendRequest) {
             final AppendRequest append_request = (AppendRequest)(batch.get(n));
-            if (kvs == null) { // only do this once
-              kvs = GetRequest.convertResult(roe.getResult(), buf, cell_size);
-            }
+            ArrayList<KeyValue> kvs = GetRequest.convertResultWithAssociatedCells(
+                roe.getResult(), buf, cell_size);
             if (append_request.returnResult()) {
-              result = kvs.get(kv_index++);
+              result = kvs.get(0);
             } else {
               result = SUCCESS;
             }
+          } else if (batch.get(n) instanceof GetRequest) {
+            result = GetRequest.convertResultWithAssociatedCells(
+                roe.getResult(), buf, cell_size);
           } else {
             result = SUCCESS;  
           }
@@ -856,7 +875,7 @@ final class MultiAction extends HBaseRpc implements HBaseRpc.IsEdit {
   }
 
   /** Singleton class returned to indicate success of a multi-put or append.  */
-  private static final class MultiActionSuccess {
+  static final class MultiActionSuccess {
 
     private MultiActionSuccess() {
     }

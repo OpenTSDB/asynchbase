@@ -977,7 +977,10 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
    */
   void sendRpc(HBaseRpc rpc) {
     if (chan != null) {
-      if (rpc instanceof BatchableRpc
+      // Now {@link GetRequest} is also a {@link BatchableRpc}, we don't want to retry 
+      // the get request once it fails.
+      if (rpc instanceof BatchableRpc 
+          && !(rpc instanceof GetRequest)
           && (server_version >= SERVER_VERSION_092_OR_ABOVE  // Before 0.92,
               || rpc instanceof PutRequest)) {  // we could only batch "put".
         final BatchableRpc edit = (BatchableRpc) rpc;

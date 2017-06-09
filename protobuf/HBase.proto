@@ -64,6 +64,7 @@ message RegionInfo {
   optional bytes end_key = 4;
   optional bool offline = 5;
   optional bool split = 6;
+  optional int32 replica_id = 7 [default = 0];
 }
 
 /**
@@ -101,6 +102,12 @@ message RegionSpecifier {
 message TimeRange {
   optional uint64 from = 1;
   optional uint64 to = 2;
+}
+
+/* ColumnFamily Specific TimeRange */
+message ColumnFamilyTimeRange {
+  required bytes column_family = 1;
+  required TimeRange time_range = 2;
 }
 
 /* Comparison operators */
@@ -163,6 +170,7 @@ message SnapshotDescription {
   }
   optional Type type = 4 [default = FLUSH];
   optional int32 version = 5;
+  optional string owner = 6;
 }
 
 /**
@@ -176,6 +184,16 @@ message ProcedureDescription {
 }
 
 message EmptyMsg {
+}
+
+enum TimeUnit {
+  NANOSECONDS = 1;
+  MICROSECONDS = 2;
+  MILLISECONDS = 3;
+  SECONDS = 4;
+  MINUTES = 5;
+  HOURS = 6;
+  DAYS = 7;
 }
 
 message LongMsg {
@@ -200,9 +218,22 @@ message NamespaceDescriptor {
   repeated NameStringPair configuration = 2;
 }
 
+// Rpc client version info proto. Included in ConnectionHeader on connection setup
+message VersionInfo {
+  required string version = 1;
+  required string url = 2;
+  required string revision = 3;
+  required string user = 4;
+  required string date = 5;
+  required string src_checksum = 6;
+  optional uint32 version_major = 7;
+  optional uint32 version_minor = 8;
+}
+
 /**
  * Description of the region server info
  */
 message RegionServerInfo {
   optional int32 infoPort = 1;
+  optional VersionInfo version_info = 2;
 }

@@ -15,29 +15,22 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-import "Client.proto";
+
+ //This file includes protocol buffers used in MapReduce only.
+
 option java_package = "org.hbase.async.generated";
-option java_outer_classname = "MultiRowMutationPB";
+option java_outer_classname = "MapReducePB";
 option java_generate_equals_and_hash = false;
-option java_generic_services = false;
 option optimize_for = LITE_RUNTIME;
 
-message MultiRowMutationProcessorRequest{
+import "HBase.proto";
+
+message ScanMetrics {
+  repeated NameInt64Pair metrics = 1;
 }
 
-message MultiRowMutationProcessorResponse{
-}
-
-message MutateRowsRequest {
-    repeated MutationProto mutation_request = 1;
-    optional uint64 nonce_group = 2;
-    optional uint64 nonce = 3;
-}
-
-message MutateRowsResponse {
-}
-
-service MultiRowMutationService {
-    rpc MutateRows(MutateRowsRequest)
-    returns(MutateRowsResponse);
+message TableSnapshotRegionSplit {
+  repeated string locations = 2;
+  optional TableSchema table = 3;
+  optional RegionInfo region = 4;
 }

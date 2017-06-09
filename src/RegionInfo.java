@@ -225,6 +225,46 @@ final class RegionInfo implements Comparable<RegionInfo> {
     return Arrays.copyOf(region_name, comma);
   }
 
+  /**
+   * Given name of a region, returns its start key
+   * @throws IllegalArgumentException if the name of the region is malformed
+   * @param region_name Full region_name created in the constructor
+   * @return byte Array of the start key
+   */
+  static byte[] startKeyFromRegionName(final byte[] region_name){
+    int key_begin = 0;
+    int key_end= 1;
+    int comma = 0;
+    for (/**/; key_end < region_name.length; key_end++) {
+      if (region_name[key_end] == ',') {
+        comma++;
+        if (comma == 1){
+          key_begin = key_end+1;
+        }
+        if (comma == 2){
+          break;
+        }
+      }
+    }
+
+    // If reached the end and the string being returned is not empty
+    if (key_end == region_name.length &&  (comma == 2)) {
+      throw new IllegalArgumentException("Malformed region name, not enough"
+              + " commas: " + Bytes.pretty(region_name));
+    }
+
+    // Only return the string if region length is greater than 0
+    if (key_end - key_begin > 0 && region_name.length > 0){
+      return Arrays.copyOfRange(region_name, key_begin, key_end);
+    }
+    // Otherwise, return an empty string as start key aka this is the 
+    // start key for the first region in the table.
+    else {
+      return EMPTY_ARRAY;
+    }
+
+  }
+
   @Override
   public int compareTo(final RegionInfo other) {
     return Bytes.memcmp(region_name, other.region_name);

@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2013  The Async HBase Authors.  All rights reserved.
+ * Copyright (C) 2013-2016  The Async HBase Authors.  All rights reserved.
  * This file is part of Async HBase.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -30,6 +30,7 @@ import org.jboss.netty.buffer.ChannelBuffer;
 import org.jboss.netty.util.CharsetUtil;
 
 import java.nio.charset.Charset;
+import java.util.Arrays;
 
 import org.hbase.async.generated.ComparatorPB;
 import org.hbase.async.generated.FilterPB;
@@ -116,7 +117,19 @@ public final class KeyRegexpFilter extends ScanFilter {
     this.regexp = regexp;
     this.charset = Bytes.UTF8(charset.name());
   }
-
+  
+  /** @return the regular expression, a copy of the byte array
+   *  @since 1.8 */
+  public byte[] getRegexp() {
+    return Arrays.copyOf(regexp, regexp.length);
+  }
+  
+  /** @return the character set for this regular expression
+   *  @since 1.8 */
+  public Charset getCharset() {
+    return Charset.forName(new String(charset));
+  }
+  
   @Override
   byte[] serialize() {
     final ComparatorPB.Comparator.Builder comparator =
