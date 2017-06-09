@@ -108,7 +108,6 @@ import org.hbase.async.generated.ZooKeeperPB;
  * an RPC in flight will lead to <em>unpredictable</em> results and voids
  * your warranty</strong>.
  *
- * <a name="#durability"></a>
  * <h1>Data Durability</h1>
  * Some methods or RPC types take a {@code durable} argument.  When an edit
  * requests to be durable, the success of the RPC guarantees that the edit is
@@ -563,7 +562,7 @@ public final class HBaseClient {
    * "asynchbase.zk.quorum" specified in the format {@code "host1,host2,host3"}
    * and an executor thread pool.
    * @param config A configuration object
-   * @param The executor from which to obtain threads for NIO
+   * @param executor The executor from which to obtain threads for NIO
    * operations.  It is <strong>strongly</strong> encouraged to use a
    * {@link Executors#newCachedThreadPool} or something equivalent unless
    * you're sure to understand how Netty creates and uses threads.
@@ -946,8 +945,8 @@ public final class HBaseClient {
     return flush_interval;
   }
 
-  /** @returns the default RPC timeout period in milliseconds
-   * @since 1.7 */
+  /** @return the default RPC timeout period in milliseconds
+   *  @since 1.7 */
   public int getDefaultRpcTimeout() {
     return rpc_timeout;
   }
