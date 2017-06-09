@@ -2802,26 +2802,24 @@ public final class HBaseClient {
 
       // Stop here if this is a known NSRE and `rpc' is not our probe RPC that
       // is not suspended
-      synchronized (exists_rpc) {
-        if (known_nsre && exists_rpc != rpc && !exists_rpc.isSuspendedProbe()) {
-          if (size != nsre_high_watermark && size % NSRE_LOG_EVERY == 0) {
-            final String msg = "There are now " + size
-              + " RPCs pending due to NSRE on " + Bytes.pretty(region_name);
-            if (size + NSRE_LOG_EVERY < nsre_high_watermark) {
-              LOG.info(msg);  // First message logged at INFO level.
-            } else {
-              LOG.warn(msg);  // Last message logged with increased severity.
-            }
+      if (known_nsre && exists_rpc != rpc && !exists_rpc.isSuspendedProbe()) {
+        if (size != nsre_high_watermark && size % NSRE_LOG_EVERY == 0) {
+          final String msg = "There are now " + size
+            + " RPCs pending due to NSRE on " + Bytes.pretty(region_name);
+          if (size + NSRE_LOG_EVERY < nsre_high_watermark) {
+            LOG.info(msg);  // First message logged at INFO level.
+          } else {
+            LOG.warn(msg);  // Last message logged with increased severity.
           }
-          if (reject) {
-            rpc.callback(new PleaseThrottleException(size + " RPCs waiting on "
-              + Bytes.pretty(region_name) + " to come back online", e, rpc,
-              exists_rpc.getDeferred()));
-          }
-          return;  // This NSRE is already known and being handled.
         }
-        exists_rpc.setSuspendedProbe(false);
+        if (reject) {
+          rpc.callback(new PleaseThrottleException(size + " RPCs waiting on "
+            + Bytes.pretty(region_name) + " to come back online", e, rpc,
+            exists_rpc.getDeferred()));
+        }
+        return;  // This NSRE is already known and being handled.
       }
+      exists_rpc.setSuspendedProbe(false);
     }
 
     num_nsres.increment();

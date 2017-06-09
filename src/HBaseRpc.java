@@ -496,11 +496,11 @@ public abstract class HBaseRpc {
    */
   private boolean suspended_probe = false;
 
-  boolean isSuspendedProbe() {
+  synchronized boolean isSuspendedProbe() {
     return suspended_probe;
   }
 
-  void setSuspendedProbe(boolean suspended_probe) {
+  synchronized void setSuspendedProbe(boolean suspended_probe) {
     this.suspended_probe = suspended_probe;
   }
 
