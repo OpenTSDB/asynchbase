@@ -108,7 +108,8 @@ final class BufferedIncrement {
    * reserved to keep track of how many times the value
    * got changed.
    * <p>
-   * Implementation details:<br/>
+   * Implementation details:
+   * <p>
    * The first 49 most significant bits are the value of
    * the amount (including 1 bit for the sign), the last
    * 15 least significant bits are the number of times

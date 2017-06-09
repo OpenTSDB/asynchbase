@@ -116,7 +116,7 @@ public final class RegionLocation {
   /**
    * Returns the full name or ID of the region as used in HBase and displayed
    * in the HBase GUI. The format is as follows:
-   * [<namespace>:]<table>,<start_key>,<creation_timestamp>,<md5>
+   * [&lt;namespace&gt;:]&lt;table&gt;,&lt;start_key&gt;,&lt;creation_timestamp&gt;,&lt;md5&gt;
    * @return The name of the region
    */
   public byte[] getRegionName() {

@@ -105,7 +105,6 @@ import static java.util.concurrent.TimeUnit.MILLISECONDS;
  * an RPC in flight will lead to <em>unpredictable</em> results and voids
  * your warranty</strong>.
  *
- * <a name="#durability"></a>
  * <h1>Data Durability</h1>
  * Some methods or RPC types take a {@code durable} argument.  When an edit
  * requests to be durable, the success of the RPC guarantees that the edit is
@@ -961,8 +960,8 @@ public final class HBaseClient {
     return flush_interval;
   }
 
-  /** @returns the default RPC timeout period in milliseconds
-   * @since 1.7 */
+  /** @return the default RPC timeout period in milliseconds
+   *  @since 1.7 */
   public int getDefaultRpcTimeout() {
     return rpc_timeout;
   }

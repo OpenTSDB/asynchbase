@@ -48,7 +48,7 @@ import org.hbase.async.generated.HBasePB;
  * later. 
  * <p>
  * Note that the results of the append operation
- * are not returned at this time. Issue a {@see GetRequest} to fetch the results.
+ * are not returned at this time. Issue a {@link GetRequest} to fetch the results.
  * <p>
  * <h1>A note on passing {@code byte} arrays in argument</h1>
  * None of the method that receive a {@code byte[]} in argument will copy it.
