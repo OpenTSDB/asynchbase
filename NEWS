@@ -1,6 +1,15 @@
 AsyncHBase - User visible and noteworthy changes.
 This project uses Semantic Versioning (see http://semver.org/).
 
+* Version 1.7.3 (2017-06-09)
+
+This is a bug fix release.
+
+Noteworthy bug Fixes:
+  - Properly handle IPV6 addresses in the RegionClientPipeline.
+  - Avoid a deadlock when calling the RegionClient.toString() method.
+  - Avoid a synchronization deadlock handling NSRE probes.
+
 * Version 1.7.2 (2016-09-17)
 
 This is a bug fix release.
