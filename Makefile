@@ -1,4 +1,4 @@
-# Copyright (C) 2010-2012  The Async HBase Authors.  All rights reserved.
+# Copyright (C) 2010-2016  The Async HBase Authors.  All rights reserved.
 # This file is part of Async HBase.
 # 
 # Redistribution and use in source and binary forms, with or without
@@ -39,7 +39,7 @@ proto_builddir := $(top_builddir)/protobuf
 spec_title := Asynchronous HBase Client
 spec_vendor := The Async HBase Authors
 # Semantic Versioning (see http://semver.org/).
-spec_version := 1.6.0
+spec_version := 1.7.3
 jar := $(top_builddir)/asynchbase-$(spec_version).jar
 
 asynchbase_PROTOS := \
@@ -59,6 +59,7 @@ PROTOBUF_GEN_DIR = $(top_builddir)/src/org/hbase/async/generated
 BUILT_SOURCES := $(asynchbase_PROTOS:protobuf/%.proto=$(PROTOBUF_GEN_DIR)/%PB.java)
 
 asynchbase_SOURCES := \
+	src/AppendRequest.java	\
 	src/AtomicIncrementRequest.java	\
 	src/BatchableRpc.java	\
 	src/BinaryComparator.java	\
@@ -68,10 +69,12 @@ asynchbase_SOURCES := \
 	src/BufferedIncrement.java	\
 	src/Bytes.java	\
 	src/ClientStats.java	\
+	src/ColumnPaginationFilter.java	\
 	src/ColumnPrefixFilter.java	\
 	src/ColumnRangeFilter.java	\
 	src/CompareAndSetRequest.java	\
 	src/CompareFilter.java	\
+	src/Config.java	\
 	src/ConnectionResetException.java	\
 	src/Counter.java	\
 	src/DeleteRequest.java	\
@@ -79,12 +82,15 @@ asynchbase_SOURCES := \
 	src/FamilyFilter.java	\
 	src/FilterComparator.java	\
 	src/FilterList.java		\
+	src/FirstKeyOnlyFilter.java	\
+	src/FuzzyRowFilter.java \
 	src/GetRequest.java	\
 	src/HBaseClient.java	\
 	src/HBaseException.java	\
 	src/HBaseRpc.java	\
 	src/HasFailedRpcException.java	\
 	src/InvalidResponseException.java	\
+	src/KeyOnlyFilter.java	\
 	src/KeyRegexpFilter.java	\
 	src/KeyValue.java	\
 	src/MultiAction.java	\
@@ -94,18 +100,29 @@ asynchbase_SOURCES := \
 	src/PleaseThrottleException.java	\
 	src/PutRequest.java	\
 	src/QualifierFilter.java	\
+	src/CallQueueTooBigException.java    \
 	src/RecoverableException.java	\
 	src/RegexStringComparator.java	\
 	src/RegionClient.java	\
+	src/RegionClientStats.java	\
 	src/RegionInfo.java	\
+	src/RegionLocation.java	\
 	src/RegionOfflineException.java	\
 	src/RegionMovedException.java	\
+	src/RegionOpeningException.java	\
+	src/RegionServerAbortedException.java	\
+	src/RegionServerStoppedException.java	\
 	src/RemoteException.java	\
+	src/RpcTimedOutException.java	\
 	src/RowFilter.java	\
 	src/RowLock.java	\
 	src/RowLockRequest.java	\
 	src/ScanFilter.java	\
 	src/Scanner.java	\
+	src/SecureRpcHelper.java	\
+	src/SecureRpcHelper94.java	\
+	src/SecureRpcHelper96.java	\
+	src/ServerNotRunningYetException.java	\
 	src/SingletonList.java	\
 	src/SubstringComparator.java	\
 	src/TableNotFoundException.java	\
@@ -114,8 +131,12 @@ asynchbase_SOURCES := \
 	src/UnknownScannerException.java	\
 	src/ValueFilter.java	\
 	src/VersionMismatchException.java	\
+	src/auth/ClientAuthProvider.java	\
+	src/auth/KerberosClientAuthProvider.java	\
+	src/auth/Login.java	\
+	src/auth/SimpleClientAuthProvider.java	\
 	src/jsr166e/LongAdder.java	\
-	src/jsr166e/Striped64.java	\
+	src/jsr166e/Striped64.java
 
 protobuf_SOURCES := src/protobuf/ZeroCopyLiteralByteString.java
 
@@ -134,8 +155,32 @@ test_SOURCES := \
 	test/TestIntegration.java	\
 
 unittest_SRC := \
+	test/BaseTestHBaseClient.java	\
+	test/BaseTestRegionClient.java	\
+	test/BaseTestSecureRpcHelper.java	\
+	test/PBufResponses.java	\
+	test/TestConfig.java	\
+	test/TestDeleteRequest.java	\
+	test/TestGetRequest.java	\
+	test/TestHBaseClient.java	\
+	test/TestHBaseClientLocateRegion.java	\
+	test/TestHBaseRpc.java	\
 	test/TestMETALookup.java	\
-	test/TestNSREs.java
+	test/TestMultiAction.java	\
+	test/TestNSREs.java	\
+	test/TestPutRequest.java	\
+	test/TestRegionClient.java	\
+	test/TestRegionClientDecode.java	\
+	test/TestRegionClientSendRpc.java	\
+	test/TestScanner.java	\
+	test/TestSecureRpcHelper.java	\
+	test/TestSecureRpcHelper96.java	\
+	test/TestSecureRpcHelper94.java	\
+	test/TestZKClient.java \
+	test/auth/MockProvider.java	\
+	test/auth/TestKerberosClientAuthProvider.java \
+	test/auth/TestLogin.java	\
+	test/auth/TestSimpleClientAuthProvider.java
 
 test_LIBADD := \
 	$(asynchbase_LIBADD)	\
@@ -197,7 +242,7 @@ test_classes_with_nested_classes := $(test_classes:$(top_builddir)/%.class=%*.cl
 
 run: jar $(test_classes)
 	@test -n "$(CLASS)" || { echo 'usage: $(MAKE) run CLASS=<name>'; exit 1; }
-	$(JAVA) -ea -esa $(JVM_ARGS) -cp "$(get_runtime_dep_classpath):$(top_builddir)" $(package).test.$(CLASS) $(ARGS)
+	$(JAVA) -ea -esa $(JVM_ARGS) -cp "$(get_runtime_dep_classpath):$(top_builddir)" $(package).$(CLASS) $(ARGS)
 
 cli:
 	$(MAKE) run CLASS=Test
