@@ -494,13 +494,13 @@ public abstract class HBaseRpc {
   /**
    * Whether or not if this RPC is a probe that is suspended by an NSRE
    */
-  private boolean suspended_probe = false;
+  private volatile boolean suspended_probe = false;
 
-  synchronized boolean isSuspendedProbe() {
+  boolean isSuspendedProbe() {
     return suspended_probe;
   }
 
-  synchronized void setSuspendedProbe(boolean suspended_probe) {
+  void setSuspendedProbe(boolean suspended_probe) {
     this.suspended_probe = suspended_probe;
   }
 
