@@ -496,12 +496,20 @@ public abstract class HBaseRpc {
    */
   private boolean suspended_probe = false;
 
-  synchronized boolean isSuspendedProbe() {
-    return suspended_probe;
+  boolean isSuspendedProbe() {
+    // since the key doesn't change, we are safe to lock on it and we avoid 
+    // locking the entire object. TODO - still may be some issues with behavior.
+    synchronized(key) {
+      return suspended_probe;
+    }
   }
 
-  synchronized void setSuspendedProbe(boolean suspended_probe) {
-    this.suspended_probe = suspended_probe;
+  void setSuspendedProbe(boolean suspended_probe) {
+    // since the key doesn't change, we are safe to lock on it and we avoid 
+    // locking the entire object. TODO - still may be some issues with behavior.
+    synchronized(key) {
+      this.suspended_probe = suspended_probe;
+    }
   }
 
   /**
