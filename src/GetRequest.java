@@ -52,7 +52,6 @@ public final class GetRequest extends BatchableRpc
   private static final byte[] EXISTS =
     new byte[] { 'e', 'x', 'i', 's', 't', 's' };
 
-  private byte[] family;     // TODO(tsuna): Handle multiple families?
   private byte[][] qualifiers;
   private long lockid = RowLock.NO_LOCK;
   private boolean populate_blockcache = true;
