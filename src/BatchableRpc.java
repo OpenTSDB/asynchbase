@@ -45,7 +45,7 @@ abstract class BatchableRpc extends HBaseRpc
   // access them directly.
 
   /** Family affected by this RPC.  */
-  /*protected*/ final byte[] family;
+  /*protected*/ byte[] family;
 
   /** The timestamp to use for {@link KeyValue}s of this RPC.  */
   /*protected*/ final long timestamp;
