@@ -231,7 +231,7 @@ public final class Scanner {
   */
   public void setReversed(boolean reversed){
     checkScanningNotStarted();
-    is_reversed = true;
+    is_reversed = reversed;
   }
 
   /**
