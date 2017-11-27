@@ -29,7 +29,11 @@ package org.hbase.async;
 import java.nio.charset.Charset;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.HashMap;
+import java.util.Map;
 
+import org.hbase.async.generated.HBasePB;
+import org.hbase.async.generated.MapReducePB;
 import org.jboss.netty.buffer.ChannelBuffer;
 
 import org.slf4j.Logger;
@@ -197,6 +201,10 @@ public final class Scanner {
 
   private boolean moreRows;
   private boolean scannerClosedOnServer;
+
+  private boolean scan_metrics_enabled = false;
+
+  private ServerSideScanMetrics scanMetrics;
 
   /**
    * Constructor.
@@ -701,6 +709,18 @@ public final class Scanner {
     this.max_timestamp = max_timestamp;
   }
 
+  public void setScanMetricsEnabled(final boolean enabled) {
+    scan_metrics_enabled = enabled;
+  }
+
+  public boolean isScanMetricsEnabled() {
+    return scan_metrics_enabled;
+  }
+
+  public ServerSideScanMetrics getScanMetrics() {
+    return scanMetrics;
+  }
+
   /**
    * Scans a number of rows.  Calling this method is equivalent to:
    * <pre>
@@ -788,6 +808,7 @@ public final class Scanner {
               LOG.debug("Scanner " + Bytes.hex(scanner_id) + " opened on " + region);
             }
             if (resp != null) {
+              updateServerSideMetrics(resp.metrics);
               if (resp.rows == null) {
                 return scanFinished(!resp.more);
               }
@@ -1127,7 +1148,7 @@ public final class Scanner {
    */
   HBaseRpc getNextRowsRequest() {
     if (get_next_rows_request == null) {
-      get_next_rows_request = new GetNextRowsRequest();
+      get_next_rows_request = new GetNextRowsRequest().withMetricsEnabled(this.isScanMetricsEnabled());
     }
     return get_next_rows_request;
   }
@@ -1187,6 +1208,8 @@ public final class Scanner {
 
     private final boolean scannerClosedOnServer;
 
+    private final Map<String, Long> metrics;
+
     Response(final long scanner_id,
              final ArrayList<ArrayList<KeyValue>> rows,
              final boolean more, final boolean scannerClosedOnServer) {
@@ -1194,6 +1217,18 @@ public final class Scanner {
       this.rows = rows;
       this.more = more;
       this.scannerClosedOnServer = scannerClosedOnServer;
+      this.metrics = new HashMap<String, Long>();
+    }
+
+    Response(final long scanner_id,
+             final ArrayList<ArrayList<KeyValue>> rows,
+             final boolean more, final boolean scannerClosedOnServer,
+             final Map<String, Long> metrics) {
+      this.scanner_id = scanner_id;
+      this.rows = rows;
+      this.more = more;
+      this.scannerClosedOnServer = scannerClosedOnServer;
+      this.metrics = metrics;
     }
 
     public String toString() {
@@ -1482,6 +1517,8 @@ public final class Scanner {
    */
   final class GetNextRowsRequest extends HBaseRpc {
 
+    boolean metrics_enabled = false;
+
     @Override
     byte[] method(final byte server_version) {
       return (server_version >= RegionClient.SERVER_VERSION_095_OR_ABOVE
@@ -1503,6 +1540,7 @@ public final class Scanner {
       final ScanRequest req = ScanRequest.newBuilder()
         .setScannerId(scanner_id)
         .setNumberOfRows(max_num_rows)
+        .setTrackScanMetrics(metrics_enabled)
         // Hardcoded these parameters to false since AsyncHBase cannot support them
         .setClientHandlesHeartbeats(false)
         .setClientHandlesPartials(false)
@@ -1523,8 +1561,36 @@ public final class Scanner {
       if (rows == null) {
         return null;
       }
+      Map<String, Long> metrics = getScanMetrics(resp);
       final boolean scannerClosedOnServer = resp.hasMoreResultsInRegion() && !resp.getMoreResultsInRegion();
-      return new Response(resp.getScannerId(), rows, resp.getMoreResults(), scannerClosedOnServer);
+      return new Response(resp.getScannerId(), rows, resp.getMoreResults(), scannerClosedOnServer, metrics);
+    }
+
+    public GetNextRowsRequest withMetricsEnabled(boolean enabled) {
+      this.metrics_enabled = enabled;
+      return this;
+    }
+
+    private Map<String, Long> getScanMetrics(ScanResponse response) {
+      Map<String, Long> metricMap = new HashMap<String, Long>();
+      if (response == null || !response.hasScanMetrics() || response.getScanMetrics() == null) {
+        return metricMap;
+      }
+
+      MapReducePB.ScanMetrics metrics = response.getScanMetrics();
+      int numberOfMetrics = metrics.getMetricsCount();
+      for (int i = 0; i < numberOfMetrics; i++) {
+        HBasePB.NameInt64Pair metricPair = metrics.getMetrics(i);
+        if (metricPair != null) {
+          String name = metricPair.getName();
+          Long value = metricPair.getValue();
+          if (name != null && value != null) {
+            metricMap.put(name, value);
+          }
+        }
+      }
+
+      return metricMap;
     }
 
     public String toString() {
@@ -1595,6 +1661,15 @@ public final class Scanner {
         + ", attempt=" + attempt + ')';
     }
 
+  }
+
+  private void updateServerSideMetrics(Map<String, Long> metrics) {
+    if (!metrics.isEmpty()) {
+      for (Map.Entry<String, Long> e : metrics.entrySet()) {
+        metrics.put(e.getKey(), e.getValue());
+        scanMetrics.addToCounter(e.getKey(), e.getValue());
+      }
+    }
   }
 
 }

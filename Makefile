@@ -131,6 +131,7 @@ asynchbase_SOURCES := \
 	src/SecureRpcHelper94.java	\
 	src/SecureRpcHelper96.java	\
 	src/ServerNotRunningYetException.java	\
+	src/ServerSideScanMetrics.java  \
 	src/SingletonList.java	\
 	src/SubstringComparator.java	\
 	src/TableNotFoundException.java	\
