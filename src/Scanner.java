@@ -204,6 +204,8 @@ public final class Scanner {
 
   private boolean scan_metrics_enabled = false;
 
+  private long last_next_timestamp = System.currentTimeMillis();
+
   private ScanMetrics scanMetrics = new ScanMetrics();
 
   /**
@@ -792,6 +794,8 @@ public final class Scanner {
     opened_scanner =
       new Callback<Deferred<ArrayList<ArrayList<KeyValue>>>, Object>() {
           public Deferred<ArrayList<ArrayList<KeyValue>>> call(final Object arg) {
+            long currentTime = System.currentTimeMillis();
+            updateSumOfMillisSecBetweenNexts(currentTime);
             final Response resp;
             if (arg instanceof Long) {
               scanner_id = (Long) arg;
@@ -831,6 +835,8 @@ public final class Scanner {
   private final Callback<Object, Object> got_next_row =
     new Callback<Object, Object>() {
       public Object call(final Object response) {
+        long currentTime = System.currentTimeMillis();
+        updateSumOfMillisSecBetweenNexts(currentTime);
         ArrayList<ArrayList<KeyValue>> rows = null;
         Response resp = null;
         if (response instanceof Response) {  // HBase 0.95 and up
@@ -869,6 +875,8 @@ public final class Scanner {
   private final Callback<Object, Object> nextRowErrback() {
     return new Callback<Object, Object>() {
       public Object call(final Object error) {
+        long currentTime = System.currentTimeMillis();
+        updateSumOfMillisSecBetweenNexts(currentTime);
         final RegionInfo old_region = region;  // Save before invalidate().
         invalidate();  // If there was an error, don't assume we're still OK.
         if (error instanceof NotServingRegionException) {
@@ -928,6 +936,8 @@ public final class Scanner {
   private Callback<Object, Object> closedCallback() {
     return new Callback<Object, Object>() {
       public Object call(Object arg) {
+        long currentTime = System.currentTimeMillis();
+        updateSumOfMillisSecBetweenNexts(currentTime);
         if (arg instanceof Exception) {
           final Exception error = (Exception) arg;
           // NotServingRegionException:
@@ -1707,6 +1717,13 @@ public final class Scanner {
   private void incCountOfRegions() {
     if (isScanMetricsEnabled()) {
       this.scanMetrics.countOfRegions.incrementAndGet();
+    }
+  }
+
+  private void updateSumOfMillisSecBetweenNexts(long currentTime) {
+    if (isScanMetricsEnabled()) {
+      this.scanMetrics.sumOfMillisSecBetweenNexts.addAndGet(currentTime - last_next_timestamp);
+      last_next_timestamp = currentTime;
     }
   }
 
