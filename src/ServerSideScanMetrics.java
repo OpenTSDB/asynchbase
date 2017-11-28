@@ -49,6 +49,18 @@ public class ServerSideScanMetrics {
         return c;
     }
 
+  /**
+   * Create a new counter with the specified name
+   * @param counterName
+   * @param initialValue
+   * @return
+   */
+  protected AtomicLong createCounter(String counterName, long initialValue) {
+    AtomicLong c = new AtomicLong(initialValue);
+    counters.put(counterName, c);
+    return c;
+  }
+
     public static final String COUNT_OF_ROWS_SCANNED_KEY_METRIC_NAME = "ROWS_SCANNED";
     public static final String COUNT_OF_ROWS_FILTERED_KEY_METRIC_NAME = "ROWS_FILTERED";
 

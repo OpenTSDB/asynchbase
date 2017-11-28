@@ -204,7 +204,7 @@ public final class Scanner {
 
   private boolean scan_metrics_enabled = false;
 
-  private ServerSideScanMetrics scanMetrics;
+  private ScanMetrics scanMetrics = new ScanMetrics();
 
   /**
    * Constructor.
@@ -717,7 +717,7 @@ public final class Scanner {
     return scan_metrics_enabled;
   }
 
-  public ServerSideScanMetrics getScanMetrics() {
+  public ScanMetrics getScanMetrics() {
     return scanMetrics;
   }
 
@@ -760,6 +760,7 @@ public final class Scanner {
     if (region == DONE) {  // We're already done scanning.
       return Deferred.fromResult(null);
     } else if (region == null) {  // We need to open the scanner first.
+      incRPCcallsMetrics();
       if (this.isReversed() && !this.isFirstReverseRegion()){
         return client.openReverseScanner(this)
                 .addCallbackDeferring(opened_scanner);
@@ -774,6 +775,7 @@ public final class Scanner {
     if(scannerClosedOnServer) {
       return scanFinished(moreRows);
     }
+    incRPCcallsMetrics();
     // Need to silence this warning because the callback `got_next_row'
     // declares its return type to be Object, because its return value
     // may or may not be deferred.
@@ -850,6 +852,8 @@ public final class Scanner {
           return scanFinished(resp != null && !resp.more);
         }
 
+        updateResultsMetrics(rows);
+
         final ArrayList<KeyValue> lastrow = rows.get(rows.size() - 1);
         start_key = lastrow.get(0).key();
         return rows;
@@ -868,6 +872,7 @@ public final class Scanner {
         final RegionInfo old_region = region;  // Save before invalidate().
         invalidate();  // If there was an error, don't assume we're still OK.
         if (error instanceof NotServingRegionException) {
+          incCountOfNSRE();
           // We'll resume scanning on another region, and we want to pick up
           // right after the last key we successfully returned.  Padding the
           // last key with an extra 0 gives us the next possible key.
@@ -915,6 +920,7 @@ public final class Scanner {
     if (region == null || region == DONE) {
       return Deferred.fromResult(null);
     }
+    incRPCcallsMetrics();
     return client.closeScanner(this).addBoth(closedCallback());
   }
 
@@ -1013,6 +1019,7 @@ public final class Scanner {
       LOG.debug("Scanner " + Bytes.hex(old_scanner_id) + " done scanning "
               + old_region);
     }
+    incRPCcallsMetrics();
     client.closeScanner(this).addCallback(new Callback<Object, Object>() {
       public Object call(final Object arg) {
         if(LOG.isDebugEnabled()) {
@@ -1036,6 +1043,7 @@ public final class Scanner {
 
     scanner_id = 0xDEAD000AA000DEADL;   // Make debugging easier.
     invalidate();
+    incCountOfRegions();
     return nextRows();
   }
 
@@ -1669,6 +1677,36 @@ public final class Scanner {
         metrics.put(e.getKey(), e.getValue());
         scanMetrics.addToCounter(e.getKey(), e.getValue());
       }
+    }
+  }
+
+  private void incRPCcallsMetrics() {
+    if (isScanMetricsEnabled()) {
+      this.scanMetrics.countOfRPCcalls.incrementAndGet();
+    }
+  }
+
+  private void updateResultsMetrics(ArrayList<ArrayList<KeyValue>> rows) {
+    if (isScanMetricsEnabled()) {
+      long resultSize = 0;
+      for (ArrayList<KeyValue> row: rows) {
+        for (KeyValue cell: row) {
+          resultSize += cell.predictSerializedSize();
+        }
+      }
+      this.scanMetrics.countOfBytesInResults.addAndGet(resultSize);
+    }
+  }
+
+  private void incCountOfNSRE() {
+    if (isScanMetricsEnabled()) {
+      this.scanMetrics.countOfNSRE.incrementAndGet();
+    }
+  }
+
+  private void incCountOfRegions() {
+    if (isScanMetricsEnabled()) {
+      this.scanMetrics.countOfRegions.incrementAndGet();
     }
   }
 
