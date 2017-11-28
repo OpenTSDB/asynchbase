@@ -810,7 +810,6 @@ public final class Scanner {
               LOG.debug("Scanner " + Bytes.hex(scanner_id) + " opened on " + region);
             }
             if (resp != null) {
-              updateServerSideMetrics(resp.metrics);
               if (resp.rows == null) {
                 return scanFinished(!resp.more);
               }
@@ -839,6 +838,7 @@ public final class Scanner {
           rows = resp.rows;
           scannerClosedOnServer = resp.scannerClosedOnServer;
           moreRows = resp.more;
+          updateServerSideMetrics(resp.metrics);
         } else if (response instanceof ArrayList) {  // HBase 0.94 and before.
           @SuppressWarnings("unchecked")  // I 3>> generics.
           final ArrayList<ArrayList<KeyValue>> r =
