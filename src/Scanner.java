@@ -32,6 +32,7 @@ import java.util.Arrays;
 import java.util.HashMap;
 import java.util.Map;
 
+import com.google.common.collect.ImmutableMap;
 import org.hbase.async.generated.HBasePB;
 import org.hbase.async.generated.MapReducePB;
 import org.jboss.netty.buffer.ChannelBuffer;
@@ -1684,15 +1685,18 @@ public final class Scanner {
   private void updateServerSideMetrics(Map<String, Long> metrics) {
     if (!metrics.isEmpty()) {
       for (Map.Entry<String, Long> e : metrics.entrySet()) {
-        metrics.put(e.getKey(), e.getValue());
-        scanMetrics.addToCounter(e.getKey(), e.getValue());
+        if (e.getKey().equals(ServerSideScanMetrics.COUNT_OF_ROWS_SCANNED_KEY_METRIC_NAME)) {
+          scanMetrics.count_of_rows_scanned += e.getValue();
+        } else if (e.getKey().equals(ServerSideScanMetrics.COUNT_OF_ROWS_FILTERED_KEY_METRIC_NAME)) {
+          scanMetrics.count_of_rows_filtered += e.getValue();
+        }
       }
     }
   }
 
   private void incRPCcallsMetrics() {
     if (isScanMetricsEnabled()) {
-      this.scanMetrics.countOfRPCcalls.incrementAndGet();
+      this.scanMetrics.count_of_rpc_calls += 1;
     }
   }
 
@@ -1704,27 +1708,124 @@ public final class Scanner {
           resultSize += cell.predictSerializedSize();
         }
       }
-      this.scanMetrics.countOfBytesInResults.addAndGet(resultSize);
+      this.scanMetrics.count_of_bytes_in_results += resultSize;
     }
   }
 
   private void incCountOfNSRE() {
     if (isScanMetricsEnabled()) {
-      this.scanMetrics.countOfNSRE.incrementAndGet();
+      this.scanMetrics.count_of_nsre += 1;
     }
   }
 
   private void incCountOfRegions() {
     if (isScanMetricsEnabled()) {
-      this.scanMetrics.countOfRegions.incrementAndGet();
+      this.scanMetrics.count_of_regions += 1;
     }
   }
 
   private void updateSumOfMillisSecBetweenNexts(long currentTime) {
     if (isScanMetricsEnabled()) {
-      this.scanMetrics.sumOfMillisSecBetweenNexts.addAndGet(currentTime - last_next_timestamp);
+      this.scanMetrics.sum_of_millis_sec_between_nexts += (currentTime - last_next_timestamp);
       last_next_timestamp = currentTime;
     }
   }
+
+  private static class ServerSideScanMetrics {
+
+    public static final String COUNT_OF_ROWS_SCANNED_KEY_METRIC_NAME = "ROWS_SCANNED";
+    public static final String COUNT_OF_ROWS_FILTERED_KEY_METRIC_NAME = "ROWS_FILTERED";
+
+    protected long count_of_rows_scanned = 0;
+    protected long count_of_rows_filtered = 0;
+
+    /**
+     * number of rows scanned during scan RPC. Not every row scanned will be returned to the client
+     * since rows may be filtered.
+     */
+    public long getCountOfRowsScanned() { return count_of_rows_scanned; };
+
+    /**
+     * number of rows filtered during scan RPC
+     */
+    public long getCountOfRowsFiltered() { return count_of_rows_filtered; }
+
+  }
+
+  public static class ScanMetrics extends ServerSideScanMetrics {
+
+    public static final String RPC_CALLS_METRIC_NAME = "RPC_CALLS";
+    public static final String MILLIS_BETWEEN_NEXTS_METRIC_NAME = "MILLIS_BETWEEN_NEXTS";
+    public static final String NOT_SERVING_REGION_EXCEPTION_METRIC_NAME = "NOT_SERVING_REGION_EXCEPTION";
+    public static final String BYTES_IN_RESULTS_METRIC_NAME = "BYTES_IN_RESULTS";
+    public static final String REGIONS_SCANNED_METRIC_NAME = "REGIONS_SCANNED";
+    public static final String RPC_RETRIES_METRIC_NAME = "RPC_RETRIES";
+
+    private long count_of_rpc_calls = 0;
+
+    private long sum_of_millis_sec_between_nexts = 0;
+
+    private long count_of_nsre = 0;
+
+    private long  count_of_bytes_in_results = 0;
+
+    /**
+     * Starts with 1 because it is incremented when a scanner switches to a next region.
+     */
+    private long count_of_regions = 1;
+
+    private long count_of_rpc_retries = 0;
+
+    /**
+     * number of RPC calls
+     */
+    public long getCountOfRPCcalls() { return count_of_rpc_calls; }
+
+    /**
+     * sum of milliseconds between sequential next calls
+     */
+    public long getSumOfMillisSecBetweenNexts() { return sum_of_millis_sec_between_nexts; }
+
+    /**
+     * number of NotServingRegionException caught
+     */
+    public long getCountOfNSRE() { return count_of_nsre; }
+
+    /**
+     * number of bytes in Result objects from region servers
+     */
+    public long getCountOfBytesInResults() { return count_of_bytes_in_results; }
+
+    /**
+     * number of regions
+     * Starts with 1 because it is incremented when a scanner switches to a next region.
+     */
+    public long getCountOfRegions() { return count_of_regions; };
+
+    /**
+     * number of RPC retries
+     */
+    public long getCountOfRPCRetries() { return count_of_rpc_retries; }
+
+    /**
+     * constructor
+     */
+    public ScanMetrics() {
+    }
+
+    public Map<String, Long> getMetricsMap() {
+      ImmutableMap.Builder<String, Long> builder = ImmutableMap.builder();
+      builder.put(COUNT_OF_ROWS_SCANNED_KEY_METRIC_NAME, count_of_rows_scanned);
+      builder.put(COUNT_OF_ROWS_FILTERED_KEY_METRIC_NAME, count_of_rows_filtered);
+      builder.put(RPC_CALLS_METRIC_NAME, count_of_rpc_calls);
+      builder.put(MILLIS_BETWEEN_NEXTS_METRIC_NAME, sum_of_millis_sec_between_nexts);
+      builder.put(NOT_SERVING_REGION_EXCEPTION_METRIC_NAME, count_of_nsre);
+      builder.put(BYTES_IN_RESULTS_METRIC_NAME, count_of_bytes_in_results);
+      builder.put(REGIONS_SCANNED_METRIC_NAME, count_of_regions);
+      builder.put(RPC_RETRIES_METRIC_NAME, count_of_rpc_retries);
+      return builder.build();
+    }
+  }
+
 
 }
