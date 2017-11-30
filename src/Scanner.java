@@ -815,6 +815,7 @@ public final class Scanner {
               LOG.debug("Scanner " + Bytes.hex(scanner_id) + " opened on " + region);
             }
             if (resp != null) {
+              updateServerSideMetrics(resp.metrics);
               if (resp.rows == null) {
                 return scanFinished(!resp.more);
               }
@@ -1177,7 +1178,7 @@ public final class Scanner {
    * Returns an RPC to open this scanner.
    */
   HBaseRpc getOpenRequest() {
-    return new OpenScannerRequest();
+    return new OpenScannerRequest().withMetricsEnabled(this.isScanMetricsEnabled());
   }
 
   /**
@@ -1187,7 +1188,7 @@ public final class Scanner {
    * @param region_start_key region's start key
    */
   HBaseRpc getOpenRequestForReverseScan(final byte[] region_start_key) {
-    return new OpenScannerRequest(table, region_start_key);
+    return new OpenScannerRequest(table, region_start_key).withMetricsEnabled(this.isScanMetricsEnabled());
   }
 
   /**
@@ -1309,6 +1310,8 @@ public final class Scanner {
    * RPC sent out to open a scanner on a RegionServer.
    */
   final class OpenScannerRequest extends HBaseRpc {
+
+    boolean metrics_enabled = false;
 
     /**
      * Default constructor that is used for every forward Scanner and
@@ -1440,6 +1443,7 @@ public final class Scanner {
         .setRegion(region.toProtobuf())
         .setScan(scan.build())
         .setNumberOfRows(max_num_rows)
+        .setTrackScanMetrics(metrics_enabled)
         // Hardcoded these parameters to false since AsyncHBase cannot support them
         .setClientHandlesHeartbeats(false)
         .setClientHandlesPartials(false)
@@ -1518,10 +1522,38 @@ public final class Scanner {
         throw new InvalidResponseException("Scan RPC response doesn't contain a"
                                            + " scanner ID", resp);
       }
+      Map<String, Long> metrics = getServerSideScanMetrics(resp);
       final boolean scannerClosedOnServer = resp.hasMoreResultsInRegion() && !resp.getMoreResultsInRegion();
       return new Response(resp.getScannerId(),
                           getRows(resp, buf, cell_size),
-                          resp.getMoreResults(), scannerClosedOnServer);
+                          resp.getMoreResults(), scannerClosedOnServer, metrics);
+    }
+
+    public OpenScannerRequest withMetricsEnabled(boolean enabled) {
+      this.metrics_enabled = enabled;
+      return this;
+    }
+
+    private Map<String, Long> getServerSideScanMetrics(ScanResponse response) {
+      Map<String, Long> metricMap = new HashMap<String, Long>();
+      if (response == null || !response.hasScanMetrics() || response.getScanMetrics() == null) {
+        return metricMap;
+      }
+
+      MapReducePB.ScanMetrics metrics = response.getScanMetrics();
+      int numberOfMetrics = metrics.getMetricsCount();
+      for (int i = 0; i < numberOfMetrics; i++) {
+        HBasePB.NameInt64Pair metricPair = metrics.getMetrics(i);
+        if (metricPair != null) {
+          String name = metricPair.getName();
+          Long value = metricPair.getValue();
+          if (name != null && value != null) {
+            metricMap.put(name, value);
+          }
+        }
+      }
+
+      return metricMap;
     }
 
     public String toString() {
@@ -1581,7 +1613,7 @@ public final class Scanner {
       if (rows == null) {
         return null;
       }
-      Map<String, Long> metrics = getScanMetrics(resp);
+      Map<String, Long> metrics = getServerSideScanMetrics(resp);
       final boolean scannerClosedOnServer = resp.hasMoreResultsInRegion() && !resp.getMoreResultsInRegion();
       return new Response(resp.getScannerId(), rows, resp.getMoreResults(), scannerClosedOnServer, metrics);
     }
@@ -1591,7 +1623,7 @@ public final class Scanner {
       return this;
     }
 
-    private Map<String, Long> getScanMetrics(ScanResponse response) {
+    private Map<String, Long> getServerSideScanMetrics(ScanResponse response) {
       Map<String, Long> metricMap = new HashMap<String, Long>();
       if (response == null || !response.hasScanMetrics() || response.getScanMetrics() == null) {
         return metricMap;
