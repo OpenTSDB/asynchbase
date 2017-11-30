@@ -818,6 +818,7 @@ public final class Scanner {
               if (resp.rows == null) {
                 return scanFinished(!resp.more);
               }
+              updateResultsMetrics(resp.rows);
               return Deferred.fromResult(resp.rows);
             }
             return nextRows();  // Restart the call.
