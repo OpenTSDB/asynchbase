@@ -2175,6 +2175,69 @@ final public class TestIntegration {
 
   }
 
+  @Test
+  public void scanMetrics() throws Exception {
+    final String table6 = args[0] + "6";
+    createOrTruncateTable(client, table6, family);
+
+    // Split into 4 regions.
+    splitTable(table6, "aaa");
+    splitTable(table6, "bbb");
+    splitTable(table6, "ccc");
+    alterTableStatus(table6);
+
+    // Put 3 rows in total, one row per each region.
+    client.setFlushInterval(FAST_FLUSH);
+    final PutRequest put1 = new PutRequest(table6, "aaa", family, "testQualifier", "testValue");
+    client.put(put1).join();
+    final PutRequest put2 = new PutRequest(table6, "bbb", family, "testQualifier", "testValue");
+    client.put(put2).join();
+    final PutRequest put3 = new PutRequest(table6, "ccc", family, "testQualifier", "testValue");
+    client.put(put3).join();
+
+    // Create forward scanner with metrics enabled.
+    Scanner scanner = client.newScanner(table6);
+    scanner.setScanMetricsEnabled(true);
+    scanner.setStartKey("aaa");
+    scanner.setStopKey("ddd");
+
+    long prevBytesInResult = 0;
+
+    ArrayList<ArrayList<KeyValue>> row1 = scanner.nextRows().join();
+    assertSizeIs(1, row1);
+    Scanner.ScanMetrics metrics1 = scanner.getScanMetrics();
+    assertEquals("incorrect count of regions", 1, metrics1.getCountOfRegions());
+    assertEquals("incorrect count of rows scanned", 1, metrics1.getCountOfRowsScanned()); // 1 row scanned
+    assertEquals("incorrect count of RPC calls", 1, metrics1.getCountOfRPCcalls()); // 1 open
+    assertTrue("incorrect count of bytes in results", metrics1.getCountOfBytesInResults() > prevBytesInResult);
+    prevBytesInResult = metrics1.getCountOfBytesInResults();
+
+    ArrayList<ArrayList<KeyValue>> row2 = scanner.nextRows().join();
+    assertSizeIs(1, row2);
+    Scanner.ScanMetrics metrics2 = scanner.getScanMetrics();
+    assertEquals("incorrect count of regions", 2, metrics2.getCountOfRegions()); // continue to next region
+    assertEquals("incorrect count of rows scanned", 2, metrics2.getCountOfRowsScanned()); // 1 row scanned
+    assertEquals("incorrect count of RPC calls", 3, metrics2.getCountOfRPCcalls()); // 1 close + 1 open
+    assertTrue("incorrect count of bytes in results", metrics2.getCountOfBytesInResults() > prevBytesInResult);
+    prevBytesInResult = metrics2.getCountOfBytesInResults();
+
+    ArrayList<ArrayList<KeyValue>> row3 = scanner.nextRows().join();
+    assertSizeIs(1, row3);
+    Scanner.ScanMetrics metrics3 = scanner.getScanMetrics();
+    assertEquals("incorrect count of regions", 3, metrics3.getCountOfRegions()); // continue to next region
+    assertEquals("incorrect count of rows scanned", 3, metrics3.getCountOfRowsScanned()); // 1 row scanned
+    assertEquals("incorrect count of RPC calls", 5, metrics3.getCountOfRPCcalls());  // 1 close + 1 open
+    assertTrue("incorrect count of bytes in results", metrics3.getCountOfBytesInResults() > prevBytesInResult);
+    prevBytesInResult = metrics3.getCountOfBytesInResults();
+
+    scanner.close().join();
+    Scanner.ScanMetrics metrics4 = scanner.getScanMetrics();
+    assertEquals("incorrect count of regions", 3, metrics3.getCountOfRegions());
+    assertEquals("incorrect count of rows scanned", 3, metrics2.getCountOfRowsScanned());
+    assertEquals("incorrect count of RPC calls", 6, metrics3.getCountOfRPCcalls()); // 1 close
+    assertTrue("incorrect count of bytes in results", metrics3.getCountOfBytesInResults() == prevBytesInResult);
+  }
+
   /** Regression test for issue #2. */
   @Test
   public void regression2() throws Exception {
