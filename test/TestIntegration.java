@@ -33,7 +33,6 @@ import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Collection;
 import java.util.List;
 
@@ -2186,12 +2185,17 @@ final public class TestIntegration {
     splitTable(table6, "ccc");
     alterTableStatus(table6);
 
-    // Put 3 rows in total, one row per each region.
+    // Put 5 rows to 3 regions.
     client.setFlushInterval(FAST_FLUSH);
-    final PutRequest put1 = new PutRequest(table6, "aaa", family, "testQualifier", "testValue");
-    client.put(put1).join();
-    final PutRequest put2 = new PutRequest(table6, "bbb", family, "testQualifier", "testValue");
-    client.put(put2).join();
+    final PutRequest put_a1 = new PutRequest(table6, "aaa1", family, "testQualifier", "testValue");
+    client.put(put_a1).join();
+    client.setFlushInterval(FAST_FLUSH);
+    final PutRequest put_a2 = new PutRequest(table6, "aaa2", family, "testQualifier", "testValue");
+    client.put(put_a2).join();
+    final PutRequest put_b1 = new PutRequest(table6, "bbb1", family, "testQualifier", "testValue");
+    client.put(put_b1).join();
+    final PutRequest put_b2 = new PutRequest(table6, "bbb2", family, "testQualifier", "testValue");
+    client.put(put_b2).join();
     final PutRequest put3 = new PutRequest(table6, "ccc", family, "testQualifier", "testValue");
     client.put(put3).join();
 
@@ -2203,39 +2207,58 @@ final public class TestIntegration {
 
     long prevBytesInResult = 0;
 
-    ArrayList<ArrayList<KeyValue>> row1 = scanner.nextRows().join();
-    assertSizeIs(1, row1);
-    Scanner.ScanMetrics metrics1 = scanner.getScanMetrics();
-    assertEquals("incorrect count of regions", 1, metrics1.getCountOfRegions());
-    assertEquals("incorrect count of rows scanned", 1, metrics1.getCountOfRowsScanned()); // 1 row scanned
-    assertEquals("incorrect count of RPC calls", 1, metrics1.getCountOfRPCcalls()); // 1 open
-    assertTrue("incorrect count of bytes in results", metrics1.getCountOfBytesInResults() > prevBytesInResult);
-    prevBytesInResult = metrics1.getCountOfBytesInResults();
+    ArrayList<ArrayList<KeyValue>> row_a1 = scanner.nextRows(1).join();
+    assertSizeIs(1, row_a1);
+    Scanner.ScanMetrics metrics_a1 = scanner.getScanMetrics();
+    assertEquals("incorrect count of regions", 1, metrics_a1.getCountOfRegions());
+    assertEquals("incorrect count of rows scanned", 1, metrics_a1.getCountOfRowsScanned()); // + 1 row scanned
+    assertEquals("incorrect count of RPC calls", 1, metrics_a1.getCountOfRPCcalls()); // + 1 open
+    assertTrue("incorrect count of bytes in results", metrics_a1.getCountOfBytesInResults() > prevBytesInResult);
+    assertEquals("incorrect count of NotServingRegionException", 0, metrics_a1.getCountOfNSRE());
+    prevBytesInResult = metrics_a1.getCountOfBytesInResults();
 
-    ArrayList<ArrayList<KeyValue>> row2 = scanner.nextRows().join();
-    assertSizeIs(1, row2);
-    Scanner.ScanMetrics metrics2 = scanner.getScanMetrics();
-    assertEquals("incorrect count of regions", 2, metrics2.getCountOfRegions()); // continue to next region
-    assertEquals("incorrect count of rows scanned", 2, metrics2.getCountOfRowsScanned()); // 1 row scanned
-    assertEquals("incorrect count of RPC calls", 3, metrics2.getCountOfRPCcalls()); // 1 close + 1 open
-    assertTrue("incorrect count of bytes in results", metrics2.getCountOfBytesInResults() > prevBytesInResult);
-    prevBytesInResult = metrics2.getCountOfBytesInResults();
+    ArrayList<ArrayList<KeyValue>> row_a2 = scanner.nextRows(1).join();
+    assertSizeIs(1, row_a2);
+    Scanner.ScanMetrics metrics_a2 = scanner.getScanMetrics();
+    assertEquals("incorrect count of regions", 1, metrics_a2.getCountOfRegions());
+    assertEquals("incorrect count of rows scanned", 2, metrics_a2.getCountOfRowsScanned()); // + 1 row scanned
+    assertEquals("incorrect count of RPC calls", 2, metrics_a2.getCountOfRPCcalls()); // + 1 next
+    assertTrue("incorrect count of bytes in results", metrics_a2.getCountOfBytesInResults() > prevBytesInResult);
+    prevBytesInResult = metrics_a2.getCountOfBytesInResults();
 
-    ArrayList<ArrayList<KeyValue>> row3 = scanner.nextRows().join();
-    assertSizeIs(1, row3);
-    Scanner.ScanMetrics metrics3 = scanner.getScanMetrics();
-    assertEquals("incorrect count of regions", 3, metrics3.getCountOfRegions()); // continue to next region
-    assertEquals("incorrect count of rows scanned", 3, metrics3.getCountOfRowsScanned()); // 1 row scanned
-    assertEquals("incorrect count of RPC calls", 5, metrics3.getCountOfRPCcalls());  // 1 close + 1 open
-    assertTrue("incorrect count of bytes in results", metrics3.getCountOfBytesInResults() > prevBytesInResult);
-    prevBytesInResult = metrics3.getCountOfBytesInResults();
+    ArrayList<ArrayList<KeyValue>> row_b1 = scanner.nextRows(1).join();
+    assertSizeIs(1, row_b1);
+    Scanner.ScanMetrics metrics_b1 = scanner.getScanMetrics();
+    assertEquals("incorrect count of regions", 2, metrics_b1.getCountOfRegions()); // + next region
+    assertEquals("incorrect count of rows scanned", 3, metrics_b1.getCountOfRowsScanned()); // + 1 row scanned
+    assertEquals("incorrect count of RPC calls", 5, metrics_b1.getCountOfRPCcalls()); // + 1 empty next + 1 close + 1 open
+    assertTrue("incorrect count of bytes in results", metrics_b1.getCountOfBytesInResults() > prevBytesInResult);
+    prevBytesInResult = metrics_b1.getCountOfBytesInResults();
+
+    ArrayList<ArrayList<KeyValue>> row_b2 = scanner.nextRows(1).join();
+    assertSizeIs(1, row_b2);
+    Scanner.ScanMetrics metrics_b2 = scanner.getScanMetrics();
+    assertEquals("incorrect count of regions", 2, metrics_b2.getCountOfRegions());
+    assertEquals("incorrect count of rows scanned", 4, metrics_b2.getCountOfRowsScanned()); // + 1 row scanned
+    assertEquals("incorrect count of RPC calls", 6, metrics_b2.getCountOfRPCcalls()); // + 1 next
+    assertTrue("incorrect count of bytes in results", metrics_b2.getCountOfBytesInResults() > prevBytesInResult);
+    prevBytesInResult = metrics_b2.getCountOfBytesInResults();
+
+    ArrayList<ArrayList<KeyValue>> row_c = scanner.nextRows().join();
+    assertSizeIs(1, row_c);
+    Scanner.ScanMetrics metrics_c = scanner.getScanMetrics();
+    assertEquals("incorrect count of regions", 3, metrics_c.getCountOfRegions()); // + next region
+    assertEquals("incorrect count of rows scanned", 5, metrics_c.getCountOfRowsScanned()); // + 1 row scanned
+    assertEquals("incorrect count of RPC calls", 9, metrics_c.getCountOfRPCcalls()); // + 1 empty next + 1 close + 1 open
+    assertTrue("incorrect count of bytes in results", metrics_c.getCountOfBytesInResults() > prevBytesInResult);
+    prevBytesInResult = metrics_c.getCountOfBytesInResults();
 
     scanner.close().join();
-    Scanner.ScanMetrics metrics4 = scanner.getScanMetrics();
-    assertEquals("incorrect count of regions", 3, metrics3.getCountOfRegions());
-    assertEquals("incorrect count of rows scanned", 3, metrics2.getCountOfRowsScanned());
-    assertEquals("incorrect count of RPC calls", 6, metrics3.getCountOfRPCcalls()); // 1 close
-    assertTrue("incorrect count of bytes in results", metrics3.getCountOfBytesInResults() == prevBytesInResult);
+    Scanner.ScanMetrics metrics_final = scanner.getScanMetrics();
+    assertEquals("incorrect count of regions", 3, metrics_final.getCountOfRegions());
+    assertEquals("incorrect count of rows scanned", 5, metrics_final.getCountOfRowsScanned());
+    assertEquals("incorrect count of RPC calls", 10, metrics_final.getCountOfRPCcalls()); // + 1 close
+    assertTrue("incorrect count of bytes in results", metrics_final.getCountOfBytesInResults() == prevBytesInResult);
   }
 
   /** Regression test for issue #2. */
