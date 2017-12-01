@@ -2174,6 +2174,7 @@ final public class TestIntegration {
 
   }
 
+  /** Scan metrics tests.  */
   @Test
   public void scanMetrics() throws Exception {
     final String table6 = args[0] + "6";
@@ -2259,6 +2260,41 @@ final public class TestIntegration {
     assertEquals("incorrect count of rows scanned", 5, metrics_final.getCountOfRowsScanned());
     assertEquals("incorrect count of RPC calls", 10, metrics_final.getCountOfRPCcalls()); // + 1 close
     assertTrue("incorrect count of bytes in results", metrics_final.getCountOfBytesInResults() == prevBytesInResult);
+  }
+
+  /** Scan metrics of filtered rows tests. */
+  @Test
+  public void scanMetricsFilter() throws Exception {
+    client.setFlushInterval(FAST_FLUSH);
+    // Keep only rows with a column qualifier that starts with "qa".
+    final PutRequest put1 = new PutRequest(table, "cpf1", family, "qa1", "v1");
+    final PutRequest put2 = new PutRequest(table, "cpf2", family, "qb2", "v2");
+    final PutRequest put3 = new PutRequest(table, "cpf3", family, "qb3", "v3");
+    final PutRequest put4 = new PutRequest(table, "cpf4", family, "qa4", "v4");
+    Deferred.group(Deferred.group(client.put(put1), client.put(put2)),
+        Deferred.group(client.put(put3), client.put(put4))).join();
+    final Scanner scanner = client.newScanner(table);
+    scanner.setFamily(family);
+    scanner.setStartKey("cpf1");
+    scanner.setStopKey("cpf5");
+    scanner.setFilter(new ColumnPrefixFilter("qa"));
+    scanner.setScanMetricsEnabled(true);
+    final ArrayList<ArrayList<KeyValue>> rows = scanner.nextRows().join();
+
+    assertSizeIs(2, rows);
+    ArrayList<KeyValue> kvs1 = rows.get(0);
+    assertSizeIs(1, kvs1);
+    assertEq("v1", kvs1.get(0).value());
+    ArrayList<KeyValue> kvs4 = rows.get(1);
+    assertSizeIs(1, kvs4);
+    assertEq("v4", kvs4.get(0).value());
+
+    Scanner.ScanMetrics metrics = scanner.getScanMetrics();
+    assertEquals("incorrect count of rows scanned", 4, metrics.getCountOfRowsScanned());
+    assertEquals("incorrect count of rows filtered", 2, metrics.getCountOfRowsFiltered());
+    assertEquals("incorrect count of RPC calls", 1, metrics.getCountOfRPCcalls()); // 1 open
+
+    scanner.close().join();
   }
 
   /** Regression test for issue #2. */
