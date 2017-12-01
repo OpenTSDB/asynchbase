@@ -1794,6 +1794,13 @@ public final class Scanner {
 
   /**
    * Client-side metrics.
+   * <p>
+   * This class is immutable. You can get updated values by calling
+   * this function again once RPC is completed.
+   * This class is <strong>not synchronized</strong> because
+   * fields of this class is updated only inside the Deferred callbacks
+   * by {@code Scanner}.
+   * </p>
    */
   public static class ScanMetrics extends ServerSideScanMetrics {
 
@@ -1802,7 +1809,6 @@ public final class Scanner {
     public static final String NOT_SERVING_REGION_EXCEPTION_METRIC_NAME = "NOT_SERVING_REGION_EXCEPTION";
     public static final String BYTES_IN_RESULTS_METRIC_NAME = "BYTES_IN_RESULTS";
     public static final String REGIONS_SCANNED_METRIC_NAME = "REGIONS_SCANNED";
-    public static final String RPC_RETRIES_METRIC_NAME = "RPC_RETRIES";
 
     private long count_of_rpc_calls = 0;
 
