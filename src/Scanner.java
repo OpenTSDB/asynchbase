@@ -1764,6 +1764,10 @@ public final class Scanner {
     }
   }
 
+  /**
+   * Server-side metrics.
+   * Only supported for HBase 0.95 and above.
+   */
   private static class ServerSideScanMetrics {
 
     public static final String COUNT_OF_ROWS_SCANNED_KEY_METRIC_NAME = "ROWS_SCANNED";
@@ -1773,18 +1777,24 @@ public final class Scanner {
     protected long count_of_rows_filtered = 0;
 
     /**
-     * number of rows scanned during scan RPC. Not every row scanned will be returned to the client
+     * Number of rows scanned during scan RPC.
+     * Not every row scanned will be returned to the client
      * since rows may be filtered.
+     * Always returns 0 if HBase < 0.95.
      */
     public long getCountOfRowsScanned() { return count_of_rows_scanned; };
 
     /**
-     * number of rows filtered during scan RPC
+     * Number of rows filtered during scan RPC.
+     * Always returns 0 if HBase < 0.95.
      */
     public long getCountOfRowsFiltered() { return count_of_rows_filtered; }
 
   }
 
+  /**
+   * Client-side metrics.
+   */
   public static class ScanMetrics extends ServerSideScanMetrics {
 
     public static final String RPC_CALLS_METRIC_NAME = "RPC_CALLS";
@@ -1807,42 +1817,31 @@ public final class Scanner {
      */
     private long count_of_regions = 1;
 
-    private long count_of_rpc_retries = 0;
-
     /**
-     * number of RPC calls
+     * Number of RPC calls.
      */
     public long getCountOfRPCcalls() { return count_of_rpc_calls; }
 
     /**
-     * sum of milliseconds between sequential next calls
+     * Sum of milliseconds between sequential next calls.
      */
     public long getSumOfMillisSecBetweenNexts() { return sum_of_millis_sec_between_nexts; }
 
     /**
-     * number of NotServingRegionException caught
+     * Number of NotServingRegionException caught.
      */
     public long getCountOfNSRE() { return count_of_nsre; }
 
     /**
-     * number of bytes in Result objects from region servers
+     * Number of bytes in Result objects from region servers.
      */
     public long getCountOfBytesInResults() { return count_of_bytes_in_results; }
 
     /**
-     * number of regions
-     * Starts with 1 because it is incremented when a scanner switches to a next region.
+     * Number of regions.
      */
     public long getCountOfRegions() { return count_of_regions; };
 
-    /**
-     * number of RPC retries
-     */
-    public long getCountOfRPCRetries() { return count_of_rpc_retries; }
-
-    /**
-     * constructor
-     */
     public ScanMetrics() {
     }
 
@@ -1855,7 +1854,6 @@ public final class Scanner {
       builder.put(NOT_SERVING_REGION_EXCEPTION_METRIC_NAME, count_of_nsre);
       builder.put(BYTES_IN_RESULTS_METRIC_NAME, count_of_bytes_in_results);
       builder.put(REGIONS_SCANNED_METRIC_NAME, count_of_regions);
-      builder.put(RPC_RETRIES_METRIC_NAME, count_of_rpc_retries);
       return builder.build();
     }
   }

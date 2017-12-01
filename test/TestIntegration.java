@@ -2215,7 +2215,6 @@ final public class TestIntegration {
     assertEquals("incorrect count of rows scanned", 1, metrics_a1.getCountOfRowsScanned()); // + 1 row scanned
     assertEquals("incorrect count of RPC calls", 1, metrics_a1.getCountOfRPCcalls()); // + 1 open
     assertTrue("incorrect count of bytes in results", metrics_a1.getCountOfBytesInResults() > prevBytesInResult);
-    assertEquals("incorrect count of NotServingRegionException", 0, metrics_a1.getCountOfNSRE());
     prevBytesInResult = metrics_a1.getCountOfBytesInResults();
 
     ArrayList<ArrayList<KeyValue>> row_a2 = scanner.nextRows(1).join();
@@ -2264,7 +2263,7 @@ final public class TestIntegration {
 
   /** Scan metrics of filtered rows tests. */
   @Test
-  public void scanMetricsFilter() throws Exception {
+  public void scanMetricsWithFilter() throws Exception {
     client.setFlushInterval(FAST_FLUSH);
     // Keep only rows with a column qualifier that starts with "qa".
     final PutRequest put1 = new PutRequest(table, "cpf1", family, "qa1", "v1");
