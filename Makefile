@@ -120,6 +120,7 @@ asynchbase_SOURCES := \
 	src/RegionOpeningException.java	\
 	src/RegionServerAbortedException.java	\
 	src/RegionServerStoppedException.java	\
+	src/RegionTooBusyException.java \
 	src/RemoteException.java	\
 	src/RpcTimedOutException.java	\
 	src/RowFilter.java	\
