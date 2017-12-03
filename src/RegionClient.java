@@ -105,6 +105,8 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
                                new RegionServerAbortedException(null, null));
     REMOTE_EXCEPTION_TYPES.put(RegionServerStoppedException.REMOTE_CLASS,
                                new RegionServerStoppedException(null, null));
+    REMOTE_EXCEPTION_TYPES.put(RegionTooBusyException.REMOTE_CLASS,
+                               new RegionTooBusyException(null, null));
     REMOTE_EXCEPTION_TYPES.put(ServerNotRunningYetException.REMOTE_CLASS,
                                new ServerNotRunningYetException(null, null));
     REMOTE_EXCEPTION_TYPES.put(UnknownScannerException.REMOTE_CLASS,

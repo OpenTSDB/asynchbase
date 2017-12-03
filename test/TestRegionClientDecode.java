@@ -377,6 +377,11 @@ public class TestRegionClientDecode extends BaseTestRegionClient {
   }
 
   @Test
+  public void regionTooBusyException() throws Exception {
+    notServingRegionException("org.apache.hadoop.hbase.RegionTooBusyException");
+  }
+
+  @Test
   public void serverNotRunningYetException() throws Exception {
     notServingRegionException("org.apache.hadoop.hbase.ipc.ServerNotRunningYetException");
   }
