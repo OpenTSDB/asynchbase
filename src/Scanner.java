@@ -229,9 +229,24 @@ public final class Scanner {
    * {@link HBaseClient#locateRegionClosestBeforeKey}.
   *
   */
-  public void setReversed(boolean reversed){
+  public void setReversed(boolean reversed) {
     checkScanningNotStarted();
-    is_reversed = true;
+    is_reversed = reversed;
+  }
+  
+  /**
+   * Set to open the reverse scan function.
+   *
+   * In a reversed scan, the first Scanner opened is opened on the region
+   * that the Scanner start key is in (the same as forward scan). But
+   * subsequent scanners are opened via the overloaded
+   * {@link OpenScannerRequest} and the region to be opened on is
+   * found through a META lookup using
+   * {@link HBaseClient#locateRegionClosestBeforeKey}.
+   *
+   */
+  public void setReversed() {
+      setReversed(true);
   }
 
   /**
