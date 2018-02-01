@@ -68,6 +68,7 @@ import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.SocketAddress;
 import java.net.UnknownHostException;
+import java.nio.channels.ClosedChannelException;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
@@ -3741,13 +3742,22 @@ public final class HBaseClient {
     @Override
     public void channelIdle(ChannelHandlerContext ctx, IdleStateEvent e)
             throws Exception {
-      if(e.getState() == IdleState.ALL_IDLE) {
+      if (e.getState() == IdleState.ALL_IDLE) {
         idle_connections_closed.increment();
         LOG.info("Closing idle connection to HBase region server: " 
             + e.getChannel());
         // RegionClientPipeline's disconnect method will handle cleaning up
         // any outstanding RPCs and removing the client from caches
-        e.getChannel().close();
+        try {
+          e.getChannel().close();
+        } catch (Exception ex) {
+          // This handler may be called after a channel has entered an odd state
+          // or already been closed. If it has been closed properly, then ignore
+          // the exception, otherwise throw it.
+          if (!(ex instanceof ClosedChannelException)) {
+            throw ex;
+          }
+        }
       }
     }
   }
