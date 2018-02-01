@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2015  The Async HBase Authors.  All rights reserved.
+ * Copyright (C) 2018  The Async HBase Authors.  All rights reserved.
  * This file is part of Async HBase.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -28,7 +28,7 @@ package org.hbase.async;
 
 /**
  * Thrown by the region server if it will block and wait to serve a request.
- * @since 1.7.2
+ * @since 1.8.1
  */
 public final class RegionTooBusyException extends NotServingRegionException {
 
