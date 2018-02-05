@@ -30,6 +30,7 @@ import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.fail;
 import static org.mockito.Matchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -225,8 +226,11 @@ public class TestSecureRpcHelper96 extends BaseTestSecureRpcHelper {
 
     // kinda fake in that we'll process it in one go
     when(sasl_client.isComplete()).thenReturn(false).thenReturn(true);
-    final ChannelBuffer buf = getSaslBuffer(1, new byte[] { 42 });
-    assertTrue(buf == helper.handleResponse(buf, channel));
+    final ChannelBuffer buf = getSaslExceptionBuffer(1, new byte[] { 0, 0, 0, 3, 'e', 'x', 'p', 0, 0, 0, 3, 'm', 's', 'g' });
+    try {
+      helper.handleResponse(buf, channel);
+      fail("Expected SecurityException");
+    } catch (SecurityException e) { }
     assertNull(buffers);
     verify(region_client, never()).becomeReady(channel, 
         RegionClient.SERVER_VERSION_095_OR_ABOVE);
@@ -325,6 +329,19 @@ public class TestSecureRpcHelper96 extends BaseTestSecureRpcHelper {
     final byte[] buf = new byte[payload.length + 4 + 4];
     System.arraycopy(payload, 0, buf, 8, payload.length);
     System.arraycopy(Bytes.fromInt(payload.length), 0, buf, 4, 4);
+    Bytes.setInt(buf, state);
+    return ChannelBuffers.wrappedBuffer(buf);
+  }
+  
+  /**
+   * Creates a buffer with the sasl state at the top
+   * @param state The state to encode
+   * @param payload The pyalod to wrap
+   * @return A channel buffer for testing
+   */
+  protected ChannelBuffer getSaslExceptionBuffer(final int state, final byte[] payload) {
+    final byte[] buf = new byte[payload.length+ 4];
+    System.arraycopy(payload, 0, buf, 4, payload.length);
     Bytes.setInt(buf, state);
     return ChannelBuffers.wrappedBuffer(buf);
   }
