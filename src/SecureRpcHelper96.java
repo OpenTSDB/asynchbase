@@ -108,16 +108,31 @@ class SecureRpcHelper96 extends SecureRpcHelper {
     }
 
     if (!sasl_client.isComplete()) {
-      final int read_index = buf.readerIndex();
       final int state = buf.readInt();
 
-      //0 is success
+      //0 is success, 1 is an exception
       //If unsuccessful let common exception handling do the work
       if (state != 0) {
-        LOG.error("Sasl initialization failed with a status of [" + state + 
-            "]: " + this);
-        buf.readerIndex(read_index);
-        return buf;
+        // We expect HBase to return a simple formated exception in the format:
+        // int length | exception class | int length | exception message
+        if (buf.readableBytes() < 8) {
+          throw new SecurityException("Sasl initialization failed with a "
+              + "status of [" + state + "] and an unknown exception. "
+              + "Check HBase logs.: " + this);
+        }
+        int len = buf.readInt();
+        byte[] temp = new byte[len];
+        buf.readBytes(temp);
+        final String exception = new String(temp);
+        
+        len = buf.readInt();
+        temp = new byte[len];
+        buf.readBytes(temp);
+        final String msg = new String(temp);
+
+        throw new SecurityException("Sasl initialization failed with a "
+            + "status of [" + state + "] and exception [" + exception 
+            + "] and message [" + msg + "]: " + this);
       } 
 
       final int len = buf.readInt();
@@ -186,7 +201,7 @@ class SecureRpcHelper96 extends SecureRpcHelper {
     // We wrote to the underlying buffer but Netty didn't see the writes,
     // so move the write index forward.
     header.writerIndex(buf.length);
-    Channels.write(chan, header);
+    Channels.write(chan, wrap(header));
     region_client.becomeReady(chan, RegionClient.SERVER_VERSION_095_OR_ABOVE);
   }
 }

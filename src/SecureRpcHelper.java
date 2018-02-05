@@ -231,7 +231,7 @@ public abstract class SecureRpcHelper {
     }
 
     try {
-      final byte[] payload = new byte[content.writerIndex()];
+      final byte[] payload = new byte[content.readableBytes()];
       content.readBytes(payload);
       final byte[] wrapped = sasl_client.wrap(payload, 0, payload.length);
       final ChannelBuffer ret = ChannelBuffers.wrappedBuffer(
