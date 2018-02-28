@@ -33,7 +33,6 @@ import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Collection;
 import java.util.List;
 
@@ -2173,6 +2172,163 @@ final public class TestIntegration {
     assertEq("val2", rows.get(1).get(0).value());
     assertEq("val3", rows.get(2).get(0).value());
 
+  }
+
+  /** Scan metrics tests.  */
+  @Test
+  public void scanMetrics() throws Exception {
+    final String table6 = args[0] + "6";
+    createOrTruncateTable(client, table6, family);
+
+    // Split into 4 regions.
+    splitTable(table6, "aaa");
+    splitTable(table6, "bbb");
+    splitTable(table6, "ccc");
+    alterTableStatus(table6);
+
+    // Put 5 rows to 3 regions.
+    client.setFlushInterval(FAST_FLUSH);
+    final PutRequest put_a1 = new PutRequest(table6, "aaa1", family, "testQualifier", "testValue");
+    client.put(put_a1).join();
+    client.setFlushInterval(FAST_FLUSH);
+    final PutRequest put_a2 = new PutRequest(table6, "aaa2", family, "testQualifier", "testValue");
+    client.put(put_a2).join();
+    final PutRequest put_b1 = new PutRequest(table6, "bbb1", family, "testQualifier", "testValue");
+    client.put(put_b1).join();
+    final PutRequest put_b2 = new PutRequest(table6, "bbb2", family, "testQualifier", "testValue");
+    client.put(put_b2).join();
+    final PutRequest put3 = new PutRequest(table6, "ccc", family, "testQualifier", "testValue");
+    client.put(put3).join();
+
+    // Create forward scanner with metrics enabled.
+    Scanner scanner = client.newScanner(table6);
+    scanner.setScanMetricsEnabled(true);
+    scanner.setStartKey("aaa");
+    scanner.setStopKey("ddd");
+
+    long prevBytesInResult = 0;
+
+    ArrayList<ArrayList<KeyValue>> row_a1 = scanner.nextRows(1).join();
+    assertSizeIs(1, row_a1);
+    Scanner.ScanMetrics metrics_a1 = scanner.getScanMetrics();
+    assertEquals("incorrect count of regions", 1, metrics_a1.getCountOfRegions());
+    // server-side metrics works for HBase > 0.94 only
+    if (metrics_a1.getCountOfRowsScanned() == 0) {
+      LOG.warn("Skipping a server-side metrics check for HBase < 0.95");
+    } else {
+      assertEquals("incorrect count of rows scanned", 1, metrics_a1.getCountOfRowsScanned()); // + 1 row scanned
+    }
+    assertEquals("incorrect count of RPC calls", 1, metrics_a1.getCountOfRPCcalls()); // + 1 open
+    assertTrue("incorrect count of bytes in results", metrics_a1.getCountOfBytesInResults() > prevBytesInResult);
+    prevBytesInResult = metrics_a1.getCountOfBytesInResults();
+
+    ArrayList<ArrayList<KeyValue>> row_a2 = scanner.nextRows(1).join();
+    assertSizeIs(1, row_a2);
+    Scanner.ScanMetrics metrics_a2 = scanner.getScanMetrics();
+    assertEquals("incorrect count of regions", 1, metrics_a2.getCountOfRegions());
+    // server-side metrics works for HBase > 0.94 only
+    if (metrics_a2.getCountOfRowsScanned() == 0) {
+      LOG.warn("Skipping a server-side metrics check for HBase < 0.95");
+    } else {
+      assertEquals("incorrect count of rows scanned", 2, metrics_a2.getCountOfRowsScanned()); // + 1 row scanned
+    }
+    assertEquals("incorrect count of RPC calls", 2, metrics_a2.getCountOfRPCcalls()); // + 1 next
+    assertTrue("incorrect count of bytes in results", metrics_a2.getCountOfBytesInResults() > prevBytesInResult);
+    prevBytesInResult = metrics_a2.getCountOfBytesInResults();
+
+    ArrayList<ArrayList<KeyValue>> row_b1 = scanner.nextRows(1).join();
+    assertSizeIs(1, row_b1);
+    Scanner.ScanMetrics metrics_b1 = scanner.getScanMetrics();
+    assertEquals("incorrect count of regions", 2, metrics_b1.getCountOfRegions()); // + next region
+    // server-side metrics works for HBase > 0.94 only
+    if (metrics_b1.getCountOfRowsScanned() == 0) {
+      LOG.warn("Skipping a server-side metrics check for HBase < 0.95");
+    } else {
+      assertEquals("incorrect count of rows scanned", 3, metrics_b1.getCountOfRowsScanned()); // + 1 row scanned
+    }
+    assertEquals("incorrect count of RPC calls", 5, metrics_b1.getCountOfRPCcalls()); // + 1 empty next + 1 close + 1 open
+    assertTrue("incorrect count of bytes in results", metrics_b1.getCountOfBytesInResults() > prevBytesInResult);
+    prevBytesInResult = metrics_b1.getCountOfBytesInResults();
+
+    ArrayList<ArrayList<KeyValue>> row_b2 = scanner.nextRows(1).join();
+    assertSizeIs(1, row_b2);
+    Scanner.ScanMetrics metrics_b2 = scanner.getScanMetrics();
+    assertEquals("incorrect count of regions", 2, metrics_b2.getCountOfRegions());
+    // server-side metrics works for HBase > 0.94 only
+    if (metrics_b2.getCountOfRowsScanned() == 0) {
+      LOG.warn("Skipping a server-side metrics check for HBase < 0.95");
+    } else {
+      assertEquals("incorrect count of rows scanned", 4, metrics_b2.getCountOfRowsScanned()); // + 1 row scanned
+    }
+    assertEquals("incorrect count of RPC calls", 6, metrics_b2.getCountOfRPCcalls()); // + 1 next
+    assertTrue("incorrect count of bytes in results", metrics_b2.getCountOfBytesInResults() > prevBytesInResult);
+    prevBytesInResult = metrics_b2.getCountOfBytesInResults();
+
+    ArrayList<ArrayList<KeyValue>> row_c = scanner.nextRows().join();
+    assertSizeIs(1, row_c);
+    Scanner.ScanMetrics metrics_c = scanner.getScanMetrics();
+    assertEquals("incorrect count of regions", 3, metrics_c.getCountOfRegions()); // + next region
+    // server-side metrics works for HBase > 0.94 only
+    if (metrics_c.getCountOfRowsScanned() == 0) {
+      LOG.warn("Skipping a server-side metrics check for HBase < 0.95");
+    } else {
+      assertEquals("incorrect count of rows scanned", 5, metrics_c.getCountOfRowsScanned()); // + 1 row scanned
+    }
+    assertEquals("incorrect count of RPC calls", 9, metrics_c.getCountOfRPCcalls()); // + 1 empty next + 1 close + 1 open
+    assertTrue("incorrect count of bytes in results", metrics_c.getCountOfBytesInResults() > prevBytesInResult);
+    prevBytesInResult = metrics_c.getCountOfBytesInResults();
+
+    scanner.close().join();
+    Scanner.ScanMetrics metrics_final = scanner.getScanMetrics();
+    assertEquals("incorrect count of regions", 3, metrics_final.getCountOfRegions());
+    // server-side metrics works for HBase > 0.94 only
+    if (metrics_final.getCountOfRowsScanned() == 0) {
+      LOG.warn("Skipping a server-side metrics check for HBase < 0.95");
+    } else {
+      assertEquals("incorrect count of rows scanned", 5, metrics_final.getCountOfRowsScanned());
+    }
+    assertEquals("incorrect count of RPC calls", 10, metrics_final.getCountOfRPCcalls()); // + 1 close
+    assertTrue("incorrect count of bytes in results", metrics_final.getCountOfBytesInResults() == prevBytesInResult);
+  }
+
+  /** Scan metrics of filtered rows tests. */
+  @Test
+  public void scanMetricsWithFilter() throws Exception {
+    client.setFlushInterval(FAST_FLUSH);
+    // Keep only rows with a column qualifier that starts with "qa".
+    final PutRequest put1 = new PutRequest(table, "cpf1", family, "qa1", "v1");
+    final PutRequest put2 = new PutRequest(table, "cpf2", family, "qb2", "v2");
+    final PutRequest put3 = new PutRequest(table, "cpf3", family, "qb3", "v3");
+    final PutRequest put4 = new PutRequest(table, "cpf4", family, "qa4", "v4");
+    Deferred.group(Deferred.group(client.put(put1), client.put(put2)),
+        Deferred.group(client.put(put3), client.put(put4))).join();
+    final Scanner scanner = client.newScanner(table);
+    scanner.setFamily(family);
+    scanner.setStartKey("cpf1");
+    scanner.setStopKey("cpf5");
+    scanner.setFilter(new ColumnPrefixFilter("qa"));
+    scanner.setScanMetricsEnabled(true);
+    final ArrayList<ArrayList<KeyValue>> rows = scanner.nextRows().join();
+
+    assertSizeIs(2, rows);
+    ArrayList<KeyValue> kvs1 = rows.get(0);
+    assertSizeIs(1, kvs1);
+    assertEq("v1", kvs1.get(0).value());
+    ArrayList<KeyValue> kvs4 = rows.get(1);
+    assertSizeIs(1, kvs4);
+    assertEq("v4", kvs4.get(0).value());
+
+    Scanner.ScanMetrics metrics = scanner.getScanMetrics();
+    // server-side metrics works for HBase > 0.94 only
+    if (metrics.getCountOfRowsScanned() == 0) {
+      LOG.warn("Skipping a server-side metrics check for HBase < 0.95");
+    } else {
+      assertEquals("incorrect count of rows scanned", 4, metrics.getCountOfRowsScanned());
+      assertEquals("incorrect count of rows filtered", 2, metrics.getCountOfRowsFiltered());
+    }
+    assertEquals("incorrect count of RPC calls", 1, metrics.getCountOfRPCcalls()); // 1 open
+
+    scanner.close().join();
   }
 
   /** Regression test for issue #2. */

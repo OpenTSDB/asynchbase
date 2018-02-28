@@ -29,7 +29,12 @@ package org.hbase.async;
 import java.nio.charset.Charset;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.HashMap;
+import java.util.Map;
 
+import com.google.common.collect.ImmutableMap;
+import org.hbase.async.generated.HBasePB;
+import org.hbase.async.generated.MapReducePB;
 import org.jboss.netty.buffer.ChannelBuffer;
 
 import org.slf4j.Logger;
@@ -197,6 +202,12 @@ public final class Scanner {
 
   private boolean moreRows;
   private boolean scannerClosedOnServer;
+
+  private boolean scan_metrics_enabled = false;
+
+  private long last_next_timestamp = System.currentTimeMillis();
+
+  private ScanMetrics scanMetrics = new ScanMetrics();
 
   /**
    * Constructor.
@@ -701,6 +712,18 @@ public final class Scanner {
     this.max_timestamp = max_timestamp;
   }
 
+  public void setScanMetricsEnabled(final boolean enabled) {
+    scan_metrics_enabled = enabled;
+  }
+
+  public boolean isScanMetricsEnabled() {
+    return scan_metrics_enabled;
+  }
+
+  public ScanMetrics getScanMetrics() {
+    return scanMetrics;
+  }
+
   /**
    * Scans a number of rows.  Calling this method is equivalent to:
    * <pre>
@@ -740,6 +763,7 @@ public final class Scanner {
     if (region == DONE) {  // We're already done scanning.
       return Deferred.fromResult(null);
     } else if (region == null) {  // We need to open the scanner first.
+      incRPCcallsMetrics();
       if (this.isReversed() && !this.isFirstReverseRegion()){
         return client.openReverseScanner(this)
                 .addCallbackDeferring(opened_scanner);
@@ -754,6 +778,7 @@ public final class Scanner {
     if(scannerClosedOnServer) {
       return scanFinished(moreRows);
     }
+    incRPCcallsMetrics();
     // Need to silence this warning because the callback `got_next_row'
     // declares its return type to be Object, because its return value
     // may or may not be deferred.
@@ -770,6 +795,8 @@ public final class Scanner {
     opened_scanner =
       new Callback<Deferred<ArrayList<ArrayList<KeyValue>>>, Object>() {
           public Deferred<ArrayList<ArrayList<KeyValue>>> call(final Object arg) {
+            long currentTime = System.currentTimeMillis();
+            updateSumOfMillisSecBetweenNexts(currentTime);
             final Response resp;
             if (arg instanceof Long) {
               scanner_id = (Long) arg;
@@ -788,9 +815,11 @@ public final class Scanner {
               LOG.debug("Scanner " + Bytes.hex(scanner_id) + " opened on " + region);
             }
             if (resp != null) {
+              updateServerSideMetrics(resp.metrics);
               if (resp.rows == null) {
                 return scanFinished(!resp.more);
               }
+              updateResultsMetrics(resp.rows);
               return Deferred.fromResult(resp.rows);
             }
             return nextRows();  // Restart the call.
@@ -809,6 +838,8 @@ public final class Scanner {
   private final Callback<Object, Object> got_next_row =
     new Callback<Object, Object>() {
       public Object call(final Object response) {
+        long currentTime = System.currentTimeMillis();
+        updateSumOfMillisSecBetweenNexts(currentTime);
         ArrayList<ArrayList<KeyValue>> rows = null;
         Response resp = null;
         if (response instanceof Response) {  // HBase 0.95 and up
@@ -816,6 +847,7 @@ public final class Scanner {
           rows = resp.rows;
           scannerClosedOnServer = resp.scannerClosedOnServer;
           moreRows = resp.more;
+          updateServerSideMetrics(resp.metrics);
         } else if (response instanceof ArrayList) {  // HBase 0.94 and before.
           @SuppressWarnings("unchecked")  // I 3>> generics.
           final ArrayList<ArrayList<KeyValue>> r =
@@ -828,6 +860,8 @@ public final class Scanner {
         if (rows == null) {  // We're done scanning this region.
           return scanFinished(resp != null && !resp.more);
         }
+
+        updateResultsMetrics(rows);
 
         final ArrayList<KeyValue> lastrow = rows.get(rows.size() - 1);
         start_key = lastrow.get(0).key();
@@ -844,9 +878,13 @@ public final class Scanner {
   private final Callback<Object, Object> nextRowErrback() {
     return new Callback<Object, Object>() {
       public Object call(final Object error) {
+        long currentTime = System.currentTimeMillis();
+        updateSumOfMillisSecBetweenNexts(currentTime);
         final RegionInfo old_region = region;  // Save before invalidate().
         invalidate();  // If there was an error, don't assume we're still OK.
         if (error instanceof NotServingRegionException) {
+          incCountOfNSRE();
+          incCountOfRPCRetries();
           // We'll resume scanning on another region, and we want to pick up
           // right after the last key we successfully returned.  Padding the
           // last key with an extra 0 gives us the next possible key.
@@ -871,6 +909,7 @@ public final class Scanner {
             + " been holding the scanner open and idle for too long (possibly"
             + " due to a long GC pause on your side or in the RegionServer)",
             error);
+          incCountOfRPCRetries();
           // Let's re-open ourselves and keep scanning.
           return nextRows();  // XXX dangerous endless retry
         }
@@ -894,6 +933,7 @@ public final class Scanner {
     if (region == null || region == DONE) {
       return Deferred.fromResult(null);
     }
+    incRPCcallsMetrics();
     return client.closeScanner(this).addBoth(closedCallback());
   }
 
@@ -901,6 +941,8 @@ public final class Scanner {
   private Callback<Object, Object> closedCallback() {
     return new Callback<Object, Object>() {
       public Object call(Object arg) {
+        long currentTime = System.currentTimeMillis();
+        updateSumOfMillisSecBetweenNexts(currentTime);
         if (arg instanceof Exception) {
           final Exception error = (Exception) arg;
           // NotServingRegionException:
@@ -992,6 +1034,7 @@ public final class Scanner {
       LOG.debug("Scanner " + Bytes.hex(old_scanner_id) + " done scanning "
               + old_region);
     }
+    incRPCcallsMetrics();
     client.closeScanner(this).addCallback(new Callback<Object, Object>() {
       public Object call(final Object arg) {
         if(LOG.isDebugEnabled()) {
@@ -1015,6 +1058,7 @@ public final class Scanner {
 
     scanner_id = 0xDEAD000AA000DEADL;   // Make debugging easier.
     invalidate();
+    incCountOfRegions();
     return nextRows();
   }
 
@@ -1127,7 +1171,7 @@ public final class Scanner {
    */
   HBaseRpc getNextRowsRequest() {
     if (get_next_rows_request == null) {
-      get_next_rows_request = new GetNextRowsRequest();
+      get_next_rows_request = new GetNextRowsRequest().withMetricsEnabled(this.isScanMetricsEnabled());
     }
     return get_next_rows_request;
   }
@@ -1136,7 +1180,7 @@ public final class Scanner {
    * Returns an RPC to open this scanner.
    */
   HBaseRpc getOpenRequest() {
-    return new OpenScannerRequest();
+    return new OpenScannerRequest().withMetricsEnabled(this.isScanMetricsEnabled());
   }
 
   /**
@@ -1146,7 +1190,7 @@ public final class Scanner {
    * @param region_start_key region's start key
    */
   HBaseRpc getOpenRequestForReverseScan(final byte[] region_start_key) {
-    return new OpenScannerRequest(table, region_start_key);
+    return new OpenScannerRequest(table, region_start_key).withMetricsEnabled(this.isScanMetricsEnabled());
   }
 
   /**
@@ -1187,6 +1231,8 @@ public final class Scanner {
 
     private final boolean scannerClosedOnServer;
 
+    private final Map<String, Long> metrics;
+
     Response(final long scanner_id,
              final ArrayList<ArrayList<KeyValue>> rows,
              final boolean more, final boolean scannerClosedOnServer) {
@@ -1194,6 +1240,18 @@ public final class Scanner {
       this.rows = rows;
       this.more = more;
       this.scannerClosedOnServer = scannerClosedOnServer;
+      this.metrics = new HashMap<String, Long>();
+    }
+
+    Response(final long scanner_id,
+             final ArrayList<ArrayList<KeyValue>> rows,
+             final boolean more, final boolean scannerClosedOnServer,
+             final Map<String, Long> metrics) {
+      this.scanner_id = scanner_id;
+      this.rows = rows;
+      this.more = more;
+      this.scannerClosedOnServer = scannerClosedOnServer;
+      this.metrics = metrics;
     }
 
     public String toString() {
@@ -1254,6 +1312,8 @@ public final class Scanner {
    * RPC sent out to open a scanner on a RegionServer.
    */
   final class OpenScannerRequest extends HBaseRpc {
+
+    boolean metrics_enabled = false;
 
     /**
      * Default constructor that is used for every forward Scanner and
@@ -1385,6 +1445,7 @@ public final class Scanner {
         .setRegion(region.toProtobuf())
         .setScan(scan.build())
         .setNumberOfRows(max_num_rows)
+        .setTrackScanMetrics(metrics_enabled)
         // Hardcoded these parameters to false since AsyncHBase cannot support them
         .setClientHandlesHeartbeats(false)
         .setClientHandlesPartials(false)
@@ -1463,10 +1524,38 @@ public final class Scanner {
         throw new InvalidResponseException("Scan RPC response doesn't contain a"
                                            + " scanner ID", resp);
       }
+      Map<String, Long> metrics = getServerSideScanMetrics(resp);
       final boolean scannerClosedOnServer = resp.hasMoreResultsInRegion() && !resp.getMoreResultsInRegion();
       return new Response(resp.getScannerId(),
                           getRows(resp, buf, cell_size),
-                          resp.getMoreResults(), scannerClosedOnServer);
+                          resp.getMoreResults(), scannerClosedOnServer, metrics);
+    }
+
+    public OpenScannerRequest withMetricsEnabled(boolean enabled) {
+      this.metrics_enabled = enabled;
+      return this;
+    }
+
+    private Map<String, Long> getServerSideScanMetrics(ScanResponse response) {
+      Map<String, Long> metricMap = new HashMap<String, Long>();
+      if (response == null || !response.hasScanMetrics() || response.getScanMetrics() == null) {
+        return metricMap;
+      }
+
+      MapReducePB.ScanMetrics metrics = response.getScanMetrics();
+      int numberOfMetrics = metrics.getMetricsCount();
+      for (int i = 0; i < numberOfMetrics; i++) {
+        HBasePB.NameInt64Pair metricPair = metrics.getMetrics(i);
+        if (metricPair != null) {
+          String name = metricPair.getName();
+          Long value = metricPair.getValue();
+          if (name != null && value != null) {
+            metricMap.put(name, value);
+          }
+        }
+      }
+
+      return metricMap;
     }
 
     public String toString() {
@@ -1481,6 +1570,8 @@ public final class Scanner {
    * RPC sent out to fetch the next rows from the RegionServer.
    */
   final class GetNextRowsRequest extends HBaseRpc {
+
+    boolean metrics_enabled = false;
 
     @Override
     byte[] method(final byte server_version) {
@@ -1503,6 +1594,7 @@ public final class Scanner {
       final ScanRequest req = ScanRequest.newBuilder()
         .setScannerId(scanner_id)
         .setNumberOfRows(max_num_rows)
+        .setTrackScanMetrics(metrics_enabled)
         // Hardcoded these parameters to false since AsyncHBase cannot support them
         .setClientHandlesHeartbeats(false)
         .setClientHandlesPartials(false)
@@ -1523,8 +1615,36 @@ public final class Scanner {
       if (rows == null) {
         return null;
       }
+      Map<String, Long> metrics = getServerSideScanMetrics(resp);
       final boolean scannerClosedOnServer = resp.hasMoreResultsInRegion() && !resp.getMoreResultsInRegion();
-      return new Response(resp.getScannerId(), rows, resp.getMoreResults(), scannerClosedOnServer);
+      return new Response(resp.getScannerId(), rows, resp.getMoreResults(), scannerClosedOnServer, metrics);
+    }
+
+    public GetNextRowsRequest withMetricsEnabled(boolean enabled) {
+      this.metrics_enabled = enabled;
+      return this;
+    }
+
+    private Map<String, Long> getServerSideScanMetrics(ScanResponse response) {
+      Map<String, Long> metricMap = new HashMap<String, Long>();
+      if (response == null || !response.hasScanMetrics() || response.getScanMetrics() == null) {
+        return metricMap;
+      }
+
+      MapReducePB.ScanMetrics metrics = response.getScanMetrics();
+      int numberOfMetrics = metrics.getMetricsCount();
+      for (int i = 0; i < numberOfMetrics; i++) {
+        HBasePB.NameInt64Pair metricPair = metrics.getMetrics(i);
+        if (metricPair != null) {
+          String name = metricPair.getName();
+          Long value = metricPair.getValue();
+          if (name != null && value != null) {
+            metricMap.put(name, value);
+          }
+        }
+      }
+
+      return metricMap;
     }
 
     public String toString() {
@@ -1596,5 +1716,170 @@ public final class Scanner {
     }
 
   }
+
+  private void updateServerSideMetrics(Map<String, Long> metrics) {
+    if (!metrics.isEmpty()) {
+      for (Map.Entry<String, Long> e : metrics.entrySet()) {
+        if (e.getKey().equals(ServerSideScanMetrics.COUNT_OF_ROWS_SCANNED_KEY_METRIC_NAME)) {
+          scanMetrics.count_of_rows_scanned += e.getValue();
+        } else if (e.getKey().equals(ServerSideScanMetrics.COUNT_OF_ROWS_FILTERED_KEY_METRIC_NAME)) {
+          scanMetrics.count_of_rows_filtered += e.getValue();
+        }
+      }
+    }
+  }
+
+  private void incRPCcallsMetrics() {
+    if (isScanMetricsEnabled()) {
+      this.scanMetrics.count_of_rpc_calls += 1;
+    }
+  }
+
+  private void updateResultsMetrics(ArrayList<ArrayList<KeyValue>> rows) {
+    if (isScanMetricsEnabled()) {
+      long resultSize = 0;
+      for (ArrayList<KeyValue> row: rows) {
+        for (KeyValue cell: row) {
+          resultSize += cell.predictSerializedSize();
+        }
+      }
+      this.scanMetrics.count_of_bytes_in_results += resultSize;
+    }
+  }
+
+  private void incCountOfNSRE() {
+    if (isScanMetricsEnabled()) {
+      this.scanMetrics.count_of_nsre += 1;
+    }
+  }
+
+  private void incCountOfRPCRetries() {
+    if (isScanMetricsEnabled()) {
+      this.scanMetrics.count_of_rpc_retries += 1;
+    }
+  }
+
+  private void incCountOfRegions() {
+    if (isScanMetricsEnabled()) {
+      this.scanMetrics.count_of_regions += 1;
+    }
+  }
+
+  private void updateSumOfMillisSecBetweenNexts(long currentTime) {
+    if (isScanMetricsEnabled()) {
+      this.scanMetrics.sum_of_millis_sec_between_nexts += (currentTime - last_next_timestamp);
+      last_next_timestamp = currentTime;
+    }
+  }
+
+  /**
+   * Server-side metrics.
+   * Only supported for HBase 0.95 and above.
+   */
+  private static class ServerSideScanMetrics {
+
+    public static final String COUNT_OF_ROWS_SCANNED_KEY_METRIC_NAME = "ROWS_SCANNED";
+    public static final String COUNT_OF_ROWS_FILTERED_KEY_METRIC_NAME = "ROWS_FILTERED";
+
+    protected long count_of_rows_scanned = 0;
+    protected long count_of_rows_filtered = 0;
+
+    /**
+     * Number of rows scanned during scan RPC.
+     * Not every row scanned will be returned to the client
+     * since rows may be filtered.
+     * Always returns 0 if HBase < 0.95.
+     */
+    public long getCountOfRowsScanned() { return count_of_rows_scanned; };
+
+    /**
+     * Number of rows filtered during scan RPC.
+     * Always returns 0 if HBase < 0.95.
+     */
+    public long getCountOfRowsFiltered() { return count_of_rows_filtered; }
+
+  }
+
+  /**
+   * Client-side metrics.
+   * <p>
+   * This class is immutable. You can get updated values by calling
+   * this function again once RPC is completed.
+   * This class is <strong>not synchronized</strong> because
+   * fields of this class is updated only inside the Deferred callbacks
+   * by {@code Scanner}.
+   * </p>
+   */
+  public static class ScanMetrics extends ServerSideScanMetrics {
+
+    public static final String RPC_CALLS_METRIC_NAME = "RPC_CALLS";
+    public static final String MILLIS_BETWEEN_NEXTS_METRIC_NAME = "MILLIS_BETWEEN_NEXTS";
+    public static final String NOT_SERVING_REGION_EXCEPTION_METRIC_NAME = "NOT_SERVING_REGION_EXCEPTION";
+    public static final String BYTES_IN_RESULTS_METRIC_NAME = "BYTES_IN_RESULTS";
+    public static final String REGIONS_SCANNED_METRIC_NAME = "REGIONS_SCANNED";
+    public static final String RPC_RETRIES_METRIC_NAME = "RPC_RETRIES";
+
+    private long count_of_rpc_calls = 0;
+
+    private long sum_of_millis_sec_between_nexts = 0;
+
+    private long count_of_nsre = 0;
+
+    private long count_of_bytes_in_results = 0;
+
+    private long count_of_rpc_retries = 0;
+
+    /**
+     * Starts with 1 because it is incremented when a scanner switches to a next region.
+     */
+    private long count_of_regions = 1;
+
+    /**
+     * Number of RPC calls.
+     */
+    public long getCountOfRPCcalls() { return count_of_rpc_calls; }
+
+    /**
+     * Sum of milliseconds between sequential next calls.
+     */
+    public long getSumOfMillisSecBetweenNexts() { return sum_of_millis_sec_between_nexts; }
+
+    /**
+     * Number of NotServingRegionException caught.
+     */
+    public long getCountOfNSRE() { return count_of_nsre; }
+
+    /**
+     * Number of bytes in Result objects from region servers.
+     */
+    public long getCountOfBytesInResults() { return count_of_bytes_in_results; }
+
+    /**
+     * Number of regions.
+     */
+    public long getCountOfRegions() { return count_of_regions; };
+
+    /**
+     * number of RPC retries
+     */
+    public long getCountOfRPCRetries() { return count_of_rpc_retries; }
+
+    public ScanMetrics() {
+    }
+
+    public Map<String, Long> getMetricsMap() {
+      ImmutableMap.Builder<String, Long> builder = ImmutableMap.builder();
+      builder.put(COUNT_OF_ROWS_SCANNED_KEY_METRIC_NAME, count_of_rows_scanned);
+      builder.put(COUNT_OF_ROWS_FILTERED_KEY_METRIC_NAME, count_of_rows_filtered);
+      builder.put(RPC_CALLS_METRIC_NAME, count_of_rpc_calls);
+      builder.put(MILLIS_BETWEEN_NEXTS_METRIC_NAME, sum_of_millis_sec_between_nexts);
+      builder.put(NOT_SERVING_REGION_EXCEPTION_METRIC_NAME, count_of_nsre);
+      builder.put(BYTES_IN_RESULTS_METRIC_NAME, count_of_bytes_in_results);
+      builder.put(REGIONS_SCANNED_METRIC_NAME, count_of_regions);
+      builder.put(RPC_RETRIES_METRIC_NAME, count_of_rpc_retries);
+      return builder.build();
+    }
+  }
+
 
 }
