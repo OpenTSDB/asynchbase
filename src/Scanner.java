@@ -884,6 +884,7 @@ public final class Scanner {
         invalidate();  // If there was an error, don't assume we're still OK.
         if (error instanceof NotServingRegionException) {
           incCountOfNSRE();
+          incCountOfRPCRetries();
           // We'll resume scanning on another region, and we want to pick up
           // right after the last key we successfully returned.  Padding the
           // last key with an extra 0 gives us the next possible key.
@@ -908,6 +909,7 @@ public final class Scanner {
             + " been holding the scanner open and idle for too long (possibly"
             + " due to a long GC pause on your side or in the RegionServer)",
             error);
+          incCountOfRPCRetries();
           // Let's re-open ourselves and keep scanning.
           return nextRows();  // XXX dangerous endless retry
         }
@@ -1751,6 +1753,12 @@ public final class Scanner {
     }
   }
 
+  private void incCountOfRPCRetries() {
+    if (isScanMetricsEnabled()) {
+      this.scanMetrics.count_of_rpc_retries += 1;
+    }
+  }
+
   private void incCountOfRegions() {
     if (isScanMetricsEnabled()) {
       this.scanMetrics.count_of_regions += 1;
@@ -1809,6 +1817,7 @@ public final class Scanner {
     public static final String NOT_SERVING_REGION_EXCEPTION_METRIC_NAME = "NOT_SERVING_REGION_EXCEPTION";
     public static final String BYTES_IN_RESULTS_METRIC_NAME = "BYTES_IN_RESULTS";
     public static final String REGIONS_SCANNED_METRIC_NAME = "REGIONS_SCANNED";
+    public static final String RPC_RETRIES_METRIC_NAME = "RPC_RETRIES";
 
     private long count_of_rpc_calls = 0;
 
@@ -1816,7 +1825,9 @@ public final class Scanner {
 
     private long count_of_nsre = 0;
 
-    private long  count_of_bytes_in_results = 0;
+    private long count_of_bytes_in_results = 0;
+
+    private long count_of_rpc_retries = 0;
 
     /**
      * Starts with 1 because it is incremented when a scanner switches to a next region.
@@ -1848,6 +1859,11 @@ public final class Scanner {
      */
     public long getCountOfRegions() { return count_of_regions; };
 
+    /**
+     * number of RPC retries
+     */
+    public long getCountOfRPCRetries() { return count_of_rpc_retries; }
+
     public ScanMetrics() {
     }
 
@@ -1860,6 +1876,7 @@ public final class Scanner {
       builder.put(NOT_SERVING_REGION_EXCEPTION_METRIC_NAME, count_of_nsre);
       builder.put(BYTES_IN_RESULTS_METRIC_NAME, count_of_bytes_in_results);
       builder.put(REGIONS_SCANNED_METRIC_NAME, count_of_regions);
+      builder.put(RPC_RETRIES_METRIC_NAME, count_of_rpc_retries);
       return builder.build();
     }
   }
