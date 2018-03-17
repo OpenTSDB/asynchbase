@@ -766,7 +766,7 @@ public final class Scanner {
   /**
    * Callback to handle response from opening a scanner
    */
-  private final Callback<Deferred<ArrayList<ArrayList<KeyValue>>>, Object>
+   final Callback<Deferred<ArrayList<ArrayList<KeyValue>>>, Object>
     opened_scanner =
       new Callback<Deferred<ArrayList<ArrayList<KeyValue>>>, Object>() {
           public Deferred<ArrayList<ArrayList<KeyValue>>> call(final Object arg) {
@@ -806,7 +806,7 @@ public final class Scanner {
    * This returns an {@code ArrayList<ArrayList<KeyValue>>} (possibly inside a
    * deferred one).
    */
-  private final Callback<Object, Object> got_next_row =
+  final Callback<Object, Object> got_next_row =
     new Callback<Object, Object>() {
       public Object call(final Object response) {
         ArrayList<ArrayList<KeyValue>> rows = null;
@@ -841,7 +841,7 @@ public final class Scanner {
   /**
    * Creates a new errback to handle errors while trying to get more rows.
    */
-  private final Callback<Object, Object> nextRowErrback() {
+  final Callback<Object, Object> nextRowErrback() {
     return new Callback<Object, Object>() {
       public Object call(final Object error) {
         final RegionInfo old_region = region;  // Save before invalidate().
@@ -1481,7 +1481,7 @@ public final class Scanner {
    * RPC sent out to fetch the next rows from the RegionServer.
    */
   final class GetNextRowsRequest extends HBaseRpc {
-
+    
     @Override
     byte[] method(final byte server_version) {
       return (server_version >= RegionClient.SERVER_VERSION_095_OR_ABOVE
