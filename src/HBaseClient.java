@@ -416,6 +416,9 @@ public final class HBaseClient {
   
   /** Default RPC timeout in milliseconds from the config */
   private final int rpc_timeout;
+
+  /** Whether or not we have to scan meta instead of making getClosestBeforeRow calls. */
+  private final boolean scan_meta;
   
   private boolean increment_buffer_durable = false;
   
@@ -550,6 +553,11 @@ public final class HBaseClient {
     if (config.properties.containsKey("hbase.increments.durable")) {
       increment_buffer_durable = config.getBoolean("hbase.increments.durable");
     }
+    if (config.hasProperty("hbase.meta.scan")) {
+      scan_meta = config.getBoolean("hbase.meta.scan");
+    } else {
+      scan_meta = Boolean.parseBoolean(System.getProperty("hbase.meta.scan", "false"));
+    }
   }
   
   /**
@@ -610,6 +618,11 @@ public final class HBaseClient {
     nsre_high_watermark = config.getInt("hbase.nsre.high_watermark");
     if (config.properties.containsKey("hbase.increments.durable")) {
       increment_buffer_durable = config.getBoolean("hbase.increments.durable");
+    }
+    if (config.hasProperty("hbase.meta.scan")) {
+      scan_meta = config.getBoolean("hbase.meta.scan");
+    } else {
+      scan_meta = Boolean.parseBoolean(System.getProperty("hbase.meta.scan", "false"));
     }
   }
   
@@ -2715,11 +2728,21 @@ public final class HBaseClient {
         Deferred<Object> d = null;
         try {
           if (return_location) {
-            d = client.getClosestRowBefore(meta_region, meta_name, meta_key, INFO)
+            if (scan_meta) {
+              d = scanMeta(client, meta_region, meta_name, meta_key, INFO)
                   .addCallback(meta_lookup_done_return_location);
-          } else{
-            d = client.getClosestRowBefore(meta_region, meta_name, meta_key, INFO)
+            } else {
+              d = client.getClosestRowBefore(meta_region, meta_name, meta_key, INFO)
+                  .addCallback(meta_lookup_done_return_location);
+            }
+          } else {
+            if (scan_meta) {
+              d = scanMeta(client, meta_region, meta_name, meta_key, INFO)
                   .addCallback(meta_lookup_done);
+            } else {
+              d = client.getClosestRowBefore(meta_region, meta_name, meta_key, INFO)
+                  .addCallback(meta_lookup_done);
+            }
           }
         } catch (RuntimeException e) {
           LOG.error("Unexpected exception while performing meta lookup", e);
@@ -2771,6 +2794,75 @@ public final class HBaseClient {
                     closest_before, return_location));
   }
 
+  /**
+   * Later versions of HBase dropped the old 
+   * {@link RegionClient#getClosestRowBefore(RegionInfo, byte[], byte[], byte[])}
+   * method and switched to performing reverse scans. This method will 
+   * handle the scanning returning either a meta row if found or an empty
+   * array if the row/table was not found.
+   * TODO - need to see what happens with split meta.
+   * 
+   * @param client The region client to open the scanner on.
+   * @param region The region we're scanning for.
+   * @param table The name of the table to scan for.
+   * @param row The row to scan for.
+   * @param family The family to scan on.
+   * @return A deferred resolving to an array list containing region
+   * info if successful or an empty array if the table/region doesn't
+   * exist. Or an exception if something goes pear shaped.
+   */
+  private Deferred<ArrayList<KeyValue>> scanMeta(final RegionClient client, 
+                                                 final RegionInfo region, 
+                                                 final byte[] table, 
+                                                 final byte[] row, 
+                                                 final byte[] family) {
+    final Scanner scanner = newScanner(table);
+    scanner.setReversed(true);
+    scanner.setMaxNumRows(1);
+    scanner.setStartKey(row);
+    scanner.setFamily(family);
+    scanner.setRegionName(region);
+    
+    final Deferred<ArrayList<KeyValue>> deferred = 
+        new Deferred<ArrayList<KeyValue>>();
+    
+    class ErrorCB implements Callback<Object, Exception> {
+      @Override
+      public Object call(final Exception ex) throws Exception {
+        scanner.close();
+        deferred.callback(ex);
+        return null;
+      }
+      @Override
+      public String toString() {
+        return "scanMeta.ErrorCB";
+      }
+    }
+    
+    class MetaScanCB implements Callback<Void, ArrayList<ArrayList<KeyValue>>> {
+      @Override
+      public Void call(final ArrayList<ArrayList<KeyValue>> rows)
+          throws Exception {
+        final ArrayList<KeyValue> row = (rows == null || rows.isEmpty()) 
+            ? new ArrayList<KeyValue>(0) : rows.get(0);
+        scanner.close();
+        deferred.callback(row);
+        return null;
+      }
+      @Override
+      public String toString() {
+        return "scanMeta.MetaScanCB";
+      }
+    }
+    
+    HBaseRpc open_request = scanner.getOpenRequestForReverseScan(row);
+    open_request.region = region;
+    open_request.getDeferred().addCallbackDeferring(scanner.opened_scanner)
+      .addCallbacks(new MetaScanCB(), new ErrorCB());
+    client.sendRpc(open_request);
+    return deferred;
+  }
+  
   /**
    * Callback executed when a lookup in META completes
    * and user wants RegionLocation.
