@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2015  The Async HBase Authors.  All rights reserved.
+ * Copyright (C) 2015-2018  The Async HBase Authors.  All rights reserved.
  * This file is part of Async HBase.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -32,13 +32,18 @@ package org.hbase.async;
  */
 public class RpcTimedOutException extends HBaseException {
   
+  /** The RPC that failed */
+  final HBaseRpc failed_rpc;
+  
   /**
    * Constructor.
    * @param msg The message of the exception, potentially including a stack
    * trace.
+   * @param rpc The RPC that timed out.
    */
-  RpcTimedOutException(final String msg) {
+  RpcTimedOutException(final String msg, final HBaseRpc rpc) {
     super(msg);
+    failed_rpc = rpc;
   }
 	
   /**
@@ -46,12 +51,34 @@ public class RpcTimedOutException extends HBaseException {
    * @param msg The message of the exception, potentially including a stack
    * trace.
    * @param cause The exception that caused this one to be thrown.
+   * @param rpc The RPC that timed out.
    */
-  RpcTimedOutException(final String msg, final Throwable cause) {
+  RpcTimedOutException(final String msg, 
+                       final Throwable cause, 
+                       final HBaseRpc rpc) {
     super(msg, cause);
+    failed_rpc = rpc;
   }
 
+  /** @return The RPC that timed out. */
+  public HBaseRpc getFailedRpc() {
+    return failed_rpc;
+  }
+  
+  @Override
+  RpcTimedOutException make(final Object msg, final HBaseRpc rpc) {
+    if (msg == this || msg instanceof RpcTimedOutException) {
+      final RpcTimedOutException e = (RpcTimedOutException) msg;
+      if (e.getCause() != null) {
+        return new RpcTimedOutException(e.getMessage(), e.getCause(), rpc);
+      } else {
+        return new RpcTimedOutException(e.getMessage(), rpc);
+      }
+    }
+    return new RpcTimedOutException(msg.toString(), rpc);
+  }
+  
   private static final long serialVersionUID = -6245448564580938789L;
-
+  
 }
 

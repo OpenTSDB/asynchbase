@@ -55,12 +55,10 @@ public abstract class HBaseException extends RuntimeException {
    * one without having to resort to reflection, which is annoying to use.
    * Sub-classes that want to provide this internal functionality should
    * implement this method.
-   * @param arg Some arbitrary parameter to help build the new instance.
+   * @param msg Some arbitrary parameter to help build the new instance.
    * @param rpc The RPC that failed, if any.  Can be {@code null}.
    */
-  HBaseException make(final Object arg, final HBaseRpc rpc) {
-    throw new AssertionError("Must not be used.");
-  }
+  abstract HBaseException make(final Object msg, final HBaseRpc rpc);
 
   private static final long serialVersionUID = 1280638842;
 

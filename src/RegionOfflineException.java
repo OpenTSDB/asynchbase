@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2010-2012  The Async HBase Authors.  All rights reserved.
+ * Copyright (C) 2010-2018  The Async HBase Authors.  All rights reserved.
  * This file is part of Async HBase.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -52,6 +52,11 @@ public final class RegionOfflineException extends RecoverableException {
     return region;
   }
 
+  @Override
+  HBaseException make(final Object msg, final HBaseRpc rpc) {
+    return new RegionOfflineException(region);
+  }
+  
   private static final long serialVersionUID = 1280641842;
 
 }

@@ -1531,6 +1531,11 @@ public class TestRegionClientDecode extends BaseTestRegionClient {
     TestingHBaseException(final String msg) {
       super(msg);
     }
+    
+    @Override
+    TestingHBaseException make(Object msg, HBaseRpc rpc) {
+      return new TestingHBaseException(getMessage());
+    }
   }
 
   /** Creates a new mock client that isn't spied. Necessary for the replay
