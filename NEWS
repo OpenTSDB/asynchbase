@@ -1,6 +1,29 @@
 AsyncHBase - User visible and noteworthy changes.
 This project uses Semantic Versioning (see http://semver.org/).
 
+* Version 1.8.1 (2018-03-18)
+
+This is a bug fix release.
+  - Revert locking in an RPC to synchronizing on the key instead of the entire
+    object as well as setting the suspend probe flag to volatile.
+  - Fix GetRequests where the family was masked and immutable after being set.
+  - Fix setting the scanner reverse flag in the setReversed() setter. 
+    Previously when called it would only set the flag to `true`.
+  - Add RegionTooBusyException to allow for retries when newer versions of HBase
+    send this exception.
+  - Fix processing of encoded (private) RPCs and catch + log exceptions during
+    SASL negotiation.
+  - Add a configuration flag 'hbase.meta.scan' to switch meta lookups to 
+    use a reverse scan when finding tables for compatibility with HBase 2.x
+	where the old method of getting the closest row was disabled.
+  - Fix an issue with AssertionErrors being thrown when a multi-action RPC
+    had an exception of a type that didn't implement the make() method.
+  - Fix an issue with multi-actions sent to HBase 1.31 an later where the
+    request was sorted by row key so that responses no longer matched the
+	request order. Now we sort by row key as well.
+  
+Noteworthy bug Fixes:
+
 * Version 1.8.0 (2017-06-09)
 
 This is feature release with new APIs and behaviors.
