@@ -639,7 +639,7 @@ public abstract class HBaseRpc {
       
       callback(new RpcTimedOutException("RPC ID [" + rpc_id + 
           "] timed out waiting for response from HBase on region client [" + 
-          region_client + " ] for over " + timeout + "ms"));
+          region_client + " ] for over " + timeout + "ms", HBaseRpc.this));
       timeout_task = null;
       timeout_handle = null;
     }

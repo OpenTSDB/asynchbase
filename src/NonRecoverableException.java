@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2010-2012  The Async HBase Authors.  All rights reserved.
+ * Copyright (C) 2010-2018  The Async HBase Authors.  All rights reserved.
  * This file is part of Async HBase.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -51,6 +51,20 @@ public class NonRecoverableException extends HBaseException {
     super(msg, cause);
   }
 
+  @Override
+  NonRecoverableException make(final Object msg, final HBaseRpc rpc) {
+    // Don't need to keep the RPC here.
+    if (msg == this || msg instanceof NonRecoverableException) {
+      final NonRecoverableException e = (NonRecoverableException) msg;
+      if (e.getCause() != null) {
+        return new NonRecoverableException(e.getMessage(), e.getCause());
+      } else {
+        return new NonRecoverableException(e.getMessage());
+      }
+    }
+    return new NonRecoverableException(msg.toString());
+  }
+  
   private static final long serialVersionUID = 1280638547;
 
 }
