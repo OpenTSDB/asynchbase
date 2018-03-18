@@ -26,6 +26,7 @@
  */
 package org.hbase.async;
 
+import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
@@ -40,7 +41,9 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 
+import org.hbase.async.generated.ClientPB.MultiRequest;
 import org.hbase.async.generated.ClientPB.MultiResponse;
+import org.hbase.async.generated.ClientPB.RegionAction;
 import org.hbase.async.generated.ClientPB.RegionActionResult;
 import org.hbase.async.generated.ClientPB.ResultOrException;
 import org.hbase.async.generated.ClientPB.RegionActionResult.Builder;
@@ -212,6 +215,48 @@ public class TestMultiAction extends BaseTestHBaseClient {
   }
 
   // NOTE: The following are tests for HBase 0.96 and up
+  
+  @Test
+  public void serdesOrdering() throws Exception {
+    PutRequest put1 = new PutRequest(TABLE, concat(KEY, new byte[] { 2 }), 
+        FAMILY, QUALIFIER, VALUE);
+    put1.region = region;
+    PutRequest put2 = new PutRequest(TABLE, KEY, FAMILY, "myqual".getBytes(), VALUE);
+    put2.region = region;
+    PutRequest put3 = new PutRequest(TABLE, concat(KEY, new byte[] { 2 }), 
+        FAMILY, "myqual".getBytes(), VALUE);
+    put3.region = region2;
+    PutRequest put4 = new PutRequest(TABLE, KEY, FAMILY, "myqual".getBytes(), VALUE);
+    put4.region = region2;
+    MultiAction multi = new MultiAction();
+    multi.add(put1);
+    multi.add(put2);
+    multi.add(put3);
+    multi.add(put4);
+    
+    ChannelBuffer buffer = multi.serialize(RegionClient.SERVER_VERSION_095_OR_ABOVE);
+    buffer.readerIndex(4 + 19 + MultiAction.MMULTI.length);
+    HBaseRpc.readProtoBufVarint(buffer);
+    byte[] bytes = new byte[buffer.writerIndex() - buffer.readerIndex()];
+    buffer.readBytes(bytes);
+    MultiRequest parsed = MultiRequest.parseFrom(bytes);
+    assertEquals(2, parsed.getRegionActionCount());
+    
+    RegionAction actions = parsed.getRegionAction(0);
+    assertEquals(2, actions.getActionCount());
+    assertArrayEquals(region.name(), actions.getRegion().getValue().toByteArray());
+    assertArrayEquals(KEY, actions.getAction(0).getMutation().getRow().toByteArray());
+    assertArrayEquals(concat(KEY, new byte[] { 2 }), 
+        actions.getAction(1).getMutation().getRow().toByteArray());
+    
+    actions = parsed.getRegionAction(1);
+    assertEquals(2, actions.getActionCount());
+    assertArrayEquals(region2.name(), actions.getRegion().getValue().toByteArray());
+    assertArrayEquals(KEY, actions.getAction(0).getMutation().getRow().toByteArray());
+    assertArrayEquals(concat(KEY, new byte[] { 2 }), 
+        actions.getAction(1).getMutation().getRow().toByteArray());
+  }
+  
   @Test
   public void deserializePuts() throws Exception {
     final List<ResultOrException> results = new ArrayList<ResultOrException>(2);
@@ -870,7 +915,7 @@ public class TestMultiAction extends BaseTestHBaseClient {
     multi.add(put2);
     multi.add(put3);
     multi.add(put4);
-    Collections.sort(multi.batch(), MultiAction.SORT_BY_REGION);
+    Collections.sort(multi.batch(), MultiAction.SORT_BY_REGION_AND_KEY);
     
     final MultiAction.Response decoded = 
         (MultiAction.Response)multi.deserialize(
@@ -916,7 +961,7 @@ public class TestMultiAction extends BaseTestHBaseClient {
     multi.add(put2);
     multi.add(put3);
     multi.add(put4);
-    Collections.sort(multi.batch(), MultiAction.SORT_BY_REGION);
+    Collections.sort(multi.batch(), MultiAction.SORT_BY_REGION_AND_KEY);
     
     final MultiAction.Response decoded = 
         (MultiAction.Response)multi.deserialize(
