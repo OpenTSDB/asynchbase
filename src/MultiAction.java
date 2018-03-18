@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2010-2016  The Async HBase Authors.  All rights reserved.
+ * Copyright (C) 2010-2018  The Async HBase Authors.  All rights reserved.
  * This file is part of Async HBase.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -45,6 +45,11 @@ import org.hbase.async.generated.HBasePB.NameBytesPair;
  * <p>
  * This RPC is guaranteed to be sent atomically (but HBase doesn't guarantee
  * that it will apply it atomically).
+ * <p>
+ * Before serializing, the RPCs are sorted by region and (as of 1.8.1)
+ * by row key (to fix issues with 
+ * https://issues.apache.org/jira/browse/HBASE-17924) so that the 
+ * responses can be matched to the original RPC.
  */
 final class MultiAction extends HBaseRpc implements HBaseRpc.IsEdit {
 
@@ -70,7 +75,7 @@ final class MultiAction extends HBaseRpc implements HBaseRpc.IsEdit {
   private static final byte[] MULTI = { 'm', 'u', 'l', 't', 'i' };
 
   /** RPC method name for HBase 0.95 and above.  */
-  private static final byte[] MMULTI = { 'M', 'u', 'l', 't', 'i' };
+  static final byte[] MMULTI = { 'M', 'u', 'l', 't', 'i' };
 
   /** Template for NSREs.  */
   private static final NotServingRegionException NSRE =
@@ -214,7 +219,7 @@ final class MultiAction extends HBaseRpc implements HBaseRpc.IsEdit {
     }
 
     // we create a new RegionAction for each region.
-    Collections.sort(batch, SORT_BY_REGION);
+    Collections.sort(batch, SORT_BY_REGION_AND_KEY);
     final MultiRequest.Builder req = MultiRequest.newBuilder();
     RegionAction.Builder actions = null;
     byte[] prev_region = HBaseClient.EMPTY_ARRAY;
@@ -508,24 +513,30 @@ final class MultiAction extends HBaseRpc implements HBaseRpc.IsEdit {
   }
 
   /**
-   * Sorts {@link BatchableRpc}s appropriately for HBase 0.95+ multi-action.
+   * Sorts {@link BatchableRpc}s appropriately for HBase 0.95+ multi-action
+   * as well as 1.3x where the response is also sorted by key.
    */
-  static final RegionComparator SORT_BY_REGION = new RegionComparator();
+  static final RegionAndKeyComparator SORT_BY_REGION_AND_KEY = 
+      new RegionAndKeyComparator();
 
   /**
    * Sorts {@link BatchableRpc}s by region.
    * Used with HBase 0.95+ only.
    */
-  private static final class RegionComparator
+  private static final class RegionAndKeyComparator
     implements Comparator<BatchableRpc> {
 
-    private RegionComparator() {  // Can't instantiate outside of this class.
+    private RegionAndKeyComparator() {  // Can't instantiate outside of this class.
     }
 
     @Override
     /** Compares two RPCs.  */
     public int compare(final BatchableRpc a, final BatchableRpc b) {
-      return Bytes.memcmp(a.getRegion().name(), b.getRegion().name());
+      int region_cmp = Bytes.memcmp(a.getRegion().name(), b.getRegion().name());
+      if (region_cmp != 0) {
+        return region_cmp;
+      }
+      return Bytes.memcmp(a.key, b.key);
     }
 
   }
