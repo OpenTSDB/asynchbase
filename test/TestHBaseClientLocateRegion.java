@@ -1,3 +1,29 @@
+/*
+ * Copyright (C) 2014-2018 The Async HBase Authors.  All rights reserved.
+ * This file is part of Async HBase.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions are met:
+ *   - Redistributions of source code must retain the above copyright notice,
+ *     this list of conditions and the following disclaimer.
+ *   - Redistributions in binary form must reproduce the above copyright notice,
+ *     this list of conditions and the following disclaimer in the documentation
+ *     and/or other materials provided with the distribution.
+ *   - Neither the name of the StumbleUpon nor the names of its contributors
+ *     may be used to endorse or promote products derived from this software
+ *     without specific prior written permission.
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+ * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+ * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ * ARE DISCLAIMED.  IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
+ * LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+ * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+ * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+ * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+ * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+ * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+ * POSSIBILITY OF SUCH DAMAGE.
+ */
 package org.hbase.async;
 
 import static org.junit.Assert.assertArrayEquals;
@@ -8,6 +34,9 @@ import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 import static org.mockito.Matchers.any;
 import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.doReturn;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.util.ArrayList;
@@ -34,7 +63,7 @@ import com.stumbleupon.async.Deferred;
              "ch.qos.*", "org.slf4j.*",
              "com.sum.*", "org.xml.*"})
 @PrepareForTest({ HBaseClient.class, RegionClient.class, RegionInfo.class, 
-HBaseRpc.class, RegionClientStats.class })
+  HBaseRpc.class, RegionClientStats.class, Scanner.class, HBaseRpc.class })
 public class TestHBaseClientLocateRegion extends BaseTestHBaseClient {
   private Deferred<Object> root_deferred;
   private GetRequest get;
@@ -47,7 +76,14 @@ public class TestHBaseClientLocateRegion extends BaseTestHBaseClient {
     Whitebox.setInternalState(client, "has_root", true);
   }
   
-  //-------- ROOT AND DEAD CLIENT ----------
+  //-------- ROOT AND DEAD ROOT CLIENT ----------
+  @Test
+  public void locateRegionRoot98HadRootLookupInZK() throws Exception {
+    final Object obj = Whitebox.invokeMethod(client, "locateRegion", 
+        get, HBaseClient.HBASE98_ROOT, EMPTY_ARRAY);
+    assertTrue(root_deferred == obj);
+    assertCounters(0, 0, 0);
+  }
   
   @Test
   public void locateRegionRootHadRootLookupInZK() throws Exception {
@@ -67,7 +103,7 @@ public class TestHBaseClientLocateRegion extends BaseTestHBaseClient {
     assertCounters(0, 0, 0);
   }
   
-  //--------- META AND DEAD CLIENT ------------
+  //--------- META AND DEAD ROOT CLIENT ------------
   @Test
   public void locateRegionMetaHadRootLookupInZK() throws Exception {
     final Object obj = Whitebox.invokeMethod(client, "locateRegion", 
@@ -104,6 +140,17 @@ public class TestHBaseClientLocateRegion extends BaseTestHBaseClient {
     assertCounters(0, 0, 0);
   }
   
+  @Test
+  public void locateRegionMeta98SplitMetaLookupInZK() throws Exception {
+    client.has_root = true;
+    client.split_meta = true;
+    
+    final Object obj = Whitebox.invokeMethod(client, "locateRegion", 
+        get, HBaseClient.HBASE96_META, EMPTY_ARRAY);
+    assertTrue(root_deferred == obj);
+    assertCounters(0, 0, 0);
+  }
+  
   // --------------- ROOT RECURSION --------------
   // These make sure we don't check the root region for the root region
   // because that would be plain silly.
@@ -122,26 +169,89 @@ public class TestHBaseClientLocateRegion extends BaseTestHBaseClient {
   //--------------- META LOOKUP IN ROOT --------------
   
   @Test
-  public void locateRegionMetaLiveClient() throws Exception {
+  public void locateRegionMetaLiveRootClient() throws Exception {
     clearCaches();
+    final RegionInfo ri = new RegionInfo(HBaseClient.ROOT, 
+        HBaseClient.ROOT_REGION, EMPTY_ARRAY);
+    final byte[] meta_key = HBaseClient.createRegionSearchKey(
+        HBaseClient.META, EMPTY_ARRAY, false);
+    final byte[] key = HBaseClient.createRegionSearchKey(HBaseClient.META, meta_key);
     Whitebox.setInternalState(client, "rootregion", rootclient);
     when(rootclient.isAlive()).thenReturn(true);
-    
     when(rootclient.getClosestRowBefore(any(RegionInfo.class), any(byte[].class), 
         any(byte[].class), any(byte[].class)))
       .thenReturn(Deferred.<ArrayList<KeyValue>>fromResult(metaRow()));
     
     final Deferred<Object> obj = Whitebox.invokeMethod(client, "locateRegion", 
         get, HBaseClient.META, EMPTY_ARRAY);
+      
+    verify(rootclient, times(1)).getClosestRowBefore(ri, 
+        HBaseClient.ROOT, key, HBaseClient.INFO);
     assertTrue(root_deferred != obj);
-    final RegionClient rc = (RegionClient)obj.joinUninterruptibly();
+    final RegionClient rc = (RegionClient) obj.joinUninterruptibly();
     assertCounters(1, 0, 0);
     assertEquals(1, client2regions.size());
     assertNotNull(client2regions.get(rc));
   }
   
   @Test
-  public void locateRegionMetaLiveClientTableNotFound() throws Exception {
+  public void locateRegionMetaSplitMetaLiveRootClient() throws Exception {
+    clearCaches();
+    final RegionInfo ri = new RegionInfo(HBaseClient.HBASE98_ROOT, 
+        HBaseClient.HBASE98_ROOT_REGION, EMPTY_ARRAY);
+    final byte[] meta_key = HBaseClient.createRegionSearchKey(
+        HBaseClient.HBASE96_META, EMPTY_ARRAY, false);
+    final byte[] key = HBaseClient.createRegionSearchKey(HBaseClient.HBASE96_META, meta_key);
+    client.split_meta = true;
+    Whitebox.setInternalState(client, "rootregion", rootclient);
+    when(rootclient.isAlive()).thenReturn(true);
+    when(rootclient.getClosestRowBefore(any(RegionInfo.class), any(byte[].class), 
+        any(byte[].class), any(byte[].class)))
+      .thenReturn(Deferred.<ArrayList<KeyValue>>fromResult(metaRow()));
+    
+    final Deferred<Object> obj = Whitebox.invokeMethod(client, "locateRegion", 
+        get, HBaseClient.HBASE96_META, EMPTY_ARRAY);
+    
+    verify(rootclient, times(1)).getClosestRowBefore(ri, 
+        HBaseClient.HBASE98_ROOT, key, HBaseClient.INFO);
+    assertTrue(root_deferred != obj);
+    final RegionClient rc = (RegionClient) obj.joinUninterruptibly();
+    assertCounters(1, 0, 0);
+    assertEquals(1, client2regions.size());
+    assertNotNull(client2regions.get(rc));
+  }
+  
+  @Test
+  public void locateRegionMetaSplitScanMetaLiveRootClient() throws Exception {
+    clearCaches();
+    final RegionInfo ri = new RegionInfo(HBaseClient.HBASE98_ROOT, 
+        HBaseClient.HBASE98_ROOT_REGION, EMPTY_ARRAY);
+    final byte[] meta_key = HBaseClient.createRegionSearchKey(
+        HBaseClient.HBASE96_META, EMPTY_ARRAY, false);
+    final byte[] key = HBaseClient.createRegionSearchKey(
+        HBaseClient.HBASE96_META, meta_key);
+    client.split_meta = true;
+    Whitebox.setInternalState(client, "rootregion", rootclient);
+    Whitebox.setInternalState(client, "scan_meta", true);
+    when(rootclient.isAlive()).thenReturn(true);
+    doReturn(Deferred.<ArrayList<KeyValue>>fromResult(metaRow()))
+      .when(client).scanMeta(any(RegionClient.class), any(RegionInfo.class), any(byte[].class), 
+        any(byte[].class), any(byte[].class));
+    
+    final Deferred<Object> obj = Whitebox.invokeMethod(client, "locateRegion", 
+        get, HBaseClient.HBASE96_META, EMPTY_ARRAY);
+    
+    verify(client, times(1)).scanMeta(rootclient, ri, 
+        HBaseClient.HBASE98_ROOT, key, HBaseClient.INFO);
+    assertTrue(root_deferred != obj);
+    final RegionClient rc = (RegionClient) obj.joinUninterruptibly();
+    assertCounters(1, 0, 0);
+    assertEquals(1, client2regions.size());
+    assertNotNull(client2regions.get(rc));
+  }
+  
+  @Test
+  public void locateRegionMetaLiveRootClientTableNotFound() throws Exception {
     Whitebox.setInternalState(client, "rootregion", rootclient);
     when(rootclient.isAlive()).thenReturn(true);
     
@@ -166,7 +276,7 @@ public class TestHBaseClientLocateRegion extends BaseTestHBaseClient {
   }
   
   @Test
-  public void locateRegionMetaLiveClientRecoverableException() throws Exception {
+  public void locateRegionMetaLiveRootClientRecoverableException() throws Exception {
     Whitebox.setInternalState(client, "rootregion", rootclient);
     when(rootclient.isAlive()).thenReturn(true);
     
@@ -192,7 +302,7 @@ public class TestHBaseClientLocateRegion extends BaseTestHBaseClient {
   // This used to be a tight loop that would continue indefinitely since we 
   // didn't track how many times we looped.
   @Test
-  public void locateRegionMetaLiveClientTooManyAttempts() throws Exception {
+  public void locateRegionMetaLiveRootClientTooManyAttempts() throws Exception {
     Whitebox.setInternalState(client, "rootregion", rootclient);
     when(rootclient.isAlive()).thenReturn(true);
     
@@ -224,7 +334,7 @@ public class TestHBaseClientLocateRegion extends BaseTestHBaseClient {
   }
   
   @Test (expected = RuntimeException.class)
-  public void locateRegionMetaLiveClientNonRecoverableException() throws Exception {
+  public void locateRegionMetaLiveRootClientNonRecoverableException() throws Exception {
     Whitebox.setInternalState(client, "rootregion", rootclient);
     when(rootclient.isAlive()).thenReturn(true);
     
@@ -242,7 +352,7 @@ public class TestHBaseClientLocateRegion extends BaseTestHBaseClient {
   }
   
   @Test
-  public void locateRegionMetaLiveClientNSREdDueToSplit() throws Exception {
+  public void locateRegionMetaLiveRootClientNSREdDueToSplit() throws Exception {
     Whitebox.setInternalState(client, "rootregion", rootclient);
     when(rootclient.isAlive()).thenReturn(true);
 
@@ -264,7 +374,7 @@ public class TestHBaseClientLocateRegion extends BaseTestHBaseClient {
   }
   
   @Test
-  public void locateRegionMetaLiveClientOffline() throws Exception {
+  public void locateRegionMetaLiveRootClientOffline() throws Exception {
     Whitebox.setInternalState(client, "rootregion", rootclient);
     when(rootclient.isAlive()).thenReturn(true);
 
@@ -287,7 +397,7 @@ public class TestHBaseClientLocateRegion extends BaseTestHBaseClient {
   }
   
   @Test (expected = BrokenMetaException.class)
-  public void locateRegionMetaLiveClientBrokenMeta() throws Exception {
+  public void locateRegionMetaLiveRootClientBrokenMeta() throws Exception {
     Whitebox.setInternalState(client, "rootregion", rootclient);
     when(rootclient.isAlive()).thenReturn(true);
 

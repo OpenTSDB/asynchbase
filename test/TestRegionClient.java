@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2014 The Async HBase Authors.  All rights reserved.
+ * Copyright (C) 2014-2018 The Async HBase Authors.  All rights reserved.
  * This file is part of Async HBase.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -44,10 +44,12 @@ import org.mockito.Mockito;
 
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.powermock.api.mockito.PowerMockito.mock;
 import static org.powermock.api.mockito.PowerMockito.verifyPrivate;
 import static org.mockito.Matchers.any;
+import static org.mockito.Matchers.eq;
 
 import org.powermock.api.mockito.PowerMockito;
 import org.powermock.core.classloader.annotations.PowerMockIgnore;
@@ -231,6 +233,25 @@ public class TestRegionClient extends BaseTestRegionClient {
   }
   
   @Test
+  public void channelConnected95() throws Exception {
+    RegionClient rclient = mock(RegionClient.class, Mockito.RETURNS_DEEP_STUBS);
+    ChannelBuffer header = mock(ChannelBuffer.class);
+    
+    hbase_client.has_root = false;
+    when(cse.getChannel()).thenReturn(chan);
+    PowerMockito.when(rclient, "header095").thenReturn(header);
+    PowerMockito.field(RegionClient.class, "hbase_client")
+      .set(rclient, hbase_client);
+    PowerMockito.when(rclient, "channelConnected", ctx, cse).thenCallRealMethod();
+    
+    rclient.channelConnected(ctx, cse);
+    
+    verifyPrivate(rclient).invoke("header095");
+    verifyPrivate(rclient).invoke("becomeReady", chan, 
+        RegionClient.SERVER_VERSION_095_OR_ABOVE);
+  }
+  
+  @Test
   public void channelConnectedCDH3b3() throws Exception {
     RegionClient rclient = mock(RegionClient.class, Mockito.RETURNS_DEEP_STUBS);
     ChannelBuffer header = mock(ChannelBuffer.class);
@@ -273,6 +294,80 @@ public class TestRegionClient extends BaseTestRegionClient {
     
     verifyPrivate(rclient).invoke("header090");
     verifyPrivate(rclient).invoke("helloRpc", chan, header);
+  }
+  
+  @Test
+  public void channelConnected94Secure() throws Exception {
+    RegionClient rclient = mock(RegionClient.class, Mockito.RETURNS_DEEP_STUBS);
+    Config config = new Config();
+    config.overrideConfig("hbase.security.auth.enable", "true");
+    config.overrideConfig("hbase.security.auth.94", "true");
+    when(hbase_client.getConfig()).thenReturn(config);
+    SecureRpcHelper94 helper = mock(SecureRpcHelper94.class);
+    PowerMockito.whenNew(SecureRpcHelper94.class).withAnyArguments()
+      .thenReturn(helper);
+    
+    hbase_client.has_root = false;
+    when(cse.getChannel()).thenReturn(chan);
+    PowerMockito.field(RegionClient.class, "hbase_client")
+      .set(rclient, hbase_client);
+    PowerMockito.when(rclient, "channelConnected", ctx, cse).thenCallRealMethod();
+    
+    rclient.channelConnected(ctx, cse);
+    
+    verify(helper, times(1)).sendHello(chan);
+    verifyPrivate(rclient, never()).invoke("helloRpc", eq(chan), any(byte[].class));
+    verifyPrivate(rclient, never()).invoke("becomeReady", chan, 
+        RegionClient.SERVER_VERSION_095_OR_ABOVE);
+  }
+  
+  @Test
+  public void channelConnected96Secure() throws Exception {
+    RegionClient rclient = mock(RegionClient.class, Mockito.RETURNS_DEEP_STUBS);
+    Config config = new Config();
+    config.overrideConfig("hbase.security.auth.enable", "true");
+    when(hbase_client.getConfig()).thenReturn(config);
+    SecureRpcHelper96 helper = mock(SecureRpcHelper96.class);
+    PowerMockito.whenNew(SecureRpcHelper96.class).withAnyArguments()
+      .thenReturn(helper);
+    
+    hbase_client.has_root = false;
+    when(cse.getChannel()).thenReturn(chan);
+    PowerMockito.field(RegionClient.class, "hbase_client")
+      .set(rclient, hbase_client);
+    PowerMockito.when(rclient, "channelConnected", ctx, cse).thenCallRealMethod();
+    
+    rclient.channelConnected(ctx, cse);
+    
+    verify(helper, times(1)).sendHello(chan);
+    verifyPrivate(rclient, never()).invoke("helloRpc", eq(chan), any(byte[].class));
+    verifyPrivate(rclient, never()).invoke("becomeReady", chan, 
+        RegionClient.SERVER_VERSION_095_OR_ABOVE);
+  }
+  
+  @Test
+  public void channelConnected96SplitMetaSecure() throws Exception {
+    RegionClient rclient = mock(RegionClient.class, Mockito.RETURNS_DEEP_STUBS);
+    Config config = new Config();
+    config.overrideConfig("hbase.security.auth.enable", "true");
+    when(hbase_client.getConfig()).thenReturn(config);
+    SecureRpcHelper96 helper = mock(SecureRpcHelper96.class);
+    PowerMockito.whenNew(SecureRpcHelper96.class).withAnyArguments()
+      .thenReturn(helper);
+    
+    hbase_client.has_root = true;
+    hbase_client.split_meta = true;
+    when(cse.getChannel()).thenReturn(chan);
+    PowerMockito.field(RegionClient.class, "hbase_client")
+      .set(rclient, hbase_client);
+    PowerMockito.when(rclient, "channelConnected", ctx, cse).thenCallRealMethod();
+    
+    rclient.channelConnected(ctx, cse);
+    
+    verify(helper, times(1)).sendHello(chan);
+    verifyPrivate(rclient, never()).invoke("helloRpc", eq(chan), any(byte[].class));
+    verifyPrivate(rclient, never()).invoke("becomeReady", chan, 
+        RegionClient.SERVER_VERSION_095_OR_ABOVE);
   }
   
   @Test (expected=NonRecoverableException.class)

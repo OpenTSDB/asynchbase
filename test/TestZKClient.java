@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2014 The Async HBase Authors.  All rights reserved.
+ * Copyright (C) 2014-2018 The Async HBase Authors.  All rights reserved.
  * This file is part of Async HBase.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -1033,7 +1033,31 @@ public class TestZKClient {
     assertNotNull(rc);
     assertEquals("127.0.0.1:50511", rc.getRemoteAddress());
     verifyPrivate(client).invoke("newClient", "127.0.0.1", 50511);
-    assertFalse((Boolean)Whitebox.getInternalState(client, "has_root"));
+    assertFalse(client.has_root);
+  }
+  
+
+  @Test
+  public void handleMetaZnodeSplitMeta() throws Exception {
+    client.split_meta = true;
+    final ZKCallback cb = zk_client.new ZKCallback();
+
+    final ServerName server = ServerName.newBuilder()
+        .setHostName("127.0.0.1").setPort(50511).build();
+    final MetaRegionServer meta_server = MetaRegionServer.newBuilder()
+          .setServer(server).build();
+    final byte[] data = new byte[meta_server.getSerializedSize() + 10];
+    data[0] = ZKCallback.MAGIC;
+    Bytes.setInt(data, 1, 1);
+    Bytes.setInt(data, HBaseClient.PBUF_MAGIC, 6);
+    System.arraycopy(meta_server.toByteArray(), 0, data, 10, 
+        meta_server.getSerializedSize());
+    
+    final RegionClient rc = cb.handleMetaZnode(data);
+    assertNotNull(rc);
+    assertEquals("127.0.0.1:50511", rc.getRemoteAddress());
+    verifyPrivate(client).invoke("newClient", "127.0.0.1", 50511);
+    assertTrue(client.has_root);
   }
   
   @Test
@@ -1060,6 +1084,7 @@ public class TestZKClient {
     assertNotNull(rc);
     assertEquals("192.168.1.1:50511", rc.getRemoteAddress());
     verifyPrivate(client).invoke("newClient", "192.168.1.1", 50511);
+    assertFalse(client.has_root);
   }
   
   @Test
