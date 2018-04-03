@@ -28,6 +28,7 @@ package org.hbase.async;
 
 import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
@@ -35,6 +36,7 @@ import static org.junit.Assert.fail;
 import static org.mockito.Matchers.any;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doReturn;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -55,6 +57,7 @@ import org.powermock.reflect.Whitebox;
 
 import com.google.common.collect.Lists;
 import com.stumbleupon.async.Deferred;
+import com.stumbleupon.async.DeferredGroupException;
 
 @RunWith(PowerMockRunner.class)
 //"Classloader hell"...  It's real.  Tell PowerMock to ignore these classes
@@ -63,7 +66,8 @@ import com.stumbleupon.async.Deferred;
              "ch.qos.*", "org.slf4j.*",
              "com.sum.*", "org.xml.*"})
 @PrepareForTest({ HBaseClient.class, RegionClient.class, RegionInfo.class, 
-  HBaseRpc.class, RegionClientStats.class, Scanner.class, HBaseRpc.class })
+  HBaseRpc.class, RegionClientStats.class, Scanner.class, HBaseRpc.class,
+  DeferredGroupException.class })
 public class TestHBaseClientLocateRegion extends BaseTestHBaseClient {
   private Deferred<Object> root_deferred;
   private GetRequest get;
@@ -500,6 +504,127 @@ public class TestHBaseClientLocateRegion extends BaseTestHBaseClient {
     assertCounters(0, 1, 0);
     assertEquals(1, client2regions.size());
     assertNotNull(client2regions.get(rc));
+  }
+  
+  @Test
+  public void locateRegionInMetaSwitchToScan() throws Exception {
+    clearCaches();
+    
+    Whitebox.setInternalState(client, "has_root", false);
+    Whitebox.setInternalState(client, "scan_meta", false);
+    
+    when(rootclient.isAlive()).thenReturn(true);
+    when(rootclient.acquireMetaLookupPermit()).thenReturn(true);
+    doAnswer(new Answer<Deferred<ArrayList<KeyValue>>>() {
+      @Override
+      public Deferred<ArrayList<KeyValue>> answer(InvocationOnMock invocation)
+          throws Throwable {
+        final Exception e = new UnknownProtocolException("", null);
+        return Deferred.fromError(e);
+      }
+    }).when(rootclient).getClosestRowBefore(any(RegionInfo.class), any(byte[].class),
+        any(byte[].class), any(byte[].class));
+    doAnswer(new Answer<Void>() {
+      @Override
+      public Void answer(InvocationOnMock invocation) throws Throwable {
+        final ArrayList<ArrayList<KeyValue>> rows = Lists.newArrayList();
+        rows.add(metaRow());
+        ((HBaseRpc) invocation.getArguments()[0]).getDeferred()
+          .callback(new Response(0, rows, false, true));
+        return null;
+      }
+    }).when(rootclient).sendRpc(any(OpenScannerRequest.class));
+
+    final Deferred<Object> obj = Whitebox.invokeMethod(client, "locateRegion", 
+        get, TABLE, KEY);
+    assertTrue(root_deferred != obj);
+    final RegionClient rc = (RegionClient) obj.join(1);
+    assertCounters(0, 2, 0);
+    assertEquals(1, client2regions.size());
+    assertNotNull(client2regions.get(rc));
+    assertTrue((boolean) (Boolean) Whitebox.getInternalState(client, "scan_meta"));
+  }
+  
+  @Test
+  public void locateRegionInMetaSwitchToScanDGE() throws Exception {
+    clearCaches();
+    
+    Whitebox.setInternalState(client, "has_root", false);
+    Whitebox.setInternalState(client, "scan_meta", false);
+    
+    when(rootclient.isAlive()).thenReturn(true);
+    when(rootclient.acquireMetaLookupPermit()).thenReturn(true);
+    doAnswer(new Answer<Deferred<ArrayList<KeyValue>>>() {
+      @Override
+      public Deferred<ArrayList<KeyValue>> answer(InvocationOnMock invocation)
+          throws Throwable {
+        final Exception e = new UnknownProtocolException("", null);
+        final DeferredGroupException dge = mock(DeferredGroupException.class);
+        when(dge.getCause()).thenReturn(e);
+        return Deferred.fromError(dge);
+      }
+    }).when(rootclient).getClosestRowBefore(any(RegionInfo.class), any(byte[].class),
+        any(byte[].class), any(byte[].class));
+    doAnswer(new Answer<Void>() {
+      @Override
+      public Void answer(InvocationOnMock invocation) throws Throwable {
+        final ArrayList<ArrayList<KeyValue>> rows = Lists.newArrayList();
+        rows.add(metaRow());
+        ((HBaseRpc) invocation.getArguments()[0]).getDeferred()
+          .callback(new Response(0, rows, false, true));
+        return null;
+      }
+    }).when(rootclient).sendRpc(any(OpenScannerRequest.class));
+
+    final Deferred<Object> obj = Whitebox.invokeMethod(client, "locateRegion", 
+        get, TABLE, KEY);
+    assertTrue(root_deferred != obj);
+    final RegionClient rc = (RegionClient) obj.join(1);
+    assertCounters(0, 2, 0);
+    assertEquals(1, client2regions.size());
+    assertNotNull(client2regions.get(rc));
+    assertTrue((boolean) (Boolean) Whitebox.getInternalState(client, "scan_meta"));
+  }
+  
+  @Test
+  public void locateRegionInMetaSwitchToScanDiffError() throws Exception {
+    clearCaches();
+    
+    Whitebox.setInternalState(client, "has_root", false);
+    Whitebox.setInternalState(client, "scan_meta", false);
+    
+    when(rootclient.isAlive()).thenReturn(true);
+    when(rootclient.acquireMetaLookupPermit()).thenReturn(true);
+    doAnswer(new Answer<Deferred<ArrayList<KeyValue>>>() {
+      @Override
+      public Deferred<ArrayList<KeyValue>> answer(InvocationOnMock invocation)
+          throws Throwable {
+        final Exception e = new TableNotFoundException(HBaseClient.ROOT);
+        return Deferred.fromError(e);
+      }
+    }).when(rootclient).getClosestRowBefore(any(RegionInfo.class), any(byte[].class),
+        any(byte[].class), any(byte[].class));
+    doAnswer(new Answer<Void>() {
+      @Override
+      public Void answer(InvocationOnMock invocation) throws Throwable {
+        final ArrayList<ArrayList<KeyValue>> rows = Lists.newArrayList();
+        rows.add(metaRow());
+        ((HBaseRpc) invocation.getArguments()[0]).getDeferred()
+          .callback(new Response(0, rows, false, true));
+        return null;
+      }
+    }).when(rootclient).sendRpc(any(OpenScannerRequest.class));
+
+    final Deferred<Object> obj = Whitebox.invokeMethod(client, "locateRegion", 
+        get, TABLE, KEY);
+    assertTrue(root_deferred != obj);
+    try {
+      final RegionClient rc = (RegionClient) obj.join(1);
+      fail("Expected TableNotFoundException");
+    } catch (TableNotFoundException e) { }
+    assertCounters(0, 1, 0);
+    assertEquals(0, client2regions.size());
+    assertFalse((boolean) (Boolean) Whitebox.getInternalState(client, "scan_meta"));
   }
   
   @Test
