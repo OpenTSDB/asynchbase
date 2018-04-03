@@ -1,3 +1,29 @@
+/*
+ * Copyright (C) 2015-2018  The Async HBase Authors.  All rights reserved.
+ * This file is part of Async HBase.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions are met:
+ *   - Redistributions of source code must retain the above copyright notice,
+ *     this list of conditions and the following disclaimer.
+ *   - Redistributions in binary form must reproduce the above copyright notice,
+ *     this list of conditions and the following disclaimer in the documentation
+ *     and/or other materials provided with the distribution.
+ *   - Neither the name of the StumbleUpon nor the names of its contributors
+ *     may be used to endorse or promote products derived from this software
+ *     without specific prior written permission.
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+ * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+ * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ * ARE DISCLAIMED.  IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
+ * LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+ * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+ * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+ * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+ * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+ * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+ * POSSIBILITY OF SUCH DAMAGE.
+ */
 package org.hbase.async;
 
 import static org.junit.Assert.assertArrayEquals;
@@ -5,10 +31,12 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
 import static org.mockito.Matchers.any;
 import static org.mockito.Matchers.anyBoolean;
 import static org.mockito.Matchers.anyString;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -19,6 +47,7 @@ import java.net.UnknownHostException;
 import java.util.ArrayList;
 import java.util.Iterator;
 
+import org.jboss.netty.channel.socket.ClientSocketChannelFactory;
 import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
@@ -43,8 +72,57 @@ import com.stumbleupon.async.Deferred;
 public class TestHBaseClient extends BaseTestHBaseClient {
 
   @Before
-  public void before2() {
-    Whitebox.setInternalState(client, "has_root", false);
+  public void beforeLocal() {
+    client.has_root = false;
+  }
+  
+  @Test
+  public void ctorWithConfigDefaults() throws Exception {
+    ClientSocketChannelFactory socket_factory = 
+        mock(ClientSocketChannelFactory.class);
+    
+    // TODO - more defaults
+    Config config = new Config();
+    HBaseClient client = new HBaseClient(config, socket_factory);
+    assertSame(socket_factory, Whitebox.getInternalState(client, "channel_factory"));
+    assertSame(config, client.getConfig());
+    assertEquals(0, (int) (Integer) Whitebox.getInternalState(client, "rpc_timeout"));
+    assertEquals(1000, (short) (Short) Whitebox.getInternalState(client, "flush_interval"));
+    assertEquals(65535, (int) (Integer) Whitebox.getInternalState(client, "increment_buffer_size"));
+    assertEquals(1000, (int) (Integer) Whitebox.getInternalState(client, "nsre_low_watermark"));
+    assertEquals(10000, (int) (Integer) Whitebox.getInternalState(client, "nsre_high_watermark"));
+    assertFalse((boolean) (Boolean) Whitebox.getInternalState(client, "increment_buffer_durable"));
+    assertFalse((boolean) (Boolean) Whitebox.getInternalState(client, "scan_meta"));
+    assertFalse(client.split_meta);
+  }
+  
+  @Test
+  public void ctorWithConfigOverrides() throws Exception {
+    ClientSocketChannelFactory socket_factory = 
+        mock(ClientSocketChannelFactory.class);
+    
+    // TODO - more defaults
+    Config config = new Config();
+    config.overrideConfig("hbase.rpc.timeout", "1024");
+    config.overrideConfig("hbase.rpcs.buffered_flush_interval", "16");
+    config.overrideConfig("hbase.increments.buffer_size", "128");
+    config.overrideConfig("hbase.nsre.low_watermark", "5");
+    config.overrideConfig("hbase.nsre.high_watermark", "10");
+    config.overrideConfig("hbase.increments.durable", "true");
+    config.overrideConfig("hbase.meta.scan", "true");
+    config.overrideConfig("hbase.meta.split", "true");
+    
+    HBaseClient client = new HBaseClient(config, socket_factory);
+    assertSame(socket_factory, Whitebox.getInternalState(client, "channel_factory"));
+    assertSame(config, client.getConfig());
+    assertEquals(1024, (int) (Integer) Whitebox.getInternalState(client, "rpc_timeout"));
+    assertEquals(16, (short) (Short) Whitebox.getInternalState(client, "flush_interval"));
+    assertEquals(128, (int) (Integer) Whitebox.getInternalState(client, "increment_buffer_size"));
+    assertEquals(5, (int) (Integer) Whitebox.getInternalState(client, "nsre_low_watermark"));
+    assertEquals(10, (int) (Integer) Whitebox.getInternalState(client, "nsre_high_watermark"));
+    assertTrue((boolean) (Boolean) Whitebox.getInternalState(client, "increment_buffer_durable"));
+    assertTrue((boolean) (Boolean) Whitebox.getInternalState(client, "scan_meta"));
+    assertTrue(client.split_meta);
   }
   
   @Test

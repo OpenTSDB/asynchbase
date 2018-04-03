@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2010-2012  The Async HBase Authors.  All rights reserved.
+ * Copyright (C) 2010-2018  The Async HBase Authors.  All rights reserved.
  * This file is part of Async HBase.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -1106,7 +1106,7 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
       LOG.info("Initialized security helper: " + secure_rpc_helper + 
           " for region client: " + this);
     } else {
-      if (!hbase_client.has_root) {
+      if (!hbase_client.has_root || hbase_client.split_meta) {
         if (hbase_client.getConfig().getBoolean("hbase.security.auth.enable")) {
           secure_rpc_helper = new SecureRpcHelper96(hbase_client, this, 
               chan.getRemoteAddress());
