@@ -115,6 +115,8 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
                                new UnknownRowLockException(null, null));
     REMOTE_EXCEPTION_TYPES.put(VersionMismatchException.REMOTE_CLASS,
                                new VersionMismatchException(null, null));
+    REMOTE_EXCEPTION_TYPES.put(UnknownProtocolException.REMOTE_CLASS,
+                               new UnknownProtocolException(null, null));
   }
 
   /** We don't know the RPC protocol version of the server yet.  */
