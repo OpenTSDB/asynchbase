@@ -31,6 +31,8 @@ import com.google.common.cache.LoadingCache;
 import com.google.protobuf.InvalidProtocolBufferException;
 import com.stumbleupon.async.Callback;
 import com.stumbleupon.async.Deferred;
+import com.stumbleupon.async.DeferredGroupException;
+
 import org.apache.zookeeper.AsyncCallback;
 import org.apache.zookeeper.KeeperException.Code;
 import org.apache.zookeeper.WatchedEvent;
@@ -423,7 +425,7 @@ public final class HBaseClient {
   private final int rpc_timeout;
 
   /** Whether or not we have to scan meta instead of making getClosestBeforeRow calls. */
-  private final boolean scan_meta;
+  private volatile boolean scan_meta;
   
   /** Whether or not to split meta is in force. */
   protected boolean split_meta;
@@ -2774,13 +2776,40 @@ public final class HBaseClient {
         }
         Deferred<Object> d = null;
         try {
+          /**
+           * Class used to determine if we need to switch to scans for HBase 2.0
+           */
+          class ErrorCB implements Callback<Deferred<Object>, Exception> {
+            @Override
+            public Deferred<Object> call(final Exception ex) throws Exception {
+              Throwable cause = ex;
+              if (ex instanceof DeferredGroupException) {
+                cause = ((DeferredGroupException) ex).getCause();
+              } 
+              if (cause instanceof UnknownProtocolException) {
+                // we may be using 2.0 so we need to try scanning meta
+                // instead of calling getClosestRowBefore
+                LOG.info("HBase may be running version 2.0 or newer. "
+                    + "Trying to search meta via scan instead of gets.");
+                scan_meta = true; // volatile flag
+                return locateRegion(request, 
+                                    table, 
+                                    key, 
+                                    closest_before, 
+                                    return_location);
+              }
+              throw ex;
+            }
+          }
+          
           if (return_location) {
             if (scan_meta) {
               d = scanMeta(client, meta_region, meta_name, meta_key, INFO)
                   .addCallback(meta_lookup_done_return_location);
             } else {
               d = client.getClosestRowBefore(meta_region, meta_name, meta_key, INFO)
-                  .addCallback(meta_lookup_done_return_location);
+                  .addCallback(meta_lookup_done_return_location)
+                  .addErrback(new ErrorCB());
             }
           } else {
             if (scan_meta) {
@@ -2788,7 +2817,8 @@ public final class HBaseClient {
                   .addCallback(meta_lookup_done);
             } else {
               d = client.getClosestRowBefore(meta_region, meta_name, meta_key, INFO)
-                  .addCallback(meta_lookup_done);
+                  .addCallback(meta_lookup_done)
+                  .addErrback(new ErrorCB());
             }
           }
         } catch (RuntimeException e) {
@@ -3664,7 +3694,7 @@ public final class HBaseClient {
       : 1000 + (1 << probe.attempt);  // 1016, 1032, 1064, 1128, 1256, 1512, ..
     newTimeout(new NSRETimer(), wait_ms);
   }
-
+  
   /**
    * Some arbitrary junk that is unlikely to appear in a real row key.
    * @see probeKey
