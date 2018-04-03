@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2015  The Async HBase Authors.  All rights reserved.
+ * Copyright (C) 2015-2018  The Async HBase Authors.  All rights reserved.
  * This file is part of Async HBase.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -127,14 +127,14 @@ public abstract class SecureRpcHelper {
    */
   private void initSecureClientProvider(final HBaseClient hbase_client) {
     final String mechanism = config.hasProperty(SECURITY_AUTHENTICATION_KEY) ?
-        config.getString(SECURITY_AUTHENTICATION_KEY) : "simple";
+        config.getString(SECURITY_AUTHENTICATION_KEY).trim() : "simple";
 
     if ("simple".equalsIgnoreCase(mechanism)) {
       client_auth_provider = new SimpleClientAuthProvider(hbase_client);
       use_wrap = false;
       return;
     }
-
+    
     if ("kerberos".equalsIgnoreCase(mechanism)) {
       client_auth_provider = new KerberosClientAuthProvider(hbase_client);
     } else {
