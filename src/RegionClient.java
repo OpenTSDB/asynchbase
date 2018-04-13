@@ -91,6 +91,7 @@ import org.hbase.async.ratelimiter.WriteRateLimiter;
 public final class RegionClient extends ReplayingDecoder<VoidEnum> {
 
   private static final Logger LOG = LoggerFactory.getLogger(RegionClient.class);
+  private static final Logger TRACE_LOG = LoggerFactory.getLogger("Trace");
 
   /** Maps remote exception types to our corresponding types.  */
   private static final HashMap<String, HBaseException> REMOTE_EXCEPTION_TYPES;
@@ -1021,6 +1022,9 @@ public final class RegionClient extends ReplayingDecoder<VoidEnum> {
         final BatchableRpc edit = (BatchableRpc) rpc;
         if (edit.canBuffer() && hbase_client.getFlushInterval() > 0) {
           bufferEdit(edit);
+          if (rpc.isTraceRPC()) {
+            TRACE_LOG.info("Buffered the batchable RPC: " + rpc);
+          }
           return;
         }
         addSingleEditCallbacks(edit);
@@ -1046,6 +1050,10 @@ public final class RegionClient extends ReplayingDecoder<VoidEnum> {
         // encode().
         if (check_write_status && !chan.isWritable()) {
           rate_limiter.ping(WriteRateLimiter.SIGNAL.WRITES_BLOCKED);
+          if (rpc.isTraceRPC()) {
+            TRACE_LOG.info("RPC blocked due to channel not being "
+                + "writable: " + rpc + " Server: " + this);
+          }
           rpc.callback(new PleaseThrottleException("Region client [" + this + 
               " ] channel is not writeable.", null, rpc, rpc.getDeferred()));
           removeRpc(rpc, false);
@@ -1057,6 +1065,10 @@ public final class RegionClient extends ReplayingDecoder<VoidEnum> {
         Channels.write(chan, serialized);
         rate_limiter.ping(WriteRateLimiter.SIGNAL.ATTEMPT);
         rpcs_sent.incrementAndGet();
+        if (rpc.isTraceRPC()) {
+          TRACE_LOG.info("Wrote RPC to channel: " + rpc + " Server: " 
+              + this);
+        }
         return;
       }  // else: continue to the "we're disconnected" code path below.
     }
@@ -1074,17 +1086,28 @@ public final class RegionClient extends ReplayingDecoder<VoidEnum> {
         }
         if (pending_limit > 0 && pending_rpcs.size() >= pending_limit) {
           rate_limiter.ping(WriteRateLimiter.SIGNAL.WRITES_BLOCKED);
+          if (rpc.isTraceRPC()) {
+            TRACE_LOG.info("RPC blocked due to too many pending RPCs: " 
+                + rpc + " Server: " + this);
+          }
           rpc.callback(new PleaseThrottleException(
               "Exceeded the pending RPC limit", null, rpc, rpc.getDeferred()));
           pending_breached.incrementAndGet();
           return;
         }
         pending_rpcs.add(rpc);
+        if (rpc.isTraceRPC()) {
+          TRACE_LOG.info("Queued RPC in the pending queue: " + rpc);
+        }
       }
     }
     if (dead) {
       if (rpc.getRegion() == null  // Can't retry, dunno where it should go.
           || rpc.failfast()) {
+        if (rpc.isTraceRPC()) {
+          TRACE_LOG.info("Region server was disconnected for RPC: " + rpc 
+              + " Server: " + this);
+        }
         rpc.callback(new ConnectionResetException(null));
       } else {
         hbase_client.sendRpcToRegion(rpc);  // Re-schedule the RPC.
@@ -1096,6 +1119,10 @@ public final class RegionClient extends ReplayingDecoder<VoidEnum> {
       // a second time,  we will either succeed to send the RPC if we're still
       // connected, or fail through to the code below if we got disconnected
       // in the mean time.
+      if (rpc.isTraceRPC()) {
+        TRACE_LOG.info("Recursively retrying RPC: " + rpc 
+            + " Server: " + this);
+      }
       sendRpc(rpc);
       return;
     }
@@ -1180,7 +1207,13 @@ public final class RegionClient extends ReplayingDecoder<VoidEnum> {
     }
     if (rpcs != null) {
       for (final HBaseRpc rpc : rpcs) {
-        LOG.debug("Executing RPC queued: {}", rpc);
+        if (rpc.isTraceRPC()) {
+          TRACE_LOG.info("Sending queued RPC: " + rpc + " Server: " + this);
+        }
+        
+        if (LOG.isDebugEnabled()) {
+          LOG.debug("Executing RPC queued: {}", rpc);
+        }
         sendRpc(rpc);
       }
     }
@@ -1250,6 +1283,10 @@ public final class RegionClient extends ReplayingDecoder<VoidEnum> {
       final RegionInfo region = rpc.getRegion();
       if (region == null  // Can't retry, dunno where this RPC should go.
           || rpc.failfast()) {
+        if (rpc.isTraceRPC()) {
+          TRACE_LOG.info("Failing queued or inflight RPC: " + rpc 
+              + " Server: " + this);
+        }
         rpc.callback(exception);
       } else {
         final NotServingRegionException nsre =
@@ -1542,6 +1579,10 @@ public final class RegionClient extends ReplayingDecoder<VoidEnum> {
       return null;
     }
     
+    if (rpc.isTraceRPC()) {
+      TRACE_LOG.info("Received response for RPC: " + rpc + " Server: " + this);
+    }
+    
     // TODO - if the RPC doesn't match we could search the map for the proper
     // RPC. For now though, something went really pear shaped so we should
     // toss an exception.
@@ -1576,6 +1617,10 @@ public final class RegionClient extends ReplayingDecoder<VoidEnum> {
       if (!(e instanceof HBaseException)) {
         e = new NonRecoverableException(msg, e);
       }
+      if (rpc.isTraceRPC()) {
+        TRACE_LOG.info("Failed to deserialize RPC response: " + rpc 
+            + " Server: " + this, e);
+      }
       rpc.callback(e);
       removeRpc(rpc, false);
       throw e;
@@ -1601,6 +1646,10 @@ public final class RegionClient extends ReplayingDecoder<VoidEnum> {
     }
 
     try {
+      if (rpc.isTraceRPC()) {
+        TRACE_LOG.info("Calling back RPC: " + rpc + " Server: " + this 
+            + " Response: " + decoded);
+      }
       rpc.callback(decoded);
     } catch (Exception e) {
       LOG.error("Unexpected exception while handling RPC #" + rpcid
