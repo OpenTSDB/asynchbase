@@ -47,10 +47,12 @@ public final class RegionClientStats {
   private final int pending_batched_rpcs;
   private final long rpcs_timedout;
   private final long writes_blocked;
+  private final int writes_blocked_by_rate_limiter;
   private final long rpc_response_timedout;
   private final long rpc_response_unknown;
   private final long inflight_breached;
   private final long pending_breached;
+  private final Double rate_limit;
   
   /** Package-private constructor.  */
   RegionClientStats(
@@ -66,7 +68,9 @@ public final class RegionClientStats {
       final long rpc_response_timedout,
       final long rpc_response_unknown,
       final long inflight_breached,
-      final long pending_breached
+      final long pending_breached,
+      final int writes_blocked_by_rate_limiter,
+      final Double rate_limit
       ) {
     this.rpcs_sent = rpcs_sent;
     this.inflight_rpcs = rpcs_inflight;
@@ -81,6 +85,8 @@ public final class RegionClientStats {
     this.rpc_response_unknown = rpc_response_unknown;
     this.inflight_breached = inflight_breached;
     this.pending_breached = pending_breached;
+    this.rate_limit = rate_limit == null ? Double.POSITIVE_INFINITY : rate_limit;
+    this.writes_blocked_by_rate_limiter = writes_blocked_by_rate_limiter;
   }
 
   /**
@@ -210,5 +216,15 @@ public final class RegionClientStats {
    */
   public long pendingBreached() {
     return pending_breached;
+  }
+
+  /** The current RPC rate limit per second. */
+  public double rateLimit() {
+    return rate_limit;
+  }
+
+  /** The total number of writes blocked by the limiter. */
+  public int writesBlockedByRateLimiter() {
+    return writes_blocked_by_rate_limiter;
   }
 }

@@ -62,6 +62,9 @@ import com.stumbleupon.async.Deferred;
 import org.hbase.async.generated.ClientPB;
 import org.hbase.async.generated.HBasePB;
 import org.hbase.async.generated.RPCPB;
+import org.hbase.async.ratelimiter.LimitPolicy;
+import org.hbase.async.ratelimiter.RateLimitPolicyImpl;
+import org.hbase.async.ratelimiter.WriteRateLimiter;
 
 /**
  * Stateful handler that manages a connection to a specific RegionServer.
@@ -85,7 +88,7 @@ import org.hbase.async.generated.RPCPB;
  * accepting write requests as well as buffering requests if the underlying
  * channel isn't connected.
  */
-final class RegionClient extends ReplayingDecoder<VoidEnum> {
+public final class RegionClient extends ReplayingDecoder<VoidEnum> {
 
   private static final Logger LOG = LoggerFactory.getLogger(RegionClient.class);
 
@@ -226,6 +229,9 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
   /** Number of RPCs that were blocked due to the channel in a non-writable state */
   private final AtomicInteger writes_blocked = new AtomicInteger();
   
+  /** Number of RPCs that were blocked due to the rate limiter */
+  private final AtomicInteger writes_rate_limited = new AtomicInteger();
+  
   /** Number of RPCs failed due to exceeding the inflight limit */
   private final AtomicInteger inflight_breached = new AtomicInteger();
   
@@ -250,6 +256,9 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
    */
   private final Semaphore meta_lookups = new Semaphore(100);
 
+  /** An optional rate limiter for mutation RPCs. */
+  private final WriteRateLimiter rate_limiter;
+  
   /** A class used for authentication and/or encryption/decryption of packets. */
   private SecureRpcHelper secure_rpc_helper;
   
@@ -275,6 +284,25 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
     pending_limit = hbase_client.getConfig().getInt(
         "hbase.region_client.pending_limit");
     batch_size = hbase_client.getConfig().getInt("hbase.rpcs.batch.size");
+    LimitPolicy policy = new RateLimitPolicyImpl(
+        hbase_client.getConfig()
+                .getInt("hbase.rpc.ratelimit.policy.min_success_rate"),
+        hbase_client.getConfig()
+                .getInt("hbase.rpc.ratelimit.policy.min_writes_req"));
+    rate_limiter = new WriteRateLimiter(
+        hbase_client.getConfig()
+                .getInt("hbase.rpc.ratelimit.rate_max_threshold"), 
+        hbase_client.getConfig()
+                .getInt("hbase.rpc.ratelimit.rate_min_threshold"), 
+        hbase_client.getConfig()
+                .getInt("hbase.rpc.ratelimit.rate_of_change"), 
+        this,
+        hbase_client.getConfig()
+                .getBoolean("hbase.rpc.ratelimit.enable"), 
+        policy,
+        hbase_client.getTimer(),
+        hbase_client.getConfig()
+                .getInt("hbase.rpc.ratelimit.time_frame"));
   }
 
   /**
@@ -327,7 +355,9 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
         rpc_response_timedout.get(),
         rpc_response_unknown.get(),
         inflight_breached.get(),
-        pending_breached.get()
+        pending_breached.get(),
+        writes_rate_limited.get(),
+        rate_limiter.getCurrentRate()
       );
     }
   }
@@ -1011,7 +1041,10 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
         // if our channel isn't able to write, we want to properly queue and
         // retry the RPC later or fail it immediately so we don't fill up the
         // channel's buffer.
+        // Don't need to check inflight or rate here as that happened in
+        // encode().
         if (check_write_status && !chan.isWritable()) {
+          rate_limiter.ping(WriteRateLimiter.SIGNAL.WRITES_BLOCKED);
           rpc.callback(new PleaseThrottleException("Region client [" + this + 
               " ] channel is not writeable.", null, rpc, rpc.getDeferred()));
           removeRpc(rpc, false);
@@ -1021,6 +1054,7 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
         
         rpc.enqueueTimeout(this);
         Channels.write(chan, serialized);
+        rate_limiter.ping(WriteRateLimiter.SIGNAL.ATTEMPT);
         rpcs_sent.incrementAndGet();
         return;
       }  // else: continue to the "we're disconnected" code path below.
@@ -1038,6 +1072,7 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
           pending_rpcs = new ArrayList<HBaseRpc>();
         }
         if (pending_limit > 0 && pending_rpcs.size() >= pending_limit) {
+          rate_limiter.ping(WriteRateLimiter.SIGNAL.WRITES_BLOCKED);
           rpc.callback(new PleaseThrottleException(
               "Exceeded the pending RPC limit", null, rpc, rpc.getDeferred()));
           pending_breached.incrementAndGet();
@@ -1180,7 +1215,11 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
       new ConnectionResetException(chan);
     failOrRetryRpcs(rpcs_inflight.values(), exception);
     rpcs_inflight.clear();
-
+    
+    if (rate_limiter != null) {
+      rate_limiter.disableRateLimiter();
+    }
+    
     final ArrayList<HBaseRpc> rpcs;
     final MultiAction batch;
     synchronized (this) {
@@ -1282,11 +1321,28 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
       throw new AssertionError("Should never happen!  rpc=" + rpc);
     }
 
-    // TODO(tsuna): Add rate-limiting here.  We don't want to send more than
-    // N QPS to a given region server.
-    // TODO(tsuna): Check the size() of rpcs_inflight.  We don't want to have
-    // more than M RPCs in flight at the same time, and we may be overwhelming
-    // the server if we do.
+    // Ensure that the inflight timed RPCs have not breached the high watermark. 
+    // Start rejecting new requests if it has
+    // TODO: figure out the best way to throttle requests. For now, we want to
+    // let gets, probes, etc. through, but we know we want to throttle at least
+    // the requests listed in the condition below.
+    if (inflight_limit > 0 && (rpcs_inflight.size() >= inflight_limit) && 
+        !rpc.isProbe()) {
+      inflight_breached.incrementAndGet();
+      rate_limiter.ping(WriteRateLimiter.SIGNAL.BREACHED_INFLIGHT_QUEUE);
+      rpc.callback(new PleaseThrottleException(
+          "Exceeded the inflight RPC limit", null, rpc, 
+          rpc.getDeferred()));
+      return null;
+    }
+    
+    if (!rate_limiter.isHealthy()) {
+      rpc.callback(new PleaseThrottleException("Write rate is restricted by the"
+              + "rate limiter (" + this.rate_limiter.toString()+")", 
+               null, rpc, rpc.getDeferred()));
+      writes_rate_limited.incrementAndGet();
+      return null;
+    }
 
     rpc.rpc_id = this.rpcid.incrementAndGet();
     ChannelBuffer payload;
@@ -1372,10 +1428,14 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
                 + Bytes.pretty(payload));
     }
     {
-      if (inflight_limit > 0 && rpcs_inflight.size() >= inflight_limit) {
+      // Double check to see if the inflight queue was exceeded while we
+      // were serializing the RPC.
+      if (inflight_limit > 0 && rpcs_inflight.size() >= inflight_limit && 
+          !rpc.isProbe()) {
         rpc.callback(new PleaseThrottleException(
             "Exceeded the inflight RPC limit", null, rpc, rpc.getDeferred()));
         inflight_breached.incrementAndGet();
+        rate_limiter.ping(WriteRateLimiter.SIGNAL.BREACHED_INFLIGHT_QUEUE);
         return null;
       }
       final HBaseRpc oldrpc = rpcs_inflight.put(rpc.rpc_id, rpc);
@@ -1484,7 +1544,8 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
     // RPC. For now though, something went really pear shaped so we should
     // toss an exception.
     assert rpc.rpc_id == rpcid;
-
+    rate_limiter.ping(WriteRateLimiter.SIGNAL.SUCCESS);
+    
     final Object decoded;
     try {
       if (server_version >= SERVER_VERSION_095_OR_ABOVE) {
@@ -2024,7 +2085,7 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
   
   public String toString() {
     final StringBuilder buf = new StringBuilder(13 + 10 + 6 + 64 + 16 + 1
-                                                + 9 + 2 + 17 + 2 + 1);
+                                                + 9 + 2 + 17 + 17 + 4 + 2 + 1);
     buf.append("RegionClient@")           // =13
       .append(hashCode())                 // ~10
       .append("(chan=")                   // = 6
@@ -2041,8 +2102,13 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
       .append(", #batched=")              // = 9
       .append(nedits);                    // ~ 2
     buf.append(", #rpcs_inflight=")       // =17
-      .append(rpcs_inflight.size())       // ~ 2
-      .append(')');                       // = 1
+      .append(rpcs_inflight.size());      // ~ 2
+    final Double curr_rate = rate_limiter.getCurrentRate();
+    if (curr_rate != null) {
+      buf.append(", max_write_rate=")      // =17
+      .append(String.format("%.0f", curr_rate)); // ~4
+    }
+    buf.append(')');                       // = 1
     return buf.toString();
   }
 
@@ -2205,5 +2271,10 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
     final GetProtocolVersionRequest rpc = new GetProtocolVersionRequest();
     rpc.getDeferred().addBoth(new ProtocolVersionCB(chan));
     Channels.write(chan, encode(rpc));
+  }
+
+  /** @return The rate limiter for this region client. */
+  WriteRateLimiter getRateLimiter() {
+    return rate_limiter;
   }
 }
