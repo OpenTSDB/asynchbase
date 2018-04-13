@@ -116,7 +116,7 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
     REMOTE_EXCEPTION_TYPES.put(VersionMismatchException.REMOTE_CLASS,
                                new VersionMismatchException(null, null));
     REMOTE_EXCEPTION_TYPES.put(CallQueueTooBigException.REMOTE_CLASS,
-            new CallQueueTooBigException(null, null));
+                               new CallQueueTooBigException(null, null));
     REMOTE_EXCEPTION_TYPES.put(UnknownProtocolException.REMOTE_CLASS,
                                new UnknownProtocolException(null, null));
   }
@@ -900,9 +900,18 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
 
       private Object handleException(final Exception e) {
         if (!(e instanceof RecoverableException)) {
-          for (final BatchableRpc rpc : request.batch()) {
-            rpc.callback(e);
+
+          if (e instanceof HBaseException){
+            HBaseException ex = (HBaseException)e;
+            for (final BatchableRpc rpc : request.batch()) {
+              rpc.callback(ex.make(ex, rpc));
+            }
+          } else{
+            for (final BatchableRpc rpc : request.batch()) {
+              rpc.callback(e);
+            }
           }
+
           return e;  // Can't recover from this error, let it propagate.
         }
         if (LOG.isDebugEnabled()) {

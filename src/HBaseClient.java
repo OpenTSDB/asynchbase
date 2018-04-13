@@ -3450,9 +3450,7 @@ public final class HBaseClient {
                   final RecoverableException e) {
     num_nsre_rpcs.increment();
     if (rpc.isProbe()) {
-      synchronized (rpc) {
-        rpc.setSuspendedProbe(true);
-      }
+      rpc.setSuspendedProbe(true);
     }
     final boolean can_retry_rpc = !cannotRetryRequest(rpc);
     boolean known_nsre = true;  // We already aware of an NSRE for this region?

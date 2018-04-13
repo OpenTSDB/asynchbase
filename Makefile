@@ -1,4 +1,4 @@
-# Copyright (C) 2010-2017  The Async HBase Authors.  All rights reserved.
+# Copyright (C) 2010-2018  The Async HBase Authors.  All rights reserved.
 # This file is part of Async HBase.
 #
 # Redistribution and use in source and binary forms, with or without
@@ -108,7 +108,7 @@ asynchbase_SOURCES := \
 	src/PleaseThrottleException.java	\
 	src/PutRequest.java	\
 	src/QualifierFilter.java	\
-        src/CallQueueTooBigException.java    \
+	src/CallQueueTooBigException.java    \
 	src/RecoverableException.java	\
 	src/RegexStringComparator.java	\
 	src/RegionClient.java	\

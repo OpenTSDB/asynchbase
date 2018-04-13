@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2010-2012  The Async HBase Authors.  All rights reserved.
+ * Copyright (C) 2016  The Async HBase Authors.  All rights reserved.
  * This file is part of Async HBase.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -27,7 +27,9 @@
 package org.hbase.async;
 
 /**
- * Exception thrown when we try to use an invalid or expired scanner ID.
+ * Exception thrown when the RPC queue on the region server is full and cannot
+ * accept new RPCs. In that case we should retry with a backoff and give
+ * HBase time to recover.
  */
 public final class CallQueueTooBigException extends RecoverableException
 implements HasFailedRpcException {
