@@ -32,6 +32,7 @@ import static org.mockito.Matchers.anyString;
 import static org.mockito.Mockito.when;
 import static org.powermock.api.mockito.PowerMockito.mock;
 
+import java.net.InetSocketAddress;
 import java.nio.charset.Charset;
 import java.util.AbstractMap;
 import java.util.ArrayList;
@@ -93,6 +94,7 @@ public class BaseTestHBaseClient {
   protected static final String ROOT_IP = "192.168.0.1";
   protected static final String META_IP = "192.168.0.2";
   protected static final String REGION_CLIENT_IP = "192.168.0.3";
+  protected static final String REMOTE_ADDRESS = "127.0.0.1/60020";
   protected static String MOCK_RS_CLIENT_NAME = "Mock RegionClient";
   protected static String MOCK_ROOT_CLIENT_NAME = "Mock RootClient";
   protected static String MOCK_META_CLIENT_NAME = "Mock MetaClient";
@@ -168,6 +170,9 @@ public class BaseTestHBaseClient {
     injectRegionInCache(meta, metaclient, META_IP + ":" + RS_PORT);
     injectRegionInCache(region, regionclient, REGION_CLIENT_IP + ":" + RS_PORT);
     
+    final InetSocketAddress remote = mock(InetSocketAddress.class);
+    when(remote.toString()).thenReturn(REMOTE_ADDRESS);
+    when(chan.getRemoteAddress()).thenReturn(remote);
     when(channel_factory.newChannel(any(ChannelPipeline.class)))
       .thenReturn(chan);
     when(chan.getConfig()).thenReturn(mock(SocketChannelConfig.class));

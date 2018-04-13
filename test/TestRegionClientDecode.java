@@ -35,6 +35,7 @@ import static org.junit.Assert.fail;
 import static org.mockito.Matchers.any;
 import static org.mockito.Matchers.anyInt;
 import static org.mockito.Matchers.anyObject;
+import static org.mockito.Matchers.anyString;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
@@ -86,7 +87,7 @@ public class TestRegionClientDecode extends BaseTestRegionClient {
   private static final long TIMESTAMP = 1356998400000L;
   
   // NOTE: the TYPE of ChannelBuffer is important! ReplayingDecoderBuffer isn't
-  // backed by an array and we have methods that attemp to see if they can
+  // backed by an array and we have methods that attempt to see if they can
   // perform zero copy operations.
   
   @Before
@@ -355,7 +356,7 @@ public class TestRegionClientDecode extends BaseTestRegionClient {
 
     assertEquals(0, rpcs_inflight.size());
     verify(hbase_client, times(1)).handleNSRE(any(HBaseRpc.class),
-        any(byte[].class), any(RecoverableException.class));
+        any(byte[].class), any(RecoverableException.class), anyString());
     assertEquals(1, timer.tasks.size());
     assertEquals(60000, (long)timer.tasks.get(0).getValue());
     verify(timer.timeouts.get(0), never()).cancel();
@@ -399,7 +400,7 @@ public class TestRegionClientDecode extends BaseTestRegionClient {
 
     assertEquals(0, rpcs_inflight.size());
     verify(hbase_client, times(1)).handleNSRE(any(HBaseRpc.class), 
-        any(byte[].class), any(RecoverableException.class));
+        any(byte[].class), any(RecoverableException.class), anyString());
     assertEquals(1, timer.tasks.size());
     assertEquals(60000, (long)timer.tasks.get(0).getValue());
     verify(timer.timeouts.get(0), never()).cancel();
@@ -418,7 +419,7 @@ public class TestRegionClientDecode extends BaseTestRegionClient {
 
     assertEquals(0, rpcs_inflight.size());
     verify(hbase_client, never()).handleNSRE(any(HBaseRpc.class), 
-        any(byte[].class), any(RecoverableException.class));
+        any(byte[].class), any(RecoverableException.class), anyString());
     assertEquals(1, timer.tasks.size());
     assertEquals(60000, (long)timer.tasks.get(0).getValue());
     verify(timer.timeouts.get(0), times(1)).cancel();
@@ -437,7 +438,7 @@ public class TestRegionClientDecode extends BaseTestRegionClient {
 
     assertEquals(0, rpcs_inflight.size());
     verify(hbase_client, never()).handleNSRE(any(HBaseRpc.class), 
-        any(byte[].class), any(RecoverableException.class));
+        any(byte[].class), any(RecoverableException.class), anyString());
     assertEquals(1, timer.tasks.size());
     assertEquals(60000, (long)timer.tasks.get(0).getValue());
     verify(timer.timeouts.get(0), times(1)).cancel();
@@ -456,7 +457,7 @@ public class TestRegionClientDecode extends BaseTestRegionClient {
 
     assertEquals(0, rpcs_inflight.size());
     verify(hbase_client, never()).handleNSRE(any(HBaseRpc.class), 
-        any(byte[].class), any(RecoverableException.class));
+        any(byte[].class), any(RecoverableException.class), anyString());
     assertEquals(1, timer.tasks.size());
     assertEquals(60000, (long)timer.tasks.get(0).getValue());
     verify(timer.timeouts.get(0), times(1)).cancel();

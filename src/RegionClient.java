@@ -914,7 +914,8 @@ public final class RegionClient extends ReplayingDecoder<VoidEnum> {
               // have come back successful, but only some parts of the batch
               // could have encountered an NSRE.
               hbase_client.handleNSRE(rpc, rpc.getRegion().name(),
-                                      (NotServingRegionException) r);
+                                      (NotServingRegionException) r,
+                                      chan.getRemoteAddress().toString());
             } else {
               retryEdit(rpc, (RecoverableException) r);
             }
@@ -1255,7 +1256,8 @@ public final class RegionClient extends ReplayingDecoder<VoidEnum> {
           new NotServingRegionException("Connection reset: "
                                         + exception.getMessage(), rpc);
         // Re-schedule the RPC by (ab)using the NSRE handling mechanism.
-        hbase_client.handleNSRE(rpc, region.name(), nsre);
+        hbase_client.handleNSRE(rpc, region.name(), nsre, 
+            chan.getRemoteAddress().toString());
       }
     }
   }
@@ -1593,7 +1595,8 @@ public final class RegionClient extends ReplayingDecoder<VoidEnum> {
       // if we don't know which region caused the NSRE (e.g. during multiPut)
       // we can't do anything about it.
       hbase_client.handleNSRE(rpc, rpc.getRegion().name(),
-                              (RecoverableException) decoded);
+                              (RecoverableException) decoded,
+                              chan.getRemoteAddress().toString());
       return null;
     }
 

@@ -417,7 +417,7 @@ public class TestRegionClient extends BaseTestRegionClient {
     PowerMockito.when(rpc, "getRegion").thenReturn(region);
     PowerMockito.when(region, "name").thenReturn(Bytes.fromInt(1337));
     PowerMockito.doNothing().when(hbase_client, "handleNSRE", Mockito.any(), 
-        Mockito.any(), Mockito.any());
+        Mockito.any(), Mockito.any(), Mockito.any());
     PowerMockito.when(rclient, "deserialize", buf, rpc).thenReturn(blowzup);
       
     PowerMockito.when(rclient, "decode", (ChannelHandlerContext)any(), 
