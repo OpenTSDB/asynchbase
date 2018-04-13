@@ -274,6 +274,13 @@
     <!-- test dependencies -->
 
     <dependency>
+      <groupId>com.google.guava</groupId>
+      <artifactId>guava-testlib</artifactId>
+      <version>@GUAVA_VERSION@</version>
+      <scope>test</scope>
+    </dependency>
+
+    <dependency>
       <groupId>org.hamcrest</groupId>
       <artifactId>hamcrest-core</artifactId>
       <version>@HAMCREST_VERSION@</version>

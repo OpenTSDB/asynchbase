@@ -302,6 +302,7 @@ public class Config {
     default_map.put("hbase.region_client.check_channel_write_status", "false");
     default_map.put("hbase.region_client.inflight_limit", "0");
     default_map.put("hbase.region_client.pending_limit", "0");
+    default_map.put("hbase.nsre.event_queue_size", "128");
     default_map.put("hbase.nsre.low_watermark", "1000");
     default_map.put("hbase.nsre.high_watermark", "10000");
     default_map.put("hbase.timer.tick", "20");

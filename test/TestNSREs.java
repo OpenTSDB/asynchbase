@@ -127,7 +127,8 @@ final class TestNSREs extends BaseTestHBaseClient {
       public Object answer(final InvocationOnMock invocation) {
         // We completely stub out the RegionClient, which normally does this.
         client.handleNSRE(get, get.getRegion().name(),
-                          new NotServingRegionException("test", get));
+                          new NotServingRegionException("test", get),
+                          REMOTE_ADDRESS);
         return null;
       }
     }).when(regionclient).sendRpc(get);
@@ -175,7 +176,8 @@ final class TestNSREs extends BaseTestHBaseClient {
       public Object answer(final InvocationOnMock invocation) {
         // We completely stub out the RegionClient, which normally does this.
         client.handleNSRE(get, get.getRegion().name(),
-                          new NotServingRegionException("test 1", get));
+                          new NotServingRegionException("test 1", get),
+                          REMOTE_ADDRESS);
         return null;
       }
     }).when(regionclient).sendRpc(get);
@@ -199,7 +201,8 @@ final class TestNSREs extends BaseTestHBaseClient {
         switch (attempt++) {
           case 0:  // We stub out the RegionClient, which normally does this.
             client.handleNSRE(exist, exist.getRegion().name(),
-                              new NotServingRegionException("test 2", exist));
+                              new NotServingRegionException("test 2", exist),
+                              REMOTE_ADDRESS);
             break;
           case 1:  // Second attempt succeeds.
           case 2:  // First probe succeeds.
@@ -263,7 +266,8 @@ final class TestNSREs extends BaseTestHBaseClient {
           case 0:
             // We stub out the RegionClient, which normally does this.
             client.handleNSRE(triggerGet, triggerGet.getRegion().name(),
-                new NotServingRegionException("Trigger NSRE", triggerGet));
+                new NotServingRegionException("Trigger NSRE", triggerGet),
+                REMOTE_ADDRESS);
             break;
           case 1:
             // trigger the callback with the result
@@ -304,12 +308,14 @@ final class TestNSREs extends BaseTestHBaseClient {
           case 0:
             // We stub out the RegionClient, which normally does this.
             client.handleNSRE(exist, exist.getRegion().name(),
-                new NotServingRegionException("exist 1", exist));
+                new NotServingRegionException("exist 1", exist),
+                REMOTE_ADDRESS);
             break;
           case 1:
             // We stub out the RegionClient, which normally does this.
             client.handleNSRE(exist, exist.getRegion().name(),
-                new NotServingRegionException("exist 2", exist));
+                new NotServingRegionException("exist 2", exist),
+                REMOTE_ADDRESS);
             break;
           case 2:
             // NSRE cleared here, start the callback chain for exist RPC
@@ -445,7 +451,8 @@ final class TestNSREs extends BaseTestHBaseClient {
           Whitebox.setInternalState(client, "timer", taskTimer);
           // We stub out the RegionClient, which normally does this.
           client.handleNSRE(triggerGet, triggerGet.getRegion().name(),
-              new NotServingRegionException("Trigger NSRE", triggerGet));
+              new NotServingRegionException("Trigger NSRE", triggerGet),
+              REMOTE_ADDRESS);
         } else if (attempt == probe_expire_count + 2) {
           // this is the case where NSRE is cleared
           // trigger the callback with the result
@@ -471,7 +478,8 @@ final class TestNSREs extends BaseTestHBaseClient {
         if (attempt < (probe_expire_count * 10 + 4)) {
           // We stub out the RegionClient, which normally does this.
           client.handleNSRE(exist, exist.getRegion().name(),
-            new NotServingRegionException("exist 1", exist));
+            new NotServingRegionException("exist 1", exist),
+            REMOTE_ADDRESS);
         } else if (attempt == (probe_expire_count * 10 + 4)) {
           // NSRE on the region is cleared here
           exist.callback(null);
@@ -600,7 +608,7 @@ final class TestNSREs extends BaseTestHBaseClient {
         region.name(), false, null);
     verifyPrivate(client, times(119)).invoke("sendRpcToRegion", (HBaseRpc)any());
     verify(client, times(55)).handleNSRE((HBaseRpc)any(), (byte[])any(), 
-        (RecoverableException)any());
+        (RecoverableException)any(), (String)any());
     final ConcurrentSkipListMap<byte[], ArrayList<HBaseRpc>> got_nsre = 
         Whitebox.getInternalState(client, "got_nsre");
     assertEquals(0, got_nsre.size());
@@ -643,7 +651,7 @@ final class TestNSREs extends BaseTestHBaseClient {
         region.name(), false, null);
     verifyPrivate(client, times(10)).invoke("sendRpcToRegion", (HBaseRpc)any());
     verify(client, times(2)).handleNSRE((HBaseRpc)any(), (byte[])any(), 
-        (RecoverableException)any());
+        (RecoverableException)any(), (String)any());
     final ConcurrentSkipListMap<byte[], ArrayList<HBaseRpc>> got_nsre = 
         Whitebox.getInternalState(client, "got_nsre");
     assertEquals(0, got_nsre.size());
@@ -701,7 +709,7 @@ final class TestNSREs extends BaseTestHBaseClient {
         region.name(), false, null);
     verifyPrivate(client, times(84)).invoke("sendRpcToRegion", (HBaseRpc)any());
     verify(client, times(36)).handleNSRE((HBaseRpc)any(), (byte[])any(), 
-        (RecoverableException)any());
+        (RecoverableException)any(), (String)any());
     final ConcurrentSkipListMap<byte[], ArrayList<HBaseRpc>> got_nsre = 
         Whitebox.getInternalState(client, "got_nsre");
     assertEquals(0, got_nsre.size());
@@ -711,13 +719,16 @@ final class TestNSREs extends BaseTestHBaseClient {
   public void handleNSRENullRPC() throws Exception {
     final GetRequest get = new GetRequest(TABLE, KEY);
     client.handleNSRE(null, region.name(), 
-        new NotServingRegionException("Fail", get));
+        new NotServingRegionException("Fail", get),
+        REMOTE_ADDRESS);
   }
   
   @Test (expected = NullPointerException.class)
   public void handleNSRENullRegion() throws Exception {
     final GetRequest get = new GetRequest(TABLE, KEY);
-    client.handleNSRE(get, null, new NotServingRegionException("Fail", trigger));
+    client.handleNSRE(get, null, 
+        new NotServingRegionException("Fail", trigger),
+        REMOTE_ADDRESS);
   }
   
   // apparently this is OK so just perform a basic validation
@@ -725,13 +736,15 @@ final class TestNSREs extends BaseTestHBaseClient {
   public void handleNSRENullException() throws Exception {
     setupMultiNSRE(1, 1, false);
     final GetRequest get = new GetRequest(TABLE, KEY);
-    client.handleNSRE(get, region.name(), null);
+    client.handleNSRE(get, region.name(), null,
+        REMOTE_ADDRESS);
     
     verifyPrivate(client, times(1)).invoke("invalidateRegionCache", 
         region.name(), false, null);
     verifyPrivate(client, times(3)).invoke("sendRpcToRegion", (HBaseRpc)any());
     verify(client, times(1)).handleNSRE((HBaseRpc)any(), (byte[])any(), 
-        (RecoverableException)any());
+        (RecoverableException)any(),
+        eq(REMOTE_ADDRESS));
     final ConcurrentSkipListMap<byte[], ArrayList<HBaseRpc>> got_nsre = 
         Whitebox.getInternalState(client, "got_nsre");
     assertEquals(0, got_nsre.size());
@@ -747,7 +760,8 @@ final class TestNSREs extends BaseTestHBaseClient {
     assertEquals(0, num_nsres.get());
     
     client.handleNSRE(get, region.name(), 
-        new NotServingRegionException("Fail", get));
+        new NotServingRegionException("Fail", get),
+        REMOTE_ADDRESS);
 
     verifyPrivate(client, times(1)).invoke("invalidateRegionCache", 
         region.name(), true, "seems to be splitting or closing it.");
@@ -775,9 +789,11 @@ final class TestNSREs extends BaseTestHBaseClient {
     assertEquals(0, num_nsres.get());
     
     client.handleNSRE(get, region.name(), 
-        new NotServingRegionException("Fail", get));
+        new NotServingRegionException("Fail", get),
+        REMOTE_ADDRESS);
     client.handleNSRE(get2, region.name(), 
-        new NotServingRegionException("Fail", get2));
+        new NotServingRegionException("Fail", get2),
+        REMOTE_ADDRESS);
 
     verifyPrivate(client, times(1)).invoke("invalidateRegionCache", 
         region.name(), true, "seems to be splitting or closing it.");
@@ -809,11 +825,14 @@ final class TestNSREs extends BaseTestHBaseClient {
     assertEquals(0, num_nsres.get());
     
     client.handleNSRE(get, region.name(), 
-        new NotServingRegionException("Fail", get));
+        new NotServingRegionException("Fail", get),
+        REMOTE_ADDRESS);
     client.handleNSRE(get2, region.name(), 
-        new NotServingRegionException("Fail", get2));
+        new NotServingRegionException("Fail", get2),
+        REMOTE_ADDRESS);
     client.handleNSRE(get3, region.name(), 
-        new NotServingRegionException("Fail", get3));
+        new NotServingRegionException("Fail", get3),
+        REMOTE_ADDRESS);
 
     verifyPrivate(client, times(1)).invoke("invalidateRegionCache", 
         region.name(), true, "seems to be splitting or closing it.");
@@ -847,11 +866,14 @@ final class TestNSREs extends BaseTestHBaseClient {
     assertEquals(0, num_nsres.get());
     
     client.handleNSRE(get, region.name(), 
-        new NotServingRegionException("Fail", get));
+        new NotServingRegionException("Fail", get),
+        REMOTE_ADDRESS);
     client.handleNSRE(get2, region.name(), 
-        new NotServingRegionException("Fail", get2));
+        new NotServingRegionException("Fail", get2),
+        REMOTE_ADDRESS);
     client.handleNSRE(get3, region.name(), 
-        new NotServingRegionException("Fail", get3));
+        new NotServingRegionException("Fail", get3),
+        REMOTE_ADDRESS);
 
     verifyPrivate(client, times(1)).invoke("invalidateRegionCache", 
         region.name(), true, "seems to be splitting or closing it.");
@@ -902,11 +924,14 @@ final class TestNSREs extends BaseTestHBaseClient {
     assertEquals(0, num_nsres.get());
     
     client.handleNSRE(get, region.name(), 
-        new NotServingRegionException("Fail", get));
+        new NotServingRegionException("Fail", get),
+        REMOTE_ADDRESS);
     client.handleNSRE(get2, region.name(), 
-        new NotServingRegionException("Fail", get2));
+        new NotServingRegionException("Fail", get2),
+        REMOTE_ADDRESS);
     client.handleNSRE(probe, region.name(), 
-        new NotServingRegionException("Fail", probe));
+        new NotServingRegionException("Fail", probe),
+        REMOTE_ADDRESS);
 
     verifyPrivate(client, times(1)).invoke("invalidateRegionCache", 
         region.name(), true, "seems to be splitting or closing it.");
@@ -942,7 +967,8 @@ final class TestNSREs extends BaseTestHBaseClient {
     assertEquals(0, num_nsres.get());
     
     client.handleNSRE(get, region.name(), 
-        new NotServingRegionException("Fail", get));
+        new NotServingRegionException("Fail", get),
+        REMOTE_ADDRESS);
     
     NonRecoverableException ex = null;
     try {
@@ -984,7 +1010,8 @@ final class TestNSREs extends BaseTestHBaseClient {
     assertEquals(0, num_nsres.get());
     
     client.handleNSRE(get, region.name(), 
-        new NotServingRegionException("Fail", get));
+        new NotServingRegionException("Fail", get),
+        REMOTE_ADDRESS);
     
     NonRecoverableException ex = null;
     try {
@@ -1041,7 +1068,8 @@ final class TestNSREs extends BaseTestHBaseClient {
         GetRequest triggerGet = (GetRequest) args[0];
         if (triggerGet.attempt <= trigger_retries) {
           client.handleNSRE(triggerGet, triggerGet.getRegion().name(),
-              new NotServingRegionException("Trigger NSRE", triggerGet));
+              new NotServingRegionException("Trigger NSRE", triggerGet),
+              REMOTE_ADDRESS);
         } else if (triggerGet.attempt > trigger_retries) {
           triggerGet.callback(row);
         } else {
@@ -1060,7 +1088,8 @@ final class TestNSREs extends BaseTestHBaseClient {
         if (exist.attempt < probe_retries) {
           // We stub out the RegionClient, which normally does this.
           client.handleNSRE(exist, exist.getRegion().name(),
-            new NotServingRegionException("exist 1", exist));
+            new NotServingRegionException("exist 1", exist),
+            REMOTE_ADDRESS);
         } else if (exist.attempt >= probe_retries) {
           // NSRE on the region is cleared here
           exist.callback(null);
@@ -1088,7 +1117,8 @@ final class TestNSREs extends BaseTestHBaseClient {
         // stubbing out the entire decode method in the region client
         if (nsre_dummies) {
           client.handleNSRE(dummyGet, dummyGet.getRegion().name(),
-              new NotServingRegionException("Dummy NSRE", dummyGet));
+              new NotServingRegionException("Dummy NSRE", dummyGet),
+              REMOTE_ADDRESS);
         } else {
           dummyGet.callback(row);
         }

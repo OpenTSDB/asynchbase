@@ -39,6 +39,7 @@ import org.apache.zookeeper.WatchedEvent;
 import org.apache.zookeeper.Watcher;
 import org.apache.zookeeper.ZooKeeper;
 import org.apache.zookeeper.data.Stat;
+import org.hbase.async.HBaseClient.NSRECheckCallback;
 import org.hbase.async.Scanner.CloseScannerRequest;
 import org.hbase.async.Scanner.GetNextRowsRequest;
 import org.hbase.async.Scanner.OpenScannerRequest;
@@ -76,14 +77,19 @@ import java.nio.channels.ClosedChannelException;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.Iterator;
+import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.ConcurrentSkipListMap;
 import java.util.concurrent.Executor;
 import java.util.concurrent.Executors;
+import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
@@ -402,6 +408,19 @@ public final class HBaseClient {
   private final ConcurrentSkipListMap<byte[], ArrayList<HBaseRpc>> got_nsre =
     new ConcurrentSkipListMap<byte[], ArrayList<HBaseRpc>>(RegionInfo.REGION_NAME_CMP);
 
+  /** Whether or not to keep track of NSREs in a sized queue. */
+  private final boolean track_nsre_meta;
+  
+  /**
+   * Information recorded about a region when HBase throws an NSRE for it.
+   */
+  private final ConcurrentMap<byte[], NSREMeta> region_to_nsre_meta;
+
+  /**
+   * Collection of descriptions of NSREs that occurred and were resolved.
+   */
+  private final BlockingQueue<NSREEvent> nsre_events;
+  
   /**
    * Buffer for atomic increment coalescing.
    * This buffer starts out null, and remains so until the first time we need
@@ -587,6 +606,9 @@ public final class HBaseClient {
     }
     mutation_rpc_retries = read_rpc_retries = 
         config.getInt("hbase.client.retries.number");
+    track_nsre_meta = false;
+    region_to_nsre_meta = null;
+    nsre_events = null;
   }
   
   /**
@@ -669,6 +691,16 @@ public final class HBaseClient {
       mutation_rpc_retries = config.getInt("hbase.client.retries.mutations.number");
     } else {
       mutation_rpc_retries = config.getInt("hbase.client.retries.number");
+    }
+    track_nsre_meta = config.getBoolean("hbase.nsre.track");
+    if (track_nsre_meta) {
+      region_to_nsre_meta = 
+          new ConcurrentSkipListMap<byte[], NSREMeta>(RegionInfo.REGION_NAME_CMP);
+      nsre_events = new LinkedBlockingQueue<NSREEvent>(
+          config.getInt("hbase.nsre.event_queue_size"));
+    } else {
+      region_to_nsre_meta = null;
+      nsre_events = null;
     }
   }
   
@@ -1380,7 +1412,8 @@ public final class HBaseClient {
               // could have encountered an NSRE.
               try {
               handleNSRE(rpc, rpc.getRegion().name(),
-                                      (NotServingRegionException) r);
+                                      (NotServingRegionException) r,
+                                      "Unknown" /* TODO */);
               } catch (RuntimeException e) {
                 LOG.error("Unexpected exception processing NSRE for RPC " + rpc, e);
                 rpc.callback(e);
@@ -1416,7 +1449,8 @@ public final class HBaseClient {
               e instanceof RegionServerStoppedException) {
             try {
             handleNSRE(rpc, rpc.getRegion().name(),
-                                    (NotServingRegionException) e);
+                                    (NotServingRegionException) e,
+                                    "Unknown" /* TODO */);
             } catch (RuntimeException ex) {
               LOG.error("Unexpected exception trying to NSRE the RPC " + rpc, ex);
               rpc.callback(ex);
@@ -2476,7 +2510,7 @@ public final class HBaseClient {
           new NotServingRegionException("Region known to be unavailable",
                                         request);
         final Deferred<Object> d = request.getDeferred();
-        handleNSRE(request, region.name(), nsre);
+        handleNSRE(request, region.name(), nsre, "Unknown" /* TODO */);
         return d;
       }
       final RegionClient client = clientFor(region);
@@ -3467,20 +3501,35 @@ public final class HBaseClient {
    * buffered again until we hit the high watermark.  Once the high watermark
    * is hit, all subsequent RPCs that get NSRE'd will immediately fail with a
    * {@link PleaseThrottleException} (and they will fail-fast).
+   * 
    * @param rpc The RPC that failed or is going to fail with an NSRE.
    * @param region_name The name of the region this RPC is going to.
    * Obviously, this method cannot be used for RPCs that aren't targeted
    * at a particular region.
    * @param e The exception that caused (or may cause) this RPC to fail.
+   * @param remote_address The region client's server if applicable.
    */
   void handleNSRE(HBaseRpc rpc,
                   final byte[] region_name,
-                  final RecoverableException e) {
+                  final RecoverableException e,
+                  final String remote_address) {
     num_nsre_rpcs.increment();
     if (rpc.isProbe()) {
       rpc.setSuspendedProbe(true);
     }
     final boolean can_retry_rpc = !cannotRetryRequest(rpc);
+    
+    // Register a callback with each non-probe RPC so that if the RPC happens
+    // to resolve the NSRE, resolution is still recorded normally. The same
+    // deferred object is used for the RPC's lifetime, so we must only register
+    // the callback once, and this will be only on the first retry.
+    if (track_nsre_meta && !rpc.isProbe() && 
+        can_retry_rpc && 1 == rpc.attempt) {
+      // Note that we needn't register the object as the errback, as we're only
+      // interested in the non-exception case.
+      rpc.getDeferred().addCallback(new NSRECheckCallback(region_name, rpc));
+    }
+    
     boolean known_nsre = true;  // We already aware of an NSRE for this region?
     ArrayList<HBaseRpc> nsred_rpcs = got_nsre.get(region_name);
     HBaseRpc exists_rpc = null;  // Our "probe" RPC.
@@ -3595,6 +3644,43 @@ public final class HBaseClient {
     }
 
     num_nsres.increment();
+    
+    // Before invalidating the cache, we should record relevant information we
+    // presently know about the region. We'll use it later to determine what we
+    // think caused HBase to yield NSRE for that region.
+    if (track_nsre_meta) {
+      NSREMeta meta = null;
+      try {
+        final RegionInfo region_info = regions_cache.get(region_name);
+        if (null != region_info) {
+          meta = makeNSREMeta(region_name, region_info, e, remote_address);
+        }
+      } catch (final Exception exn) {
+        LOG.warn("Error when creating metadata object on NSRE detection", exn);
+      }
+
+      if (null == meta) {
+        LOG.warn("Failed to create NSRE metadata object for region: " +
+          Bytes.pretty(region_name));
+      } else {
+        // Successfully created metadata.
+        // Try to store it.
+        final NSREMeta prev_stored = region_to_nsre_meta.putIfAbsent(region_name,
+          meta);
+        if (null != prev_stored) {
+          // Another thread might already have detected this NSRE.
+          if (LOG.isDebugEnabled()) {
+            LOG.debug("Tried to store metadata about NSRE, but something was" +
+                " already there: " + prev_stored);
+          }
+        } else {
+          if (LOG.isDebugEnabled()) {
+            LOG.debug("Tracking new NSRE event: " + meta);
+          }
+        }
+      }
+    }
+    
     // Mark this region as being NSRE'd in our regions_cache.
     invalidateRegionCache(region_name, true, (known_nsre ? "still " : "")
                           + "seems to be splitting or closing it.");
@@ -3631,7 +3717,12 @@ public final class HBaseClient {
       public Object call(final Object arg) {
         if (arg instanceof Exception) {
           LOG.warn("Probe " + probe + " failed", (Exception) arg);
+        } else if (track_nsre_meta){
+          // Now that we think the NSRE was resolved, we can calculate how long
+          // it took, and we can try to figure out why it happened.
+          resolveNSRE(region_name, probe);
         }
+        
         ArrayList<HBaseRpc> removed = got_nsre.remove(region_name);
         if (removed != rpcs && removed != null) {  // Should never happen.
           synchronized (removed) {                 // But just in case...
@@ -3723,6 +3814,158 @@ public final class HBaseClient {
     newTimeout(new NSRETimer(), wait_ms);
   }
   
+  /**
+   * Determine reason for NSRE and record that information for later inspection.
+   * @param region_name The region for which the NSRE was resolved.
+   * @param resolving_rpc The RPC that resolved the NSRE.
+   */
+  void resolveNSRE(final byte[] region_name, final HBaseRpc resolving_rpc) {
+    final NSREMeta old_meta = region_to_nsre_meta.remove(region_name);
+    if (null == old_meta) {
+      LOG.warn("Couldn't find a previous NSRE meta entry for " +
+        Bytes.pretty(region_name));
+    } else {
+      if (LOG.isDebugEnabled()) {
+        LOG.debug("Trying to resove NSRE with rpc: " + resolving_rpc);
+        LOG.debug("Found an unresolved NSRE meta for this region: " +
+          Bytes.pretty(region_name));
+      }
+
+      // TODO: Why does catching an exception here resolve the mini-cluster
+      // region-crash test?
+      NSREMeta new_meta = null;
+      try {
+        final RegionInfo region_info = resolving_rpc.getRegion();
+        if (null != region_info) {
+          final RegionClient client = region2client.get(region_info);
+          final String remote_address = client != null ? 
+              client.getRemoteAddress() : "Unkown";
+          new_meta = makeNSREMeta(region_name, region_info, null, 
+              remote_address);
+        } else{
+          LOG.warn("Couldn't find new region info");
+        }
+      } catch (final Exception exn) {
+        LOG.error("Error when creating metadata object on NSRE resolution",
+          exn);
+      }
+
+      // In the logging below, null metadata is still meaningful.
+      if (LOG.isDebugEnabled()) {
+        final StringBuilder oss = new StringBuilder();
+        oss.append("NSRE resolved.\n")
+           .append("Old metadata: ").append(old_meta).append("\n")
+           .append("New metadata: ").append(new_meta).append("\n");
+        LOG.debug(oss.toString());
+      }
+
+      // But a null new_meta isn't meaningful when creating a descriptor.
+      if (null == new_meta) {
+        // For whatever reason, couldn't create new metadata.
+        LOG.warn("Failed to create NSRE metadata object following NSRE " +
+          "resolution, so dropping event.");
+      } else {
+        // We're the lucky winner. Build the resolution descriptor.
+        final NSREEvent event = new NSREEvent(region_name, old_meta,
+          new_meta);
+
+        // Attempt to store event descriptor.
+        if (!nsre_events.offer(event)) {
+          // No room, so free a spot. In effect, we're simulating a
+          // circular buffer.
+          final NSREEvent removed = nsre_events.poll();
+          if (null != removed) {
+            // This is all but guaranteed to be the case.
+            if (LOG.isDebugEnabled()) {
+              LOG.debug("To make room for new NSRE event, removed " +
+                "oldest event: " + removed);
+            }
+          }
+
+          // There should be room now, but we might lose the race.
+          if (!nsre_events.offer(event)) {
+            // Failed again, so give up.
+            LOG.warn("Could not store NSRE event, so dropping it: " +
+              event);
+          } else {
+            // Wow, we actually succeeded.
+            if (LOG.isDebugEnabled()) {
+              LOG.info("NSRE resolution stored: " + event);
+            }
+          }
+        } else {
+          // Wow, we actually succeeded.
+          if (LOG.isDebugEnabled()) {
+            LOG.debug("NSRE resolution stored: " + event);
+          }
+        }
+      }
+    }
+  }
+  
+  /**
+   * Callback for NSREd RPCs to determine whether the RPC resolved the NSRE.
+   */
+  final class NSRECheckCallback implements Callback<Object, Object> {
+    private final byte[] region_name;
+    private final HBaseRpc rpc;
+
+    NSRECheckCallback(final byte[] region_name, final HBaseRpc rpc) {
+      this.region_name = region_name;
+      this.rpc = rpc;
+    }
+
+    @Override
+    public Object call(final Object arg) {
+      // Now that we think the NSRE was resolved, we can calculate how long
+      // it took, and we can try to figure out why it happened.
+      resolveNSRE(region_name, rpc);
+
+      return arg;
+    }
+  }
+
+  /**
+   * Create an NSREMeta instance based on the client's present state.
+   * @param region_name the name of the region for which the NSRE was detected.
+   * @param region_info full description of the old or new region
+   * @param region_client the old or new region client hosting the region
+   * @param ex the original exception that triggered the NSRE
+   * @return an object describing the NSRE and associated region state, or null
+   * if anything went wrong.
+   */
+  NSREMeta makeNSREMeta(final byte[] region_name, final RegionInfo region_info, 
+      final RecoverableException ex, final String remote_address) {
+    // First off, remember the time at which this NSRE occurred.
+    final long nsre_time = System.currentTimeMillis();
+
+    // Fail early: ensure we have what we need.
+    if (null == region_info) {
+      // No info available.
+      LOG.warn("No information found for region: " + Bytes.pretty(region_name));
+      return null;
+    }
+    return new NSREMeta(nsre_time, remote_address, region_info, ex);
+  }
+
+  /**
+   * Retrieve a view into this client's NSRE event queue.
+   * @return an unmodifiable view into the NSRE event queue.
+   */
+  public Collection<NSREEvent> inspectNSREEvents() {
+    return Collections.unmodifiableCollection(nsre_events);
+  }
+
+  /**
+   * When this method returns, the NSRE event queue will have been flushed.
+   * @return all NSRE events recorded since the queue was last flushed.
+   */
+  public Collection<NSREEvent> flushNSREEvents() {
+    final List<NSREEvent> result = new LinkedList<NSREEvent>();
+    nsre_events.drainTo(result);
+    return result;
+  }
+
   /**
    * Some arbitrary junk that is unlikely to appear in a real row key.
    * @see probeKey

@@ -27,7 +27,13 @@ GUAVA_VERSION := 18.0
 GUAVA := third_party/guava/guava-$(GUAVA_VERSION).jar
 GUAVA_BASE_URL := http://central.maven.org/maven2/com/google/guava/guava/$(GUAVA_VERSION)
 
+GUAVA_TEST := third_party/guava/guava-testlib-$(GUAVA_VERSION).jar
+GUAVA_TEST_BASE_URL := http://central.maven.org/maven2/com/google/guava/guava-testlib/$(GUAVA_VERSION)
+
 $(GUAVA): $(GUAVA).md5
 	set dummy "$(GUAVA_BASE_URL)" "$(GUAVA)"; shift; $(FETCH_DEPENDENCY)
+	
+$(GUAVA_TEST): $(GUAVA_TEST).md5
+	set dummy "$(GUAVA_TESTBASE_URL)" "$(GUAVA_TEST)"; shift; $(FETCH_DEPENDENCY)
 
-THIRD_PARTY += $(GUAVA)
+THIRD_PARTY += $(GUAVA) $(GUAVA_TEST)

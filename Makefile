@@ -105,6 +105,8 @@ asynchbase_SOURCES := \
 	src/NoSuchColumnFamilyException.java	\
 	src/NonRecoverableException.java	\
 	src/NotServingRegionException.java	\
+	src/NSREEvent.java	\
+	src/NSREMeta.java	\
 	src/PleaseThrottleException.java	\
 	src/PutRequest.java	\
 	src/QualifierFilter.java	\
@@ -182,6 +184,8 @@ unittest_SRC := \
 	test/TestHBaseRpc.java	\
 	test/TestMETALookup.java	\
 	test/TestMultiAction.java	\
+	test/TestNSREEvent.java	\
+	test/TestNSREMeta.java	\
 	test/TestNSREs.java	\
 	test/TestPutRequest.java	\
 	test/TestRegionClient.java	\
@@ -201,6 +205,7 @@ unittest_SRC := \
 
 test_LIBADD := \
 	$(asynchbase_LIBADD)	\
+	$(GUAVA_TEST)	\
 	$(LOG4J_OVER_SLF4J)	\
 	$(LOGBACK_CLASSIC)	\
 	$(LOGBACK_CORE)	\
