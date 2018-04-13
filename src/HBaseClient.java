@@ -39,6 +39,9 @@ import org.apache.zookeeper.WatchedEvent;
 import org.apache.zookeeper.Watcher;
 import org.apache.zookeeper.ZooKeeper;
 import org.apache.zookeeper.data.Stat;
+import org.hbase.async.Scanner.CloseScannerRequest;
+import org.hbase.async.Scanner.GetNextRowsRequest;
+import org.hbase.async.Scanner.OpenScannerRequest;
 import org.hbase.async.generated.ZooKeeperPB;
 import org.jboss.netty.channel.ChannelEvent;
 import org.jboss.netty.channel.ChannelHandler;
@@ -430,6 +433,13 @@ public final class HBaseClient {
   /** Whether or not to split meta is in force. */
   protected boolean split_meta;
   
+  /** How many times to retry read RPCs. */
+  private final int read_rpc_retries;
+  
+  /** How many times to retry write RPCs. */
+  private final int mutation_rpc_retries;
+  
+  /** Whether or not increments are batched. */
   private boolean increment_buffer_durable = false;
   
   // ------------------------ //
@@ -575,6 +585,8 @@ public final class HBaseClient {
       split_meta = Boolean.parseBoolean(
           System.getProperty("hbase.meta.split", "false"));
     }
+    mutation_rpc_retries = read_rpc_retries = 
+        config.getInt("hbase.client.retries.number");
   }
   
   /**
@@ -647,6 +659,16 @@ public final class HBaseClient {
     } else {
       split_meta = Boolean.parseBoolean(
           System.getProperty("hbase.meta.split", "false"));
+    }
+    if (config.hasProperty("hbase.client.retries.reads.number")) {
+      read_rpc_retries = config.getInt("hbase.client.retries.reads.number");
+    } else {
+      read_rpc_retries = config.getInt("hbase.client.retries.number");
+    }
+    if (config.hasProperty("hbase.client.retries.mutations.number")) {
+      mutation_rpc_retries = config.getInt("hbase.client.retries.mutations.number");
+    } else {
+      mutation_rpc_retries = config.getInt("hbase.client.retries.number");
     }
   }
   
@@ -2536,7 +2558,13 @@ public final class HBaseClient {
    * already.
    */
   boolean cannotRetryRequest(final HBaseRpc rpc) {
-    return rpc.attempt > config.getInt("hbase.client.retries.number");
+    if (rpc instanceof GetRequest || 
+        rpc instanceof OpenScannerRequest ||
+        rpc instanceof GetNextRowsRequest ||
+        rpc instanceof CloseScannerRequest) {
+      return rpc.attempt > read_rpc_retries;
+    }
+    return rpc.attempt > mutation_rpc_retries;
   }
 
   /**
