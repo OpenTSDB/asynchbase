@@ -145,7 +145,13 @@ asynchbase_SOURCES := \
 	src/auth/Login.java	\
 	src/auth/SimpleClientAuthProvider.java	\
 	src/jsr166e/LongAdder.java	\
-	src/jsr166e/Striped64.java
+	src/jsr166e/Striped64.java	\
+	src/ratelimiter/DefaultRestrictionPolicyImpl.java	\
+	src/ratelimiter/LimitPolicy.java	\
+	src/ratelimiter/NotEnoughWritesException.java	\
+	src/ratelimiter/RateLimitPolicyImpl.java	\
+	src/ratelimiter/ThresholdLimitPolicyImpl.java	\
+	src/ratelimiter/WriteRateLimiter.java
 
 protobuf_SOURCES := src/protobuf/ZeroCopyLiteralByteString.java
 
@@ -180,6 +186,7 @@ unittest_SRC := \
 	test/TestPutRequest.java	\
 	test/TestRegionClient.java	\
 	test/TestRegionClientDecode.java	\
+	test/TestRegionClientRateLimit.java	\
 	test/TestRegionClientSendRpc.java	\
 	test/TestScanner.java	\
 	test/TestSecureRpcHelper.java	\
@@ -189,7 +196,8 @@ unittest_SRC := \
 	test/auth/MockProvider.java	\
 	test/auth/TestKerberosClientAuthProvider.java \
 	test/auth/TestLogin.java	\
-	test/auth/TestSimpleClientAuthProvider.java
+	test/auth/TestSimpleClientAuthProvider.java	\
+	test/ratelimiter/TestWriteRateLimiter.java	\
 
 test_LIBADD := \
 	$(asynchbase_LIBADD)	\

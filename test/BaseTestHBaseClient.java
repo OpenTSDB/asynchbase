@@ -302,7 +302,7 @@ public class BaseTestHBaseClient {
    * Tasks are called immediately from the current thread and a history of the
    * various tasks is logged.
    */
-  static final class FakeTimer extends HashedWheelTimer {
+  public static final class FakeTimer extends HashedWheelTimer {
     final List<Map.Entry<TimerTask, Long>> tasks = 
         new ArrayList<Map.Entry<TimerTask, Long>>();
     final ArrayList<Timeout> timeouts = new ArrayList<Timeout>();
@@ -349,7 +349,7 @@ public class BaseTestHBaseClient {
    * Here it will hold at most two Tasks. We have two tasks here because when
    * one is being executed, it may call for newTimeOut for another task.
    */
-  static final class FakeTaskTimer extends HashedWheelTimer {
+  public static final class FakeTaskTimer extends HashedWheelTimer {
 
     protected TimerTask newPausedTask = null;
     protected TimerTask pausedTask = null;

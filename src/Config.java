@@ -341,6 +341,26 @@ public class Config {
     default_map.put("hbase.ipc.client.tcpnodelay", "true");
     default_map.put("hbase.ipc.client.tcpkeepalive", "true");
     
+    // default rate limiter values
+    // Maximum write rate restriction per second, there will not be any 
+    // restriction after that
+    default_map.put("hbase.rpc.ratelimit.rate_max_threshold", "1000");//per sec
+    // Minimum allowed write rate restriction per second
+    default_map.put("hbase.rpc.ratelimit.rate_min_threshold", "10");//per sec
+    // Write rate will be decreased or increased by this value, in percentage
+    default_map.put("hbase.rpc.ratelimit.rate_of_change", "10");//in %
+    // Region server health will be analyzed again and recalculate write rate
+    // after this time frame, in milli seconds
+    default_map.put("hbase.rpc.ratelimit.time_frame", "60000");//in ms
+    // Enable or disable write limit
+    default_map.put("hbase.rpc.ratelimit.enable", "false");
+
+    // Minimum number of responses required to say the region is healthy, it is
+    // proportional to the number of write attempts within that time frame
+    default_map.put("hbase.rpc.ratelimit.policy.min_success_rate", "50");//in %
+    // Minimum number of write attempts required for rate limit calculation
+    default_map.put("hbase.rpc.ratelimit.policy.min_writes_req", "1000");
+    
     for (Map.Entry<String, String> entry : default_map.entrySet()) {
       if (!properties.containsKey(entry.getKey()))
         properties.put(entry.getKey(), entry.getValue());

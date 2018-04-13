@@ -32,6 +32,7 @@ import java.util.concurrent.ConcurrentHashMap;
 
 import org.hbase.async.HBaseRpc;
 import org.hbase.async.generated.RPCPB;
+import org.hbase.async.ratelimiter.WriteRateLimiter;
 import org.jboss.netty.buffer.ChannelBuffer;
 import org.jboss.netty.channel.Channel;
 import org.junit.Test;
@@ -397,6 +398,7 @@ public class TestRegionClient extends BaseTestRegionClient {
   @Test
   public void decodeHbase92orAboveRpcNotNull() throws Exception {
     RegionClient rclient = mock(RegionClient.class);
+    Whitebox.setInternalState(rclient, "rate_limiter", mock(WriteRateLimiter.class));
     ChannelBuffer buf = mock(ChannelBuffer.class);
     NotServingRegionException blowzup = mock(NotServingRegionException.class);
     HBaseRpc rpc = mock(HBaseRpc.class);
