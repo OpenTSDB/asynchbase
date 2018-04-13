@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2010-2012  The Async HBase Authors.  All rights reserved.
+ * Copyright (C) 2010-2018  The Async HBase Authors.  All rights reserved.
  * This file is part of Async HBase.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -180,12 +180,18 @@ public abstract class HBaseRpc {
     /** RPC method name to use with HBase 0.95+.  */
     static final byte[] MUTATE = { 'M', 'u', 't', 'a', 't', 'e' };
   }
+  
+  /** Whether or not the RPC should be traced. */
   private boolean trace_rpc;
 
+  /** @return Whether or not this is a traced RPC who's actions are logged
+   * to the trace log. */
   public boolean isTraceRPC() {
     return trace_rpc;
   }
 
+  /** @param trace_rpc Whether or not this is a traced RPC who's actions 
+   * are logged to the trace log. */
   public void setTraceRPC(boolean trace_rpc) {
     this.trace_rpc = trace_rpc;
   }

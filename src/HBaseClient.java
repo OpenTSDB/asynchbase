@@ -39,7 +39,6 @@ import org.apache.zookeeper.WatchedEvent;
 import org.apache.zookeeper.Watcher;
 import org.apache.zookeeper.ZooKeeper;
 import org.apache.zookeeper.data.Stat;
-import org.hbase.async.HBaseClient.NSRECheckCallback;
 import org.hbase.async.Scanner.CloseScannerRequest;
 import org.hbase.async.Scanner.GetNextRowsRequest;
 import org.hbase.async.Scanner.OpenScannerRequest;
@@ -216,7 +215,8 @@ public final class HBaseClient {
    */
 
   private static final Logger LOG = LoggerFactory.getLogger(HBaseClient.class);
-
+  private static final Logger TRACE_LOG = LoggerFactory.getLogger("Trace");
+  
   /**
    * An empty byte array you can use.  This can be useful for instance with
    * {@link Scanner#setStartKey} and {@link Scanner#setStopKey}.
@@ -907,8 +907,11 @@ public final class HBaseClient {
     }
     for (final ArrayList<HBaseRpc> nsred : got_nsre.values()) {
       synchronized (nsred) {
-        for (final HBaseRpc rpc : nsred) {
+        for (final HBaseRpc rpc : nsred) {          
           if (rpc instanceof HBaseRpc.IsEdit) {
+            if (rpc.isTraceRPC()) {
+              TRACE_LOG.info("Flushing RPC: " + rpc);
+            }
             d.add(rpc.getDeferred());
           }
         }
@@ -2472,6 +2475,10 @@ public final class HBaseClient {
    * de-serialized back from the network).
    */
   Deferred<Object> sendRpcToRegion(final HBaseRpc request) {
+    if (request.isTraceRPC()) {
+      TRACE_LOG.info("Sending RPC to region: " + request);
+    }
+    
     if (cannotRetryRequest(request)) {
       return tooManyAttempts(request, null);
     }
@@ -2617,6 +2624,11 @@ public final class HBaseClient {
     // one, throw a BrokenMetaException explaining where the hole is.
     final Exception e = new NonRecoverableException("Too many attempts: "
                                                     + request, cause);
+    
+    if (request.isTraceRPC()) {
+      TRACE_LOG.info("Too many attempts on RPC: " + request);
+    }
+    
     request.callback(e);
     return Deferred.fromError(e);
   }
@@ -3514,6 +3526,10 @@ public final class HBaseClient {
                   final RecoverableException e,
                   final String remote_address) {
     num_nsre_rpcs.increment();
+    if (rpc.isTraceRPC()) {
+      TRACE_LOG.info("Passed to NSRE handler: " + rpc);
+    }
+    
     if (rpc.isProbe()) {
       rpc.setSuspendedProbe(true);
     }
@@ -3735,6 +3751,10 @@ public final class HBaseClient {
             }
             for (final HBaseRpc r : removed) {
               if (r != null && r != probe) {
+                if (r.isTraceRPC()) {
+                  TRACE_LOG.info("Retrying previously NSREd that "
+                      + "was removed: " + r);
+                }
                 sendRpcToRegion(r);  // We screwed up but let's not lose RPCs.
               }
             }
@@ -3766,12 +3786,18 @@ public final class HBaseClient {
             }
             while (i.hasNext()) {
               if ((r = i.next()) != null) {
+                if (r.isTraceRPC()) {
+                  TRACE_LOG.info("Retrying after NSRE: " + r);
+                }
                 sendRpcToRegion(r);
               }
             }
           } else {
             // We avoided cyclic RPC chain
-            LOG.debug("Empty rpcs array=" + rpcs_to_replay + " found by " + this);
+            if (LOG.isDebugEnabled()) {
+              LOG.debug("Empty rpcs array=" + rpcs_to_replay 
+                  + " found by " + this);
+            }
           }
         }
 

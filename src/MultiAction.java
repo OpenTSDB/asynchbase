@@ -128,6 +128,9 @@ final class MultiAction extends HBaseRpc implements HBaseRpc.IsEdit {
           " is missing the region or region name");
     }
     batch.add(rpc);
+    if (rpc.isTraceRPC()) {
+      setTraceRPC(true);
+    }
   }
 
   /** Returns the list of individual RPCs that make up this batch.  */
