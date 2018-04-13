@@ -47,6 +47,8 @@ import java.net.UnknownHostException;
 import java.util.ArrayList;
 import java.util.Iterator;
 
+import org.hbase.async.Scanner.GetNextRowsRequest;
+import org.hbase.async.Scanner.OpenScannerRequest;
 import org.jboss.netty.channel.socket.ClientSocketChannelFactory;
 import org.junit.Before;
 import org.junit.Test;
@@ -574,5 +576,109 @@ public class TestHBaseClient extends BaseTestHBaseClient {
   @Test (expected = NullPointerException.class)
   public void discoverRegionNull() throws Exception {
     Whitebox.invokeMethod(client, "discoverRegion", (ArrayList<KeyValue>)null);
+  }
+
+  @Test
+  public void cannotRetryRequest() throws Exception {
+    // defaults
+    HBaseRpc rpc = new GetRequest(TABLE, KEY);
+    assertFalse(client.cannotRetryRequest(rpc));
+    rpc.attempt = 11;
+    assertTrue(client.cannotRetryRequest(rpc));
+    
+    Scanner scanner = client.newScanner(TABLE);
+    rpc = scanner.new OpenScannerRequest();
+    assertFalse(client.cannotRetryRequest(rpc));
+    rpc.attempt = 11;
+    assertTrue(client.cannotRetryRequest(rpc));
+    
+    rpc = scanner.new GetNextRowsRequest();
+    assertFalse(client.cannotRetryRequest(rpc));
+    rpc.attempt = 11;
+    assertTrue(client.cannotRetryRequest(rpc));
+    
+    rpc = new Scanner.CloseScannerRequest(0);
+    assertFalse(client.cannotRetryRequest(rpc));
+    rpc.attempt = 11;
+    assertTrue(client.cannotRetryRequest(rpc));
+    
+    rpc = new PutRequest(TABLE, KEY, FAMILY, QUALIFIER, VALUE);
+    assertFalse(client.cannotRetryRequest(rpc));
+    rpc.attempt = 11;
+    assertTrue(client.cannotRetryRequest(rpc));
+    
+    rpc = new AppendRequest(TABLE, KEY, FAMILY, QUALIFIER, VALUE);
+    assertFalse(client.cannotRetryRequest(rpc));
+    rpc.attempt = 11;
+    assertTrue(client.cannotRetryRequest(rpc));
+    
+    rpc = new AtomicIncrementRequest(TABLE, KEY, FAMILY, QUALIFIER, 1L);
+    assertFalse(client.cannotRetryRequest(rpc));
+    rpc.attempt = 11;
+    assertTrue(client.cannotRetryRequest(rpc));
+    
+    rpc = new CompareAndSetRequest(
+        new PutRequest(TABLE, KEY, FAMILY, QUALIFIER, KEY), KEY);
+    assertFalse(client.cannotRetryRequest(rpc));
+    rpc.attempt = 11;
+    assertTrue(client.cannotRetryRequest(rpc));
+    
+    rpc = new DeleteRequest(TABLE, KEY, FAMILY, QUALIFIER);
+    assertFalse(client.cannotRetryRequest(rpc));
+    rpc.attempt = 11;
+    assertTrue(client.cannotRetryRequest(rpc));
+    
+    Config config = new Config();
+    config.overrideConfig("asynchbase.zk.quorum", "127.0.0.1");
+    config.overrideConfig("hbase.client.retries.reads.number", "20");
+    config.overrideConfig("hbase.client.retries.mutations.number", "15");
+    client = new HBaseClient(config);
+    
+    rpc = new GetRequest(TABLE, KEY);
+    assertFalse(client.cannotRetryRequest(rpc));
+    rpc.attempt = 21;
+    assertTrue(client.cannotRetryRequest(rpc));
+    
+    scanner = client.newScanner(TABLE);
+    rpc = scanner.new OpenScannerRequest();
+    assertFalse(client.cannotRetryRequest(rpc));
+    rpc.attempt = 21;
+    assertTrue(client.cannotRetryRequest(rpc));
+    
+    rpc = scanner.new GetNextRowsRequest();
+    assertFalse(client.cannotRetryRequest(rpc));
+    rpc.attempt = 21;
+    assertTrue(client.cannotRetryRequest(rpc));
+    
+    rpc = new Scanner.CloseScannerRequest(0);
+    assertFalse(client.cannotRetryRequest(rpc));
+    rpc.attempt = 21;
+    assertTrue(client.cannotRetryRequest(rpc));
+    
+    rpc = new PutRequest(TABLE, KEY, FAMILY, QUALIFIER, VALUE);
+    assertFalse(client.cannotRetryRequest(rpc));
+    rpc.attempt = 16;
+    assertTrue(client.cannotRetryRequest(rpc));
+    
+    rpc = new AppendRequest(TABLE, KEY, FAMILY, QUALIFIER, VALUE);
+    assertFalse(client.cannotRetryRequest(rpc));
+    rpc.attempt = 16;
+    assertTrue(client.cannotRetryRequest(rpc));
+    
+    rpc = new AtomicIncrementRequest(TABLE, KEY, FAMILY, QUALIFIER, 1L);
+    assertFalse(client.cannotRetryRequest(rpc));
+    rpc.attempt = 16;
+    assertTrue(client.cannotRetryRequest(rpc));
+    
+    rpc = new CompareAndSetRequest(
+        new PutRequest(TABLE, KEY, FAMILY, QUALIFIER, KEY), KEY);
+    assertFalse(client.cannotRetryRequest(rpc));
+    rpc.attempt = 16;
+    assertTrue(client.cannotRetryRequest(rpc));
+    
+    rpc = new DeleteRequest(TABLE, KEY, FAMILY, QUALIFIER);
+    assertFalse(client.cannotRetryRequest(rpc));
+    rpc.attempt = 16;
+    assertTrue(client.cannotRetryRequest(rpc));
   }
 }

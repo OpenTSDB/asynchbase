@@ -652,12 +652,10 @@ final class TestNSREs extends BaseTestHBaseClient {
   @Test
   public void tooManyAttempts() throws Exception {
     // stack overflow if we don't set this due to mocking
-    client.getConfig().overrideConfig("hbase.client.retries.number", "2");
+    Whitebox.setInternalState(client, "read_rpc_retries", 2);
     
     // probes all fail but the trigger will succeed at one point
-    final FakeTimer timer = setupMultiNSRE(
-        client.getConfig().getInt("hbase.client.retries.number") + 2, 
-        client.getConfig().getInt("hbase.client.retries.number") + 2, true);
+    final FakeTimer timer = setupMultiNSRE(4, 4, true);
     
     Deferred<ArrayList<KeyValue>> triggerRpcDeferred = client.get(trigger);
 
