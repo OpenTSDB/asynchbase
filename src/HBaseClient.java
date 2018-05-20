@@ -3684,15 +3684,8 @@ public final class HBaseClient {
         return "probe NSRE " + probe;
       }
     };
-
-    // Linear backoff followed by exponential backoff.  Some NSREs can be
-    // resolved in a second or so, some seem to easily take ~6 seconds,
-    // sometimes more when a RegionServer has failed and the master is slowly
-    // splitting its logs and re-assigning its regions.
-    final int wait_ms = probe.attempt < 4
-      ? 200 * (probe.attempt + 2)     // 400, 600, 800, 1000
-      : 1000 + (1 << probe.attempt);  // 1016, 1032, 1064, 1128, 1256, 1512, ..
-    newTimeout(new NSRETimer(), wait_ms);
+    
+    newTimeout(new NSRETimer(), probe.getRetryDelay());
   }
   
   /**

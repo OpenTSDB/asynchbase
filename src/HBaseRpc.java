@@ -766,8 +766,7 @@ public abstract class HBaseRpc {
                                       final byte[][] qualifiers) {
     return toStringWithQualifiers(classname, family, qualifiers, null, "");
   }
-
-
+  
   /**
    * Helper for subclass's {@link #toString} implementations.
    * <p>
@@ -846,6 +845,18 @@ public abstract class HBaseRpc {
     return buf.toString();
   }
 
+  /** @return a delay in ms before retrying the RPC based on the number of 
+   * attempts made so far. It has a linear retry up to 1 second (4 attempts)
+   * then an exponential retry past that.
+   * Some NSREs can be resolved in a second or so, some seem to easily take ~6 
+   * seconds, sometimes more when a RegionServer has failed and the master is 
+   * slowly splitting its logs and re-assigning its regions. */
+  final int getRetryDelay() {
+    return attempt < 4
+        ? 200 * (attempt + 2)     // 400, 600, 800, 1000
+        : 1000 + (1 << attempt);  // 1016, 1032, 1064, 1128, 1256, 1512, ..
+  }
+  
   // --------------------- //
   // RPC utility functions //
   // --------------------- //

@@ -1534,6 +1534,41 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
       hbase_client.handleNSRE(rpc, rpc.getRegion().name(),
                               (RecoverableException) decoded);
       return null;
+    } else if (decoded instanceof RecoverableException && 
+        // RSSE could pop on a multi action in which case we want to pass it
+        // on to the multi action callback handler.
+        !(decoded instanceof RegionServerStoppedException && 
+            rpc instanceof MultiAction)) {
+      // retry a recoverable RPC that doesn't conform to the NSRE path
+      if (hbase_client.cannotRetryRequest(rpc)) {
+        return HBaseClient.tooManyAttempts(rpc, (RecoverableException) decoded);
+      }
+      
+      final class RetryTimer implements TimerTask {
+        public void run(final Timeout timeout) {
+          if (isAlive()) {
+            sendRpc(rpc);
+          } else {
+            if (rpc instanceof MultiAction) {
+              ((MultiAction) rpc).callback(decoded);
+            } else {
+              hbase_client.sendRpcToRegion(rpc);
+            }
+          }
+        }
+        @Override
+        public String toString() {
+          return "RPC Recoverable Retry Timer Task: " + rpc;
+        }
+      }
+      
+      if (rpc.timeout_handle != null) {
+        rpc.timeout_handle.cancel();
+        rpc.timeout_handle = null;
+      }
+      
+      hbase_client.newTimeout(new RetryTimer(), rpc.getRetryDelay());
+      return null;
     }
 
     try {
