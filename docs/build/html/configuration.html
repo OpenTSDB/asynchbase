@@ -1,28 +1,26 @@
 <!DOCTYPE html>
 
-
 <html xmlns="http://www.w3.org/1999/xhtml">
   <head>
     <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
-    
-    <title>Configuration &mdash; AsyncHBase 1.7 documentation</title>
-    
+    <title>Configuration &#8212; AsyncHBase 1.8 documentation</title>
     <link rel="stylesheet" href="_static/solar.css" type="text/css" />
     <link rel="stylesheet" href="_static/pygments.css" type="text/css" />
-    
     <script type="text/javascript">
       var DOCUMENTATION_OPTIONS = {
         URL_ROOT:    './',
-        VERSION:     '1.7',
+        VERSION:     '1.8',
         COLLAPSE_INDEX: false,
         FILE_SUFFIX: '.html',
-        HAS_SOURCE:  true
+        HAS_SOURCE:  true,
+        SOURCELINK_SUFFIX: '.txt'
       };
     </script>
     <script type="text/javascript" src="_static/jquery.js"></script>
     <script type="text/javascript" src="_static/underscore.js"></script>
     <script type="text/javascript" src="_static/doctools.js"></script>
-    <link rel="top" title="AsyncHBase 1.7 documentation" href="index.html" />
+    <link rel="index" title="Index" href="genindex.html" />
+    <link rel="search" title="Search" href="search.html" />
     <link rel="prev" title="Installation" href="installation.html" /><link href='http://fonts.googleapis.com/css?family=Source+Code+Pro|Open+Sans:300italic,400italic,700italic,400,300,700' rel='stylesheet' type='text/css'>
 <link href="_static/solarized-dark.css" rel="stylesheet">
 <script type="text/javascript">
@@ -38,7 +36,7 @@
   })();
 </script>
   </head>
-  <body role="document">
+  <body>
     <div class="related" role="navigation" aria-label="related navigation">
       <h3>Navigation</h3>
       <ul>
@@ -48,7 +46,7 @@
         <li class="right" >
           <a href="installation.html" title="Installation"
              accesskey="P">previous</a> |</li>
-        <li class="nav-item nav-item-0"><a href="index.html">AsyncHBase 1.7 documentation</a> &raquo;</li> 
+        <li class="nav-item nav-item-0"><a href="index.html">AsyncHBase 1.8 documentation</a> &#187;</li> 
       </ul>
     </div>
       <div class="sphinxsidebar" role="navigation" aria-label="main navigation">
@@ -68,14 +66,11 @@
 <div id="searchbox" style="display: none" role="search">
   <h3>Quick search</h3>
     <form class="search" action="search.html" method="get">
-      <input type="text" name="q" />
-      <input type="submit" value="Go" />
+      <div><input type="text" name="q" /></div>
+      <div><input type="submit" value="Go" /></div>
       <input type="hidden" name="check_keywords" value="yes" />
       <input type="hidden" name="area" value="default" />
     </form>
-    <p class="searchtip" style="font-size: 90%">
-    Enter search terms or a module, class or function name.
-    </p>
 </div>
 <script type="text/javascript">$('#searchbox').show(0);</script>
         </div>
@@ -94,7 +89,7 @@
 <div class="section" id="properties">
 <h2>Properties</h2>
 <p>The following is a table of configuration options for AsyncHBase. Some of the values share names in common with HBase's configs but may behave slightly differently. Be sure to read the notes associated with the config before proceeding.</p>
-<table border="1" class="docutils">
+<table border="1" class="colwidths-given docutils">
 <colgroup>
 <col width="20%" />
 <col width="5%" />
@@ -157,7 +152,17 @@
 <tr class="row-odd"><td>hbase.kerberos.regionserver.principal</td>
 <td>String</td>
 <td>A name or template to use as the principal for kerberos authentication. Instances of the string <code class="docutils literal"><span class="pre">_HOST</span></code> will be replaced with the host name of the client.</td>
-<td>&nbsp;</td>
+<td>&#160;</td>
+</tr>
+<tr class="row-even"><td>hbase.meta.scan</td>
+<td>Boolean</td>
+<td>Whether or not to force scanning for region server locations in Meta instead of using the older getClosestRowBefore() method to lookup a region. This is required for pre-release versions of HBase 2.0. For later versions of 2.x, HBase will throw an exception caught by AsyncHBase 1.8.2 and the client will automatically switch to scanning.</td>
+<td>false</td>
+</tr>
+<tr class="row-odd"><td>hbase.meta.split</td>
+<td>Boolean</td>
+<td>Whether or not experimental split-meta has been enabled on the HBase cluster.</td>
+<td>false</td>
 </tr>
 <tr class="row-even"><td>hbase.nsre.high_watermark</td>
 <td>Integer</td>
@@ -187,7 +192,7 @@
 <tr class="row-odd"><td>hbase.regionserver.kerberos.password</td>
 <td>String</td>
 <td>NOT RECOMMENDED OR TESTED: A password for the region server when authenticating via kerberos.</td>
-<td>&nbsp;</td>
+<td>&#160;</td>
 </tr>
 <tr class="row-even"><td>hbase.rpcs.batch.size</td>
 <td>Integer</td>
@@ -202,7 +207,7 @@
 <tr class="row-even"><td>hbase.rpc.protection</td>
 <td>String</td>
 <td>Whether or not to encrypt RPCs while they are traversing the network. May be <code class="docutils literal"><span class="pre">authentication</span></code> (no encryption), <code class="docutils literal"><span class="pre">integrity</span></code>, (no encryption) or <code class="docutils literal"><span class="pre">privacy</span></code> (encrypted). Requires authentication to be enabled.</td>
-<td>&nbsp;</td>
+<td>&#160;</td>
 </tr>
 <tr class="row-odd"><td>hbase.rpc.timeout</td>
 <td>Integer</td>
@@ -221,18 +226,18 @@
 </tr>
 <tr class="row-even"><td>hbase.security.auth.enable</td>
 <td>Boolean</td>
-<td>Whether or not to enable authentication when connecting to HBase. Please see ___TODO___ for more information.</td>
-<td>&nbsp;</td>
+<td>Whether or not to enable authentication when connecting to HBase. Please see <a class="reference internal" href="authentication.html"><span class="doc">Authentication</span></a> for more information.</td>
+<td>&#160;</td>
 </tr>
 <tr class="row-odd"><td>hbase.security.authentication</td>
 <td>String</td>
 <td>The type of authentication required for the HBase cluster. May be <code class="docutils literal"><span class="pre">kerberos</span></code> or <code class="docutils literal"><span class="pre">simple</span></code>.</td>
-<td>&nbsp;</td>
+<td>&#160;</td>
 </tr>
 <tr class="row-even"><td>hbase.security.simple.username</td>
 <td>String</td>
 <td>The user name for authenticating against an HBase cluster with simple authentication. (Not recommended)</td>
-<td>&nbsp;</td>
+<td>&#160;</td>
 </tr>
 <tr class="row-odd"><td>hbase.timer.tick</td>
 <td>Integer</td>
@@ -293,12 +298,12 @@ E.g. <code class="docutils literal"><span class="pre">192.168.1.1:2181,192.168.1
 <ul>
 <li><p class="first">Special characters must be escaped with a backslash include: <code class="docutils literal"><span class="pre">#</span></code>, <code class="docutils literal"><span class="pre">!</span></code>, <code class="docutils literal"><span class="pre">=</span></code>, and <code class="docutils literal"><span class="pre">:</span></code>
 E.g.:</p>
-<div class="highlight-python"><div class="highlight"><pre>my.property = Hello World\!
+<div class="highlight-default"><div class="highlight"><pre><span></span>my.property = Hello World\!
 </pre></div>
 </div>
 </li>
 <li><p class="first">Unicode characters must be escaped with their hexadecimal representation, e.g.:</p>
-<div class="highlight-python"><div class="highlight"><pre>my.property = \u0009
+<div class="highlight-default"><div class="highlight"><pre><span></span><span class="n">my</span><span class="o">.</span><span class="n">property</span> <span class="o">=</span> \<span class="n">u0009</span>
 </pre></div>
 </div>
 </li>
@@ -323,7 +328,7 @@ E.g.:</p>
         <li class="right" >
           <a href="installation.html" title="Installation"
              >previous</a> |</li>
-        <li class="nav-item nav-item-0"><a href="index.html">AsyncHBase 1.7 documentation</a> &raquo;</li> 
+        <li class="nav-item nav-item-0"><a href="index.html">AsyncHBase 1.8 documentation</a> &#187;</li> 
       </ul>
     </div>
     <div class="footer">

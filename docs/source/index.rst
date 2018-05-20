@@ -14,6 +14,7 @@ Contents
    new
    installation
    configuration
+   authentication
    
 
 Indices and tables

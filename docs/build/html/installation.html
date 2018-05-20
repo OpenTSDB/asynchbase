@@ -1,28 +1,26 @@
 <!DOCTYPE html>
 
-
 <html xmlns="http://www.w3.org/1999/xhtml">
   <head>
     <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
-    
-    <title>Installation &mdash; AsyncHBase 1.7 documentation</title>
-    
+    <title>Installation &#8212; AsyncHBase 1.8 documentation</title>
     <link rel="stylesheet" href="_static/solar.css" type="text/css" />
     <link rel="stylesheet" href="_static/pygments.css" type="text/css" />
-    
     <script type="text/javascript">
       var DOCUMENTATION_OPTIONS = {
         URL_ROOT:    './',
-        VERSION:     '1.7',
+        VERSION:     '1.8',
         COLLAPSE_INDEX: false,
         FILE_SUFFIX: '.html',
-        HAS_SOURCE:  true
+        HAS_SOURCE:  true,
+        SOURCELINK_SUFFIX: '.txt'
       };
     </script>
     <script type="text/javascript" src="_static/jquery.js"></script>
     <script type="text/javascript" src="_static/underscore.js"></script>
     <script type="text/javascript" src="_static/doctools.js"></script>
-    <link rel="top" title="AsyncHBase 1.7 documentation" href="index.html" />
+    <link rel="index" title="Index" href="genindex.html" />
+    <link rel="search" title="Search" href="search.html" />
     <link rel="next" title="Configuration" href="configuration.html" />
     <link rel="prev" title="What&#39;s New" href="new.html" /><link href='http://fonts.googleapis.com/css?family=Source+Code+Pro|Open+Sans:300italic,400italic,700italic,400,300,700' rel='stylesheet' type='text/css'>
 <link href="_static/solarized-dark.css" rel="stylesheet">
@@ -39,7 +37,7 @@
   })();
 </script>
   </head>
-  <body role="document">
+  <body>
     <div class="related" role="navigation" aria-label="related navigation">
       <h3>Navigation</h3>
       <ul>
@@ -52,7 +50,7 @@
         <li class="right" >
           <a href="new.html" title="What&#39;s New"
              accesskey="P">previous</a> |</li>
-        <li class="nav-item nav-item-0"><a href="index.html">AsyncHBase 1.7 documentation</a> &raquo;</li> 
+        <li class="nav-item nav-item-0"><a href="index.html">AsyncHBase 1.8 documentation</a> &#187;</li> 
       </ul>
     </div>
       <div class="sphinxsidebar" role="navigation" aria-label="main navigation">
@@ -80,14 +78,11 @@
 <div id="searchbox" style="display: none" role="search">
   <h3>Quick search</h3>
     <form class="search" action="search.html" method="get">
-      <input type="text" name="q" />
-      <input type="submit" value="Go" />
+      <div><input type="text" name="q" /></div>
+      <div><input type="submit" value="Go" /></div>
       <input type="hidden" name="check_keywords" value="yes" />
       <input type="hidden" name="area" value="default" />
     </form>
-    <p class="searchtip" style="font-size: 90%">
-    Enter search terms or a module, class or function name.
-    </p>
 </div>
 <script type="text/javascript">$('#searchbox').show(0);</script>
         </div>
@@ -121,10 +116,10 @@
 <li>Maven (Optional)</li>
 </ul>
 <p>Download the latest version using <code class="docutils literal"><span class="pre">git</span> <span class="pre">clone</span></code> command or download a release from the site or Github. Then cd into the repo's directory and <code class="docutils literal"><span class="pre">git</span> <span class="pre">checkout</span> <span class="pre">&lt;branch&gt;</span></code> the proper branch you want to build from. Then just run <code class="docutils literal"><span class="pre">make</span></code>.</p>
-<div class="highlight-python"><div class="highlight"><pre>git clone git://github.com/OpenTSDB/asynchbase.git
-cd asynchbase
-make
-ls build
+<div class="highlight-default"><div class="highlight"><pre><span></span><span class="n">git</span> <span class="n">clone</span> <span class="n">git</span><span class="p">:</span><span class="o">//</span><span class="n">github</span><span class="o">.</span><span class="n">com</span><span class="o">/</span><span class="n">OpenTSDB</span><span class="o">/</span><span class="n">asynchbase</span><span class="o">.</span><span class="n">git</span>
+<span class="n">cd</span> <span class="n">asynchbase</span>
+<span class="n">make</span>
+<span class="n">ls</span> <span class="n">build</span>
 </pre></div>
 </div>
 <p>If compilation was successful, you should have a jar file in <code class="docutils literal"><span class="pre">./build</span></code> that you can include in your project. Jars that AsyncHBase depends on are downloaded to the <code class="docutils literal"><span class="pre">third_party/</span></code> sub directories under the main repo directory.</p>
@@ -170,7 +165,7 @@ ls build
         <li class="right" >
           <a href="new.html" title="What&#39;s New"
              >previous</a> |</li>
-        <li class="nav-item nav-item-0"><a href="index.html">AsyncHBase 1.7 documentation</a> &raquo;</li> 
+        <li class="nav-item nav-item-0"><a href="index.html">AsyncHBase 1.8 documentation</a> &#187;</li> 
       </ul>
     </div>
     <div class="footer">
