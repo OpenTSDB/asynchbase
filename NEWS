@@ -1,6 +1,18 @@
 AsyncHBase - User visible and noteworthy changes.
 This project uses Semantic Versioning (see http://semver.org/).
 
+* Version 1.8.2 (2018-05-19)
+
+This is a bug fix release with one beta feature.
+  - Fix a possible issue with the security config when spaces are present in the
+    authentication type.
+  - Add beta support for split-meta from HBASE-11288 for large, multi-tenant
+    clusters. The table names may change in the future.
+  - Auto-detect HBase 2.0 by catching an exception thrown when getClosestRowOrBefore
+    is called. HBASE-20237.
+  - Log the version setting, min and max timestamps in Scanners.
+  - Add CallQueueTooBig retry handling in the RegionClient without NSREing.
+
 * Version 1.8.1 (2018-03-18)
 
 This is a bug fix release.
