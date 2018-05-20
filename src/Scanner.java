@@ -1061,9 +1061,13 @@ public final class Scanner {
     buf.append("}, populate_blockcache=").append(populate_blockcache)
       .append(", max_num_rows=").append(max_num_rows)
       .append(", max_num_kvs=").append(max_num_kvs)
+      .append(", versions=").append(versions)
       .append(", region=").append(region)
-      .append(", filter=").append(filter);
-    buf.append(", scanner_id=").append(Bytes.hex(scanner_id))
+      .append(", filter=").append(filter)
+      .append(", scanner_id=").append(Bytes.hex(scanner_id))
+      // TODO allocation for the other bits
+      .append(", minTimestamp=").append(min_timestamp)
+      .append(", maxTimestamp=").append(max_timestamp)
       .append(')');
     return buf.toString();
   }
