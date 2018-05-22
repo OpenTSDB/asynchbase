@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+
+<html xmlns="http://www.w3.org/1999/xhtml">
+  <head>
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+    <title>Authentication &#8212; AsyncHBase 1.8 documentation</title>
+    <link rel="stylesheet" href="_static/solar.css" type="text/css" />
+    <link rel="stylesheet" href="_static/pygments.css" type="text/css" />
+    <script type="text/javascript">
+      var DOCUMENTATION_OPTIONS = {
+        URL_ROOT:    './',
+        VERSION:     '1.8',
+        COLLAPSE_INDEX: false,
+        FILE_SUFFIX: '.html',
+        HAS_SOURCE:  true,
+        SOURCELINK_SUFFIX: '.txt'
+      };
+    </script>
+    <script type="text/javascript" src="_static/jquery.js"></script>
+    <script type="text/javascript" src="_static/underscore.js"></script>
+    <script type="text/javascript" src="_static/doctools.js"></script>
+    <link rel="index" title="Index" href="genindex.html" />
+    <link rel="search" title="Search" href="search.html" /><link href='http://fonts.googleapis.com/css?family=Source+Code+Pro|Open+Sans:300italic,400italic,700italic,400,300,700' rel='stylesheet' type='text/css'>
+<link href="_static/solarized-dark.css" rel="stylesheet">
+<script type="text/javascript">
+  var _gaq = _gaq || [];
+  _gaq.push(['_setAccount', 'UA-18339382-1']);
+  _gaq.push(['_setDomainName', 'none']);
+  _gaq.push(['_setAllowLinker', true]);
+  _gaq.push(['_trackPageview']);
+  (function() {
+    var ga = document.createElement('script'); ga.type = 'text/javascript'; ga.async = true;
+    ga.src = ('https:' == document.location.protocol ? 'https://ssl' : 'http://www') + '.google-analytics.com/ga.js';
+    var s = document.getElementsByTagName('script')[0]; s.parentNode.insertBefore(ga, s);
+  })();
+</script>
+  </head>
+  <body>
+    <div class="related" role="navigation" aria-label="related navigation">
+      <h3>Navigation</h3>
+      <ul>
+        <li class="right" style="margin-right: 10px">
+          <a href="genindex.html" title="General Index"
+             accesskey="I">index</a></li>
+        <li class="nav-item nav-item-0"><a href="index.html">AsyncHBase 1.8 documentation</a> &#187;</li> 
+      </ul>
+    </div>
+      <div class="sphinxsidebar" role="navigation" aria-label="main navigation">
+        <div class="sphinxsidebarwrapper">
+<div id="searchbox" style="display: none" role="search">
+  <h3>Quick search</h3>
+    <form class="search" action="search.html" method="get">
+      <div><input type="text" name="q" /></div>
+      <div><input type="submit" value="Go" /></div>
+      <input type="hidden" name="check_keywords" value="yes" />
+      <input type="hidden" name="area" value="default" />
+    </form>
+</div>
+<script type="text/javascript">$('#searchbox').show(0);</script>
+        </div>
+      </div>
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          <div class="body" role="main">
+            
+  <div class="section" id="authentication">
+<h1>Authentication</h1>
+<p>HBase supports Kerberos and simple client authentication to the cluster. It also supports optional encryption of network payloads.</p>
+<p>The recommended means of authenticating with HBase is through Kerberos. There are numberous guides available to help set up Kerberos with HBase and if you use a distibution from a vendor, they may have scripts to help you with the configuration.</p>
+<p>For the AsyncHBase, some parameters must be set, passed in via the <code class="docutils literal"><span class="pre">Config</span></code> object.</p>
+<ul class="simple">
+<li><code class="docutils literal"><span class="pre">hbase.security.auth.enable</span></code> must be set to <code class="docutils literal"><span class="pre">true</span></code> in order for authentication to work.</li>
+<li><code class="docutils literal"><span class="pre">hbase.security.authentication</span></code> must be set to <code class="docutils literal"><span class="pre">kerberos</span></code>.</li>
+<li><code class="docutils literal"><span class="pre">hbase.sasl.clientconfig</span></code> must be set to an entry in a JAAS config file as documented below.</li>
+<li><code class="docutils literal"><span class="pre">hbase.kerberos.regionserver.principal</span></code> must be set. Instances of <code class="docutils literal"><span class="pre">_HOST</span></code> will be replaced with a host name. E.g. a setting may look like <code class="docutils literal"><span class="pre">tsd.storage.kerberos.principal=myhbaseuser/_HOST&#64;MY.HADOOP.DOMAIN</span></code></li>
+<li>Optionally, <code class="docutils literal"><span class="pre">hbase.security.authentication</span></code> may be set to <code class="docutils literal"><span class="pre">protected</span></code> if you require RPC encryption (the payload over the network will be encrypted). By default the payload is not encrypted.</li>
+<li>It <em>may</em> be possible to set <code class="docutils literal"><span class="pre">hbase.regionserver.kerberos.password</span></code> with the password but we haven't tested that yet. Instead it's preferred to use a <em>keytab</em> file that contains the kerberos user credentials.</li>
+</ul>
+<p>An additional JVM flag must be passed to the application running the AsyncHBase client. The <code class="docutils literal"><span class="pre">java.security.auth.login.config</span></code> parameter is required with a value pointing to a JAAS config file as in:</p>
+<div class="highlight-default"><div class="highlight"><pre><span></span><span class="n">Client</span> <span class="p">{</span>
+  <span class="n">com</span><span class="o">.</span><span class="n">sun</span><span class="o">.</span><span class="n">security</span><span class="o">.</span><span class="n">auth</span><span class="o">.</span><span class="n">module</span><span class="o">.</span><span class="n">Krb5LoginModule</span> <span class="n">required</span>
+  <span class="n">useKeyTab</span><span class="o">=</span><span class="n">true</span>
+  <span class="n">useTicketCache</span><span class="o">=</span><span class="n">false</span>
+  <span class="n">keyTab</span><span class="o">=</span><span class="s2">&quot;/path/to/keytab.keytab&quot;</span>
+  <span class="n">principal</span><span class="o">=</span><span class="s2">&quot;myhbaseuser@MY.HADOOP.DOMAIN&quot;</span><span class="p">;</span>
+<span class="p">};</span>
+</pre></div>
+</div>
+<p>Make sure that the file specified in the <code class="docutils literal"><span class="pre">keyTab</span></code> parameter is present on the host.</p>
+<p>Additionally, if the Zookeeper cluster is not secured with Kerberos, pass in <code class="docutils literal"><span class="pre">zookeeper.sasl.client=false</span></code> as a JVM argument.</p>
+</div>
+
+
+          </div>
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="related" role="navigation" aria-label="related navigation">
+      <h3>Navigation</h3>
+      <ul>
+        <li class="right" style="margin-right: 10px">
+          <a href="genindex.html" title="General Index"
+             >index</a></li>
+        <li class="nav-item nav-item-0"><a href="index.html">AsyncHBase 1.8 documentation</a> &#187;</li> 
+      </ul>
+    </div>
+    <div class="footer">
+        &copy; Copyright 2015, AsyncHBase.
+    Created using <a href="http://sphinx.pocoo.org/">Sphinx</a>. Theme by <a href="http://github.com/vkvn">vkvn</a>
+    </div>
+  </body>
+</html>
