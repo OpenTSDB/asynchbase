@@ -121,7 +121,10 @@ public final class ClientStats {
 
   /**
    * Returns the number of connections to region servers that were closed
-   * due to being idle past the "hbase.hbase.ipc.client.connection.idle_timeout"
+   * due to being idle past one of
+   * "hbase.hbase.ipc.client.connection.idle_timeout",
+   * "hbase.ipc.client.connection.idle_read_timeout", or
+   * "hbase.ipc.client.connection.idle_write_timeout"
    * value. 
    * @return The number of idle connections over time
    * @since 1.7
