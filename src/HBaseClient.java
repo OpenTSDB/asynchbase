@@ -3820,8 +3820,10 @@ public final class HBaseClient {
     private final ChannelHandler timeout_handler;
     
     RegionClientPipeline() {
-      timeout_handler = new IdleStateHandler(timer, 0, 0, 
-          config.getInt("hbase.hbase.ipc.client.connection.idle_timeout"));
+        timeout_handler = new IdleStateHandler(timer,
+                config.getInt("hbase.ipc.client.connection.idle_read_timeout"),
+                config.getInt("hbase.ipc.client.connection.idle_write_timeout"),
+                config.getInt("hbase.hbase.ipc.client.connection.idle_timeout"));
     }
 
     /**
@@ -3922,21 +3924,19 @@ public final class HBaseClient {
     @Override
     public void channelIdle(ChannelHandlerContext ctx, IdleStateEvent e)
             throws Exception {
-      if (e.getState() == IdleState.ALL_IDLE) {
-        idle_connections_closed.increment();
-        LOG.info("Closing idle connection to HBase region server: " 
-            + e.getChannel());
-        // RegionClientPipeline's disconnect method will handle cleaning up
-        // any outstanding RPCs and removing the client from caches
-        try {
-          e.getChannel().close();
-        } catch (Exception ex) {
-          // This handler may be called after a channel has entered an odd state
-          // or already been closed. If it has been closed properly, then ignore
-          // the exception, otherwise throw it.
-          if (!(ex instanceof ClosedChannelException)) {
-            throw ex;
-          }
+      idle_connections_closed.increment();
+      LOG.info("Closing idle (" + e.getState().name() +
+              ") connection to HBase region server: " + e.getChannel());
+      // RegionClientPipeline's disconnect method will handle cleaning up
+      // any outstanding RPCs and removing the client from caches
+      try {
+        e.getChannel().close();
+      } catch (Exception ex) {
+        // This handler may be called after a channel has entered an odd state
+        // or already been closed. If it has been closed properly, then ignore
+        // the exception, otherwise throw it.
+        if (!(ex instanceof ClosedChannelException)) {
+          throw ex;
         }
       }
     }
