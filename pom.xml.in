@@ -322,6 +322,13 @@
       <scope>test</scope>
     </dependency>
 
+    <dependency>
+      <groupId>org.slf4j</groupId>
+      <artifactId>slf4j-nop</artifactId>
+      <version>@SLF4J_NOP_VERSION@</version>
+      <scope>test</scope>
+    </dependency>
+
   </dependencies>
 
   <properties>
