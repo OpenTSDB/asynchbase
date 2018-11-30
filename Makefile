@@ -136,6 +136,7 @@ asynchbase_SOURCES := \
 	src/SubstringComparator.java	\
 	src/TableNotFoundException.java	\
 	src/TimestampsFilter.java	\
+	src/UnknownProtocolException.java	\
 	src/UnknownRowLockException.java	\
 	src/UnknownScannerException.java	\
 	src/ValueFilter.java	\
