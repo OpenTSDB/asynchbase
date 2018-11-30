@@ -162,6 +162,7 @@ public class BaseTestHBaseClient {
     client = PowerMockito.spy(new HBaseClient("test-quorum-spec"));
     Whitebox.setInternalState(client, "zkclient", zkclient);
     Whitebox.setInternalState(client, "rootregion", rootclient);
+    Whitebox.setInternalState(client, "jitter_percent", 0);
     regions_cache = Whitebox.getInternalState(client, "regions_cache");
     region2client = Whitebox.getInternalState(client, "region2client");
     client2regions = Whitebox.getInternalState(client, "client2regions");
