@@ -55,7 +55,6 @@ import org.jboss.netty.channel.socket.nio.NioChannelConfig;
 import org.jboss.netty.channel.socket.nio.NioClientBossPool;
 import org.jboss.netty.channel.socket.nio.NioClientSocketChannelFactory;
 import org.jboss.netty.channel.socket.nio.NioWorkerPool;
-import org.jboss.netty.handler.timeout.IdleState;
 import org.jboss.netty.handler.timeout.IdleStateAwareChannelHandler;
 import org.jboss.netty.handler.timeout.IdleStateEvent;
 import org.jboss.netty.handler.timeout.IdleStateHandler;
@@ -82,6 +81,7 @@ import java.util.Iterator;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
+import java.util.Random;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
@@ -223,6 +223,9 @@ public final class HBaseClient {
    */
   public static final byte[] EMPTY_ARRAY = new byte[0];
 
+  /** A random generator used for jitter. */
+  public static Random RANDOM = new Random(System.nanoTime());
+  
   /** A byte array containing a single zero byte.  */
   private static final byte[] ZERO_ARRAY = new byte[] { 0 };
 
@@ -446,6 +449,9 @@ public final class HBaseClient {
   /** Default RPC timeout in milliseconds from the config */
   private final int rpc_timeout;
 
+  /** An optional jitter percentage used when retrying RPCs. */
+  protected final int jitter_percent;
+
   /** Whether or not we have to scan meta instead of making getClosestBeforeRow calls. */
   private volatile boolean scan_meta;
   
@@ -589,6 +595,7 @@ public final class HBaseClient {
     increment_buffer_size = config.getInt("hbase.increments.buffer_size");
     nsre_low_watermark = config.getInt("hbase.nsre.low_watermark");
     nsre_high_watermark = config.getInt("hbase.nsre.high_watermark");
+    jitter_percent = config.getInt("hbase.rpcs.jitter");
     if (config.properties.containsKey("hbase.increments.durable")) {
       increment_buffer_durable = config.getBoolean("hbase.increments.durable");
     }
@@ -667,6 +674,8 @@ public final class HBaseClient {
     increment_buffer_size = config.getInt("hbase.increments.buffer_size");
     nsre_low_watermark = config.getInt("hbase.nsre.low_watermark");
     nsre_high_watermark = config.getInt("hbase.nsre.high_watermark");
+    jitter_percent = config.getInt("hbase.rpcs.jitter");
+    
     if (config.properties.containsKey("hbase.increments.durable")) {
       increment_buffer_durable = config.getBoolean("hbase.increments.durable");
     }
@@ -3830,14 +3839,7 @@ public final class HBaseClient {
       }
     };
 
-    // Linear backoff followed by exponential backoff.  Some NSREs can be
-    // resolved in a second or so, some seem to easily take ~6 seconds,
-    // sometimes more when a RegionServer has failed and the master is slowly
-    // splitting its logs and re-assigning its regions.
-    final int wait_ms = probe.attempt < 4
-      ? 200 * (probe.attempt + 2)     // 400, 600, 800, 1000
-      : 1000 + (1 << probe.attempt);  // 1016, 1032, 1064, 1128, 1256, 1512, ..
-    newTimeout(new NSRETimer(), wait_ms);
+    newTimeout(new NSRETimer(), probe.getRetryDelay(jitter_percent));
   }
   
   /**

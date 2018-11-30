@@ -29,6 +29,7 @@ package org.hbase.async;
 import java.io.IOException;
 import java.util.concurrent.TimeUnit;
 
+import com.google.common.annotations.VisibleForTesting;
 import com.google.protobuf.AbstractMessageLite;
 import com.google.protobuf.CodedOutputStream;
 import com.google.protobuf.InvalidProtocolBufferException;
@@ -59,7 +60,7 @@ import com.stumbleupon.async.Deferred;
  * unnecessary memory copies when you know you won't be changing (or event
  * holding a reference to) the byte array, which is frequently the case.
  */
-public abstract class HBaseRpc {
+public abstract class HBaseRpc implements TimerTask {
   private static final Logger LOG = LoggerFactory.getLogger(HBaseRpc.class);
   
   /**
@@ -382,9 +383,10 @@ public abstract class HBaseRpc {
    * will be invoked with an {@link Object} containing the de-serialized
    * RPC response in argument.
    * Once an RPC has been used, we create a new Deferred for it, in case
-   * the user wants to re-use it.
+   * the user wants to re-use it. This field is marked volatile to make sure we
+   * force a cache skip from different threads.
    */
-  private Deferred<Object> deferred;
+  private volatile Deferred<Object> deferred;
 
   // The next 3 fields are package-private so subclasses can access them
   // without them being part of the interface (unlike with `protected').
@@ -436,13 +438,6 @@ public abstract class HBaseRpc {
   /** If the RPC has a timeout set this will be set on submission to the 
    * timer thread. */
   Timeout timeout_handle; // package-private for RegionClient and HBaseClient only.
-  
-  /** Task set if a timeout has been requested. The task will be executed only
-   * if the RPC did timeout, then we mark {@link #has_timedout} as true and
-   * remove the RPC from the region client as well as calling it back with
-   * a {@link RpcTimedoutException}
-   */
-  private TimerTask timeout_task;
   
   /** Whether or not this RPC has timed out already */
   private boolean has_timedout;
@@ -601,10 +596,19 @@ public abstract class HBaseRpc {
 
   /** Package private way of accessing / creating the Deferred of this RPC.  */
   final Deferred<Object> getDeferred() {
-    if (deferred == null) {
-      deferred = new Deferred<Object>();
+    // Eliminate extra read on volatile field if already set.
+    Deferred<Object> result = deferred;
+    if (null == result) {
+      synchronized (this) {
+        // Eliminate extra read on volatile field if we lose race.
+        result = deferred;
+        if (null == result) {
+          deferred = result = new Deferred<Object>();
+        }
+      }
     }
-    return deferred;
+
+    return result;
   }
 
   /**
@@ -616,39 +620,36 @@ public abstract class HBaseRpc {
    * <p>
    * If this run method throws an exception or the Deferred callback does, then
    * it will be caught and logged by Netty's timer executor.
+   * 
+   * TODO ARG I Wish this wasn't public.
    */
-  private final class TimeoutTask implements TimerTask { 
-    @Override
-    public void run(final Timeout time_out) throws Exception {
-      synchronized (HBaseRpc.this) {
-        if (has_timedout) {
-          throw new IllegalStateException(
-              "This RPC has already timed out " + HBaseRpc.this);
-        }
-        has_timedout = true;
+  @Override
+  public void run(final Timeout time_out) throws Exception {
+    synchronized (this) {
+      if (has_timedout) {
+        throw new IllegalStateException(
+            "This RPC has already timed out " + HBaseRpc.this);
       }
-      
+      has_timedout = true;
       if (timeout_handle == null) {
         LOG.error("Received a timeout handle " + time_out 
-            + " but this RPC did not have one " + this);
+            + " but this RPC did not have one: " + timeout_handle);
       }
       if (time_out != timeout_handle) {
-        LOG.error("Receieved a timeout handle " + time_out + 
-            " that doesn't match our own " + this);
+        LOG.error("Received a timeout handle " + time_out + 
+            " that doesn't match our own: " + timeout_handle);
       }
       if (region_client == null) {
         LOG.error("Somehow the region client was null when timing out RPC " 
-            + this);
+            + HBaseRpc.this);
       } else {
-        region_client.removeRpc(HBaseRpc.this, true);
+        region_client.removeRpc(this, true);
       }
-      
-      callback(new RpcTimedOutException("RPC ID [" + rpc_id + 
-          "] timed out waiting for response from HBase on region client [" + 
-          region_client + " ] for over " + timeout + "ms", HBaseRpc.this));
-      timeout_task = null;
-      timeout_handle = null;
-    }
+    } // release BEFORE calling back
+    
+    callback(new RpcTimedOutException("RPC ID [" + rpc_id + 
+        "] timed out waiting for response from HBase on region client [" + 
+        region_client + " ] for over " + timeout + "ms", this));
   }
   
   /**
@@ -661,27 +662,29 @@ public abstract class HBaseRpc {
    * @param region_client The region client that sent the RPC over the wire.
    * @throws IllegalStateException if the RPC has already timed out.
    */
-  void enqueueTimeout(final RegionClient region_client) {
+  synchronized void enqueueTimeout(final RegionClient region_client) {
     // TODO - it's possible that we may actually retry a timed out RPC in which
     // case we want to allow this.
     if (has_timedout) {
       throw new IllegalStateException("This RPC has already timed out " + this);
+    }
+    if (region_client != this.region_client) {
+      throw new IllegalStateException("A different region client: " 
+          + region_client + " from the one who assigned the id: " 
+          + this.region_client + " tried to send an RPC. This should "
+          + "never happen.");
     }
     if (timeout == -1) {
       timeout = region_client.getHBaseClient().getDefaultRpcTimeout();
     }
     if (timeout > 0) {
       this.region_client = region_client;
-      if (timeout_task == null) {
-        // we can re-use the task if this RPC is sent to another region server
-        timeout_task = new TimeoutTask();
-      }
       try {
         if (timeout_handle != null) {
           LOG.warn("RPC " + this + " had a previous timeout task");
         }
         timeout_handle = region_client.getHBaseClient().getRpcTimeoutTimer()
-            .newTimeout(timeout_task, timeout, TimeUnit.MILLISECONDS);
+            .newTimeout(this, timeout, TimeUnit.MILLISECONDS);
       } catch (IllegalStateException e) {
         // This can happen if the timer fires just before shutdown()
         // is called from another thread, and due to how threads get
@@ -701,6 +704,18 @@ public abstract class HBaseRpc {
     return has_timedout;
   }
   
+  /** Cancels the timeout handle if it's been set */
+  final synchronized void cancelTimeout() {
+    if (timeout_handle != null) {
+      try {
+        timeout_handle.cancel();
+      } catch (Exception e) {
+        LOG.error("Failed to cancel timeout for RPC: " + this);
+      }
+      timeout_handle = null;
+    }
+  }
+  
   /**
    * Package private way of making an RPC complete by giving it its result.
    * If this RPC has no {@link Deferred} associated to it, nothing will
@@ -711,11 +726,7 @@ public abstract class HBaseRpc {
    * RPC to be in-flight (guaranteeing this may be hard in error cases).
    */
   final void callback(final Object result) {
-    if (timeout_handle != null) {
-      timeout_handle.cancel();
-      timeout_task = null;
-      timeout_handle = null;
-    }
+    cancelTimeout();
     
     final Deferred<Object> d = deferred;
     if (d == null) {
@@ -731,6 +742,16 @@ public abstract class HBaseRpc {
     return deferred != null;
   }
 
+  /** @return The current ID of this RPC for the {@link #regionClient()}. */
+  final int rpcId() {
+    return rpc_id;
+  }
+  
+  /** @return The region client curently handling this RPC. */
+  final RegionClient regionClient() {
+    return region_client;
+  }
+  
   public String toString() {
     // Try to rightsize the buffer.
     final String method = new String(this.method((byte) 0));
@@ -751,10 +772,14 @@ public abstract class HBaseRpc {
     } else {
       region.toStringbuf(buf);
     }
-    buf.append(", attempt=").append(attempt)
-       .append(", timeout=").append(timeout)
-       .append(", hasTimedout=").append(has_timedout);
-    buf.append(')');
+    buf.append(", rpcId=").append(rpc_id)
+    .append(", regionClient=").append(region_client)
+    .append(", attempt=").append(attempt)
+    .append(", timeout=").append(timeout)
+    .append(", hasTimedout=").append(has_timedout)
+    .append(", timeoutHandle=").append(timeout_handle == null ? 
+        null : "@" + System.identityHashCode(timeout_handle))
+    .append(')');
     return buf.toString();
   }
 
@@ -772,7 +797,6 @@ public abstract class HBaseRpc {
                                       final byte[][] qualifiers) {
     return toStringWithQualifiers(classname, family, qualifiers, null, "");
   }
-
 
   /**
    * Helper for subclass's {@link #toString} implementations.
@@ -812,7 +836,13 @@ public abstract class HBaseRpc {
     } else {
       region.toStringbuf(buf);
     }
-    buf.append(')');
+    buf.append(", rpcId=").append(rpc_id)
+    .append(", regionClient=").append(region_client)
+    .append(", timeout=").append(timeout)
+    .append(", hasTimedout=").append(has_timedout)
+    .append(", timeoutHandle=").append(timeout_handle == null ? 
+        null : "@" + System.identityHashCode(timeout_handle))
+    .append(')');
     return buf.toString();
   }
 
@@ -848,10 +878,75 @@ public abstract class HBaseRpc {
     } else {
       region.toStringbuf(buf);
     }
-    buf.append(')');
+    buf.append(", rpcId=").append(rpc_id)
+    .append(", regionClient=").append(region_client)
+    .append(", timeout=").append(timeout)
+    .append(", hasTimedout=").append(has_timedout)
+    .append(", timeoutHandle=").append(timeout_handle == null ? 
+        null : "@" + System.identityHashCode(timeout_handle))
+    .append(')');
     return buf.toString();
   }
 
+  /** 
+   * Computes the retry delay exponentially then linearly.
+   * @param jitter_percent Whether or not to add jitter to the retry.
+   * @return a delay in ms before retrying the RPC based on the number of 
+   * attempts made so far. It has a linear retry up to 1 second (4 attempts)
+   * then an exponential retry past that.
+   * Some NSREs can be resolved in a second or so, some seem to easily take ~6 
+   * seconds, sometimes more when a RegionServer has failed and the master is 
+   * slowly splitting its logs and re-assigning its regions. 
+   */
+  final int getRetryDelay(final int jitter_percent) {
+    if (jitter_percent > 0) {
+      int value = attempt < 4
+          ? 200 * (attempt + 2)     // 400, 600, 800, 1000
+              : 1000 + (1 << attempt);  // 1016, 1032, 1064, 1128, 1256, 1512, ..
+      double delta = (double) value * 
+          (((double) HBaseClient.RANDOM.nextInt(jitter_percent * 100) / 100d) / 100d);
+      return HBaseClient.RANDOM.nextBoolean() ? 
+          value + (int) delta : value - (int) delta;
+    }
+    return attempt < 4
+        ? 200 * (attempt + 2)     // 400, 600, 800, 1000
+        : 1000 + (1 << attempt);  // 1016, 1032, 1064, 1128, 1256, 1512, ..
+  }
+  
+  /**
+   * Package private method to be called by the region client when it has
+   * assigned an ID to the RPC. This will clear the RPC from another 
+   * client's inflight queue if the region client was previously set as
+   * well as cancel a timeout handle if it was set. When the RPC is sent
+   * and {@link #enqueueTimeout(RegionClient)} is called, the region client
+   * passed with the timeout is compared to the client set here so we can
+   * make sure the client is the same.
+   * Can be called with a null client to reset the RPC.
+   * 
+   * @param rpc_id An RPC ID.
+   * @param client The client responsible for this RPC now.
+   */
+  final synchronized void setIdAndClient(final int rpc_id, 
+                                         final RegionClient client) {
+    if (this.region_client != null) {
+      this.region_client.removeRpc(this, false);
+    }
+    if (timeout_handle != null) {
+      LOG.warn("A new region client: " + region_client 
+          + " is handling rpc: " + this + " instead of an old region "
+          + "client: " + this.region_client + " and we had an old "
+          + "timeout: " + timeout_handle + ". Cancelling that timeout.");
+      cancelTimeout();
+    }
+    this.rpc_id = rpc_id;
+    this.region_client = client;
+  }
+  
+  @VisibleForTesting
+  final Timeout timeoutHandle() {
+    return timeout_handle;
+  }
+  
   // --------------------- //
   // RPC utility functions //
   // --------------------- //
