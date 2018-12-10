@@ -920,7 +920,8 @@ public final class RegionClient extends ReplayingDecoder<VoidEnum> {
                 hbase_client.handleNSRE(rpc, 
                                         rpc.getRegion().name(),
                                         (RecoverableException) r,
-                                        chan.getLocalAddress().toString());
+                                        chan != null ? 
+                                            chan.getLocalAddress().toString() : "null");
               } catch (Exception e) {
                 LOG.error("Unexpected exception processing NSRE for RPC " + rpc, e);
                 rpc.callback(e);
@@ -956,8 +957,8 @@ public final class RegionClient extends ReplayingDecoder<VoidEnum> {
             try {
               hbase_client.handleNSRE(rpc, rpc.getRegion().name(),
                                       (RecoverableException) e,
-                                    chan == null ? "null" : 
-                                      chan.getRemoteAddress().toString());
+                                    chan != null ? 
+                                        chan.getRemoteAddress().toString() : "null");
             } catch (Exception ex) {
               LOG.error("Unexpected exception trying to NSRE the RPC " + rpc, ex);
               rpc.callback(ex);
@@ -1334,7 +1335,7 @@ public final class RegionClient extends ReplayingDecoder<VoidEnum> {
                                         + exception.getMessage(), rpc);
         // Re-schedule the RPC by (ab)using the NSRE handling mechanism.
         hbase_client.handleNSRE(rpc, region.name(), nsre, 
-            chan.getRemoteAddress().toString());
+            chan != null ? chan.getRemoteAddress().toString() : "null");
       }
     }
   }
@@ -1686,7 +1687,8 @@ public final class RegionClient extends ReplayingDecoder<VoidEnum> {
       // we can't do anything about it.
       hbase_client.handleNSRE(rpc, rpc.getRegion().name(),
                               (RecoverableException) decoded,
-                              chan.getRemoteAddress().toString());
+                              chan != null ? 
+                                  chan.getRemoteAddress().toString() : "null");
       return null;
     } else if (decoded instanceof RecoverableException && 
         // RSSE could pop on a multi action in which case we want to pass it
