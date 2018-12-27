@@ -29,7 +29,7 @@ package org.hbase.async;
 /**
  * Exception thrown when we try to use an invalid or expired scanner ID.
  */
-public final class UnknownScannerException extends RecoverableException
+public final class UnknownScannerException extends NonRecoverableException
 implements HasFailedRpcException {
 
   static final String REMOTE_CLASS =
