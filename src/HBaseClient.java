@@ -2495,7 +2495,8 @@ public final class HBaseClient {
     final byte[] table = request.table;
     final byte[] key = request.key;
     final RegionInfo region = getRegion(table, key);
-
+    final long thread_id = Thread.currentThread().getId();
+    
     final class RetryRpc implements Callback<Deferred<Object>, Object> {
       public Deferred<Object> call(final Object arg) {
         if (arg instanceof NonRecoverableException) {
@@ -2513,7 +2514,22 @@ public final class HBaseClient {
           request.callback(e);
           return Deferred.fromError(e);
         }
-        return sendRpcToRegion(request);  // Retry the RPC.
+        if (request.attempt > 1 && 
+            thread_id == Thread.currentThread().getId()) {
+          // avoid a tight loop for issues where we may be waiting for a meta
+          // permit or other issues where this could execute in the same thread.
+          class RetryDelay implements TimerTask {
+            @Override
+            public void run(final Timeout ignored) {
+              sendRpcToRegion(request);  // Retry the RPC.
+            }
+          }
+          final Deferred<Object> d = request.getDeferred();
+          newTimeout(new RetryDelay(), request.getRetryDelay(jitter_percent));
+          return d;
+        } else {
+          return sendRpcToRegion(request);
+        }
       }
       public String toString() {
         return "retry RPC";
@@ -2634,6 +2650,9 @@ public final class HBaseClient {
     final Exception e = new NonRecoverableException("Too many attempts: "
                                                     + request, cause);
     
+    if (LOG.isDebugEnabled()) {
+      LOG.debug("Too many attempts source", cause);
+    }
     if (request.isTraceRPC()) {
       TRACE_LOG.info("Too many attempts on RPC: " + request);
     }

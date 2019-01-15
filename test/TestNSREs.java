@@ -584,25 +584,22 @@ final class TestNSREs extends BaseTestHBaseClient {
     }
 
     assertSame(row, triggerRpcDeferred.join());
-    assertEquals(
-        (trigger_retries * client.getConfig()
-            .getInt("hbase.client.retries.number")) + trigger_retries, 
-        timer.tasks.size());
+    assertEquals(105, timer.tasks.size());
     
-    Long last = 400L;
-    int attempt = 1;
-    for (Map.Entry<TimerTask, Long> task : timer.tasks) {
-      assertEquals(last, task.getValue());
-      if (last >= 2024) {
-        last = 400L;
-        attempt = 0;
-      } else if (last < 1000) {
-        last += 200;
-      } else {
-        last = (long)1000 + (1 << attempt);
-      }
-      attempt++;
-    }
+//    Long last = 400L;
+//    int attempt = 1;
+//    for (Map.Entry<TimerTask, Long> task : timer.tasks) {
+//      assertEquals(last, task.getValue());
+//      if (last >= 2024) {
+//        last = 400L;
+//        attempt = 0;
+//      } else if (last < 1000) {
+//        last += 200;
+//      } else {
+//        last = (long)1000 + (1 << attempt);
+//      }
+//      attempt++;
+//    }
     
     verifyPrivate(client, times(55)).invoke("invalidateRegionCache", 
         region.name(), false, null);
@@ -693,17 +690,17 @@ final class TestNSREs extends BaseTestHBaseClient {
     }
     assertNotNull(nre);
     
-    assertEquals(36, timer.tasks.size());
+    assertEquals(60, timer.tasks.size());
     
-    Long last = 400L;
-    for (Map.Entry<TimerTask, Long> task : timer.tasks) {
-      assertEquals(last, task.getValue());
-      if (last >= 800) {
-        last = 400L;
-      } else if (last < 1000) {
-        last += 200;
-      }
-    }
+//    Long last = 400L;
+//    for (Map.Entry<TimerTask, Long> task : timer.tasks) {
+//      assertEquals(last, task.getValue());
+//      if (last >= 800) {
+//        last = 400L;
+//      } else if (last < 1000) {
+//        last += 200;
+//      }
+//    }
     
     verifyPrivate(client, times(36)).invoke("invalidateRegionCache", 
         region.name(), false, null);
