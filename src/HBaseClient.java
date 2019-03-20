@@ -466,6 +466,9 @@ public final class HBaseClient {
   
   /** Whether or not increments are batched. */
   private boolean increment_buffer_durable = false;
+
+  /** WARN threshold of DNS lookup latency */
+  private final long dns_latency_warn_threshold_nanos;
   
   // ------------------------ //
   // Client usage statistics. //
@@ -596,6 +599,7 @@ public final class HBaseClient {
     nsre_low_watermark = config.getInt("hbase.nsre.low_watermark");
     nsre_high_watermark = config.getInt("hbase.nsre.high_watermark");
     jitter_percent = config.getInt("hbase.rpcs.jitter");
+    dns_latency_warn_threshold_nanos = config.getLong("hbase.dns.latency_warn_threshold_nanos");
     if (config.properties.containsKey("hbase.increments.durable")) {
       increment_buffer_durable = config.getBoolean("hbase.increments.durable");
     }
@@ -675,6 +679,7 @@ public final class HBaseClient {
     nsre_low_watermark = config.getInt("hbase.nsre.low_watermark");
     nsre_high_watermark = config.getInt("hbase.nsre.high_watermark");
     jitter_percent = config.getInt("hbase.rpcs.jitter");
+    dns_latency_warn_threshold_nanos = config.getLong("hbase.dns.latency_warn_threshold_nanos");
     
     if (config.properties.containsKey("hbase.increments.durable")) {
       increment_buffer_durable = config.getBoolean("hbase.increments.durable");
@@ -2700,7 +2705,7 @@ public final class HBaseClient {
                   + " doesn't contain `:' to separate the `host:port'"
                   + Bytes.pretty(hostport), kv);
         }
-        host = getIP(new String(hostport, 0, colon));
+        host = getIP(new String(hostport, 0, colon), dns_latency_warn_threshold_nanos);
         try {
           port = parsePortNumber(new String(hostport, colon + 1,
                   hostport.length - colon - 1));
@@ -3320,7 +3325,7 @@ public final class HBaseClient {
             + " doesn't contain `:' to separate the `host:port'"
             + Bytes.pretty(hostport), kv);
         }
-        host = getIP(new String(hostport, 0, colon));
+        host = getIP(new String(hostport, 0, colon), dns_latency_warn_threshold_nanos);
         try {
           port = parsePortNumber(new String(hostport, colon + 1,
                                             hostport.length - colon - 1));
@@ -4303,7 +4308,7 @@ public final class HBaseClient {
       LOG.error("WTF?  Should never happen!  No `:' found in " + hostport);
       return null;
     }
-    final String host = getIP(hostport.substring(0, lastColon));
+    final String host = getIP(hostport.substring(0, lastColon), dns_latency_warn_threshold_nanos);
     int port;
     try {
       port = parsePortNumber(hostport.substring(lastColon + 1,
@@ -4795,7 +4800,7 @@ public final class HBaseClient {
         }
         final int port = parsePortNumber(new String(data, firstsep + 1,
                                                     portend - firstsep - 1));
-        final String ip = getIP(host);
+        final String ip = getIP(host, dns_latency_warn_threshold_nanos);
         if (ip == null) {
           LOG.error("Couldn't resolve the IP of the -ROOT- region from "
                     + host + " in \"" + Bytes.pretty(data) + '"');
@@ -4840,7 +4845,7 @@ public final class HBaseClient {
           final ZooKeeperPB.MetaRegionServer meta =
             ZooKeeperPB.MetaRegionServer.newBuilder()
             .mergeFrom(data, offset, data.length - offset).build();
-          ip = getIP(meta.getServer().getHostName());
+          ip = getIP(meta.getServer().getHostName(), dns_latency_warn_threshold_nanos);
           port = meta.getServer().getPort();
         } catch (InvalidProtocolBufferException e) {
           LOG.error("Failed to parse the protobuf in " + Bytes.pretty(data), e);
@@ -4898,7 +4903,7 @@ public final class HBaseClient {
    * @return The IP address associated with the given hostname,
    * or {@code null} if the address couldn't be resolved.
    */
-  private static String getIP(final String host) {
+  private static String getIP(final String host, final long latencyWarnThresholdNanos) {
     final long start = System.nanoTime();
     try {
       boolean preferV6 = Boolean.valueOf(
@@ -4928,7 +4933,7 @@ public final class HBaseClient {
       if (latency > 500000/*ns*/ && LOG.isDebugEnabled()) {
         LOG.debug("Resolved IP of `" + host + "' to "
                   + ip + " in " + latency + "ns");
-      } else if (latency >= 3000000/*ns*/) {
+      } else if (latency >= latencyWarnThresholdNanos) {
         LOG.warn("Slow DNS lookup!  Resolved IP of `" + host + "' to "
                  + ip + " in " + latency + "ns");
       }
