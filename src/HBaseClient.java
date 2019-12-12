@@ -1641,10 +1641,10 @@ public final class HBaseClient {
       return atomicIncrement(request);
     }
 
+    final byte[] ttl = Bytes.fromLong(request.getTtl());
     final BufferedIncrement incr =
       new BufferedIncrement(request.table(), request.key(), request.family(),
-                            request.qualifier());
-
+                            request.qualifier(), ttl);
     do {
       BufferedIncrement.Amount amount;
       // Semi-evil: the very first time we get here, `increment_buffer' will
@@ -1701,7 +1701,7 @@ public final class HBaseClient {
     }
 
     final BufferedMultiColumnIncrement incr = new BufferedMultiColumnIncrement(request.table(), request.key(), request.family(),
-                            request.qualifiers());
+                            request.qualifiers(), request.getTtl());
 
     do {
       BufferedMultiColumnIncrement.Amounts amounts;

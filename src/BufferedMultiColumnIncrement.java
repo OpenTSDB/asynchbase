@@ -82,6 +82,7 @@ final class BufferedMultiColumnIncrement {
   private final byte[] key;
   private final byte[] family;
   private final byte[][] qualifiers;
+  private final long ttl;
 
   BufferedMultiColumnIncrement(final byte[] table, final byte[] key,
                                final byte[] family, final byte[][] qualifiers) {
@@ -89,6 +90,16 @@ final class BufferedMultiColumnIncrement {
     this.key = key;
     this.family = family;
     this.qualifiers = qualifiers;
+    this.ttl = 0L;
+  }
+
+  BufferedMultiColumnIncrement(final byte[] table, final byte[] key,
+                               final byte[] family, final byte[][] qualifiers, final long ttl) {
+    this.table = table;
+    this.key = key;
+    this.family = family;
+    this.qualifiers = qualifiers;
+    this.ttl = ttl;
   }
 
   public boolean equals(final Object other) {
@@ -348,7 +359,6 @@ final class BufferedMultiColumnIncrement {
 
       final Amounts amounts = entry.getValue();
       assert(amounts != null);
-
       final long[] raw = amounts.getRawAndInvalidate();
       final long[] delta = new long[raw.length];
       boolean hasUpdates = false;
@@ -367,7 +377,7 @@ final class BufferedMultiColumnIncrement {
         final BufferedMultiColumnIncrement incr = entry.getKey();
         final MultiColumnAtomicIncrementRequest req =
             new MultiColumnAtomicIncrementRequest(incr.table, incr.key, incr.family,
-                incr.qualifiers, delta);
+                incr.qualifiers, delta, incr.ttl);
         client.atomicIncrement(req).chain(amounts.deferred);
       }
     }

@@ -28,9 +28,11 @@ package org.hbase.async;
 
 import com.google.common.base.Joiner;
 import com.google.common.collect.Maps;
+import com.google.protobuf.ByteString;
 import org.hbase.async.generated.ClientPB.MutateRequest;
 import org.hbase.async.generated.ClientPB.MutateResponse;
 import org.hbase.async.generated.ClientPB.MutationProto;
+import org.hbase.async.generated.HBasePB;
 import org.jboss.netty.buffer.ChannelBuffer;
 
 import java.util.ArrayList;
@@ -64,11 +66,13 @@ public final class MultiColumnAtomicIncrementRequest extends HBaseRpc
     'V', 'a', 'l', 'u', 'e'
   };
 
+  private static final String TTL_ATTRIBUTE_NAME = "_ttl";
   private static final Joiner AMOUNT_JOINER = Joiner.on(",");
 
   private final byte[] family;
   private final byte[][] qualifiers;
   private long[] amounts;
+  private long ttl;
   private boolean durable = true;
 
   /**
@@ -86,6 +90,26 @@ public final class MultiColumnAtomicIncrementRequest extends HBaseRpc
                                            final byte[] family,
                                            final byte[][] qualifiers,
                                            final long[] amounts) {
+    this(table, key, family, qualifiers, amounts, 0L);
+  }
+
+  /**
+   * Constructor.
+   * <strong>These byte arrays will NOT be copied.</strong>
+   * @param table The non-empty name of the table to use.
+   * @param key The row key of the value to increment.
+   * @param family The column family of the value to increment.
+   * @param qualifiers The column qualifier of the value to increment.
+   * @param amounts Amount by which to increment the value in HBase.
+   * If negative, the value in HBase will be decremented.
+   * @param ttl  TTL in milli seconds that will be set to the cells.
+   */
+  public MultiColumnAtomicIncrementRequest(final byte[] table,
+                                           final byte[] key,
+                                           final byte[] family,
+                                           final byte[][] qualifiers,
+                                           final long[] amounts,
+                                           final long ttl) {
     super(table, key);
     KeyValue.checkFamily(family);
     this.family = family;
@@ -111,6 +135,8 @@ public final class MultiColumnAtomicIncrementRequest extends HBaseRpc
       this.amounts = new long[qualifiers.length];
       Arrays.fill(this.amounts, 1L);
     }
+
+    this.ttl = ttl;
   }
 
   /**
@@ -128,7 +154,7 @@ public final class MultiColumnAtomicIncrementRequest extends HBaseRpc
                                            final byte[] key,
                                            final byte[] family,
                                            final byte[][] qualifiers) {
-    this(table, key, family, qualifiers, null);
+    this(table, key, family, qualifiers, null, 0L);
   }
 
   /**
@@ -147,7 +173,28 @@ public final class MultiColumnAtomicIncrementRequest extends HBaseRpc
                                            final String[] qualifiers,
                                            final long[] amounts) {
     this(table.getBytes(), key.getBytes(), family.getBytes(),
-        toByteArrays(qualifiers), amounts);
+        toByteArrays(qualifiers), amounts, 0L);
+  }
+
+  /**
+   * Constructor.
+   * All strings are assumed to use the platform's default charset.
+   * @param table The non-empty name of the table to use.
+   * @param key The row key of the value to increment.
+   * @param family The column family of the value to increment.
+   * @param qualifiers The column qualifier of the value to increment.
+   * @param amounts Amount by which to increment the value in HBase.
+   * If negative, the value in HBase will be decremented.
+   * @param ttl TTL in milli seconds that will be set to the cells.
+   */
+  public MultiColumnAtomicIncrementRequest(final String table,
+                                           final String key,
+                                           final String family,
+                                           final String[] qualifiers,
+                                           final long[] amounts,
+                                           final long ttl) {
+    this(table.getBytes(), key.getBytes(), family.getBytes(),
+            toByteArrays(qualifiers), amounts, ttl);
   }
 
   /**
@@ -165,8 +212,9 @@ public final class MultiColumnAtomicIncrementRequest extends HBaseRpc
                                            final String family,
                                            final String[] qualifiers) {
     this(table.getBytes(), key.getBytes(), family.getBytes(),
-         toByteArrays(qualifiers), null);
+         toByteArrays(qualifiers), null, 0L);
   }
+
 
   /**
    * Returns the amount by which the value is going to be incremented.
@@ -181,6 +229,14 @@ public final class MultiColumnAtomicIncrementRequest extends HBaseRpc
    */
   public void setAmounts(final long[] amounts) {
     this.amounts = amounts;
+  }
+
+  public long getTtl() {
+    return ttl;
+  }
+
+  public void setTtl(long ttl) {
+    this.ttl = ttl;
   }
 
   @Override
@@ -246,6 +302,7 @@ public final class MultiColumnAtomicIncrementRequest extends HBaseRpc
     }
     size += 1;  // byte: Type of the 5th parameter.
     size += 8 * amounts.length;  // long: Amount.
+    size += 8; // long: TTL
     size += 1;  // byte: Type of the 6th parameter.
     size += 1;  // bool: Whether or not to write to the WAL.
     return size;
@@ -259,6 +316,7 @@ public final class MultiColumnAtomicIncrementRequest extends HBaseRpc
     MutationProto.Builder incr = MutationProto.newBuilder()
       .setRow(Bytes.wrap(key))
       .setMutateType(MutationProto.MutationType.INCREMENT);
+
 
     for (int i = 0; i < qualifiers.length; i++) {
       final MutationProto.ColumnValue.QualifierValue qualifier =
@@ -277,6 +335,14 @@ public final class MultiColumnAtomicIncrementRequest extends HBaseRpc
     if (!durable) {
       incr.setDurability(MutationProto.Durability.SKIP_WAL);
     }
+
+    if (ttl > 0) {
+      HBasePB.NameBytesPair.Builder ttlAttribute = HBasePB.NameBytesPair.newBuilder()
+              .setName(TTL_ATTRIBUTE_NAME)
+              .setValue(ByteString.copyFrom(Bytes.fromLong(ttl)));
+      incr.addAttribute(ttlAttribute.build());
+    }
+
     final MutateRequest req = MutateRequest.newBuilder()
       .setRegion(region.toProtobuf())
       .setMutation(incr.build())
