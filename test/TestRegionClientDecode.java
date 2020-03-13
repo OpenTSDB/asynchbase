@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2015 The Async HBase Authors.  All rights reserved.
+ * Copyright (C) 2015-2020 The Async HBase Authors.  All rights reserved.
  * This file is part of Async HBase.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -29,7 +29,6 @@ package org.hbase.async;
 import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
@@ -37,7 +36,6 @@ import static org.junit.Assert.fail;
 import static org.mockito.Matchers.any;
 import static org.mockito.Matchers.anyInt;
 import static org.mockito.Matchers.anyLong;
-import static org.mockito.Matchers.anyObject;
 import static org.mockito.Matchers.anyString;
 import static org.mockito.Matchers.eq;
 import static org.mockito.Mockito.mock;
@@ -61,7 +59,6 @@ import org.hbase.async.generated.ClientPB.GetResponse;
 import org.hbase.async.generated.ClientPB.Result;
 import org.hbase.async.generated.ClientPB.ResultOrException;
 import org.hbase.async.generated.RPCPB;
-import org.hbase.async.generated.RPCPB.CellBlockMeta;
 import org.jboss.netty.buffer.BigEndianHeapChannelBuffer;
 import org.jboss.netty.buffer.ChannelBuffer;
 import org.jboss.netty.buffer.ChannelBuffers;
@@ -590,6 +587,10 @@ public class TestRegionClientDecode extends BaseTestRegionClient {
     region_client.messageReceived(ctx, event);
     region_client.messageReceived(ctx, event);
     region_client.messageReceived(ctx, event);
+    when(sasl_client.isComplete())
+      .thenReturn(false)
+      .thenReturn(true);
+    PowerMockito.mockStatic(Channels.class);
     region_client.messageReceived(ctx, event);
     
     try {
