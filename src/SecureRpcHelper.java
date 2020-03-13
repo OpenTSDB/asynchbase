@@ -135,7 +135,9 @@ public abstract class SecureRpcHelper {
       return;
     }
     
-    if ("kerberos".equalsIgnoreCase(mechanism)) {
+    if ("mtlstemp".equalsIgnoreCase(mechanism)) {
+      client_auth_provider = hbase_client.getMTLSClientAuthProvider();
+    } else if ("kerberos".equalsIgnoreCase(mechanism)) {
       client_auth_provider = new KerberosClientAuthProvider(hbase_client);
     } else {
       try {

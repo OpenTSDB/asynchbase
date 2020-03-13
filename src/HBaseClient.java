@@ -42,6 +42,7 @@ import org.apache.zookeeper.data.Stat;
 import org.hbase.async.Scanner.CloseScannerRequest;
 import org.hbase.async.Scanner.GetNextRowsRequest;
 import org.hbase.async.Scanner.OpenScannerRequest;
+import org.hbase.async.auth.TempMTLSClientAuthProvider;
 import org.hbase.async.generated.ZooKeeperPB;
 import org.jboss.netty.channel.ChannelEvent;
 import org.jboss.netty.channel.ChannelHandler;
@@ -272,6 +273,9 @@ public final class HBaseClient {
    */
   private final HashedWheelTimer rpc_timeout_timer;
 
+  /** Singleton for an MTLS client auth provider with a refreshing cert. */
+  private volatile TempMTLSClientAuthProvider mtls_client_auth_provider;
+  
   /** Up to how many milliseconds can we buffer an edit on the client side.  */
   private volatile short flush_interval;
   
@@ -4013,6 +4017,21 @@ public final class HBaseClient {
     return result;
   }
 
+  /**
+   * Singleton accessor for the MTLS cert refresher.
+   * @return The existing or instantiated provider.
+   */
+  TempMTLSClientAuthProvider getMTLSClientAuthProvider() {
+    if (mtls_client_auth_provider == null) {
+      synchronized (this) {
+        if (mtls_client_auth_provider == null) {
+          mtls_client_auth_provider = new TempMTLSClientAuthProvider(this);
+        }
+      }
+    }
+    return mtls_client_auth_provider;
+  }
+  
   /**
    * Some arbitrary junk that is unlikely to appear in a real row key.
    * @see probeKey

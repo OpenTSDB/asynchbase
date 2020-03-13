@@ -146,7 +146,9 @@ asynchbase_SOURCES := \
 	src/auth/ClientAuthProvider.java	\
 	src/auth/KerberosClientAuthProvider.java	\
 	src/auth/Login.java	\
+	src/auth/RefreshingSSLContext	\
 	src/auth/SimpleClientAuthProvider.java	\
+	src/auth/TempMTLSClientAuthProvider.java	\
 	src/jsr166e/LongAdder.java	\
 	src/jsr166e/Striped64.java	\
 	src/ratelimiter/DefaultRestrictionPolicyImpl.java	\

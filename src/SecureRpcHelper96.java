@@ -91,6 +91,10 @@ class SecureRpcHelper96 extends SecureRpcHelper {
         //  LOG.debug("Sending initial SASL Challenge: " + Bytes.pretty(buf));
         //}
         Channels.write(channel, buffer);
+      } else if (!sasl_client.isComplete()) {
+        // digest requires an empty integer value.
+        byte[] buf = new byte[4];
+        Channels.write(channel, ChannelBuffers.wrappedBuffer(buf));
       } else {
         // TODO - is this exception worthy? We'll never get back here
         LOG.error("Missing initial Sasl response on client " + region_client);
@@ -154,6 +158,9 @@ class SecureRpcHelper96 extends SecureRpcHelper {
         out_buffer.writeInt(challenge_bytes.length);
         out_buffer.writeBytes(challenge_bytes);
         Channels.write(chan, out_buffer);
+        if (!sasl_client.isComplete()) {
+          return null;
+        }
       }
 
       if (sasl_client.isComplete()) {
@@ -162,11 +169,19 @@ class SecureRpcHelper96 extends SecureRpcHelper {
             " on for: " + region_client);
         sendRPCHeader(chan);
       } else {
-        // TODO is this an issue?
+        final byte[] out_bytes = new byte[4 + challenge_bytes.length];
+        final ChannelBuffer out_buffer = ChannelBuffers.wrappedBuffer(out_bytes);
+        out_buffer.clear();
+        out_buffer.writeInt(challenge_bytes.length);
+        out_buffer.writeBytes(challenge_bytes);
+        //if (LOG.isDebugEnabled()) {
+        //  LOG.debug("Sending next SASL response: "+ Bytes.pretty(out_bytes));
+        //}
+        Channels.write(chan, out_buffer);
       }
       return null;
     }
-
+    
     return unwrap(buf);
   }
 
@@ -177,14 +192,14 @@ class SecureRpcHelper96 extends SecureRpcHelper {
    * @param chan The channel to write to
    */
   private void sendRPCHeader(final Channel chan) {
-    final RPCPB.UserInformation user = RPCPB.UserInformation.newBuilder()
-      .setEffectiveUser(client_auth_provider.getClientUsername())
-      .build();
-    final RPCPB.ConnectionHeader pb = RPCPB.ConnectionHeader.newBuilder()
-      .setUserInfo(user)
+    final RPCPB.ConnectionHeader.Builder builder = RPCPB.ConnectionHeader.newBuilder()
       .setServiceName("ClientService")
-      .setCellBlockCodecClass("org.apache.hadoop.hbase.codec.KeyValueCodec")
-      .build();
+      .setCellBlockCodecClass("org.apache.hadoop.hbase.codec.KeyValueCodec");
+    if (client_auth_provider.getClientUsername() != null) {
+      builder.setUserInfo(RPCPB.UserInformation.newBuilder()
+          .setEffectiveUser(client_auth_provider.getClientUsername()));
+    }
+    final RPCPB.ConnectionHeader pb = builder.build();
     final int pblen = pb.getSerializedSize();
     final byte[] buf = new byte[4 + pblen];
     final ChannelBuffer header = ChannelBuffers.wrappedBuffer(buf);

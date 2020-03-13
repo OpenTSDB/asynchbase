@@ -43,6 +43,7 @@ public abstract class ClientAuthProvider {
 
   public static final byte SIMPLE_CLIENT_AUTH_CODE = 80;
   public static final byte KEBEROS_CLIENT_AUTH_CODE = 81;
+  public static final byte DIGEST_CLIENT_AUTH_CODE = 82;
   
   /** The hbase client object for fetching settings */
   final HBaseClient hbase_client;

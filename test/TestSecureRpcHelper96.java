@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2015  The Async HBase Authors.  All rights reserved.
+ * Copyright (C) 2015-2020  The Async HBase Authors.  All rights reserved.
  * This file is part of Async HBase.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -141,9 +141,10 @@ public class TestSecureRpcHelper96 extends BaseTestSecureRpcHelper {
       }
     }).when(sasl_client).evaluateChallenge(any(byte[].class));
     helper.sendHello(channel);
-    assertEquals(1, buffers.size());
+    assertEquals(2, buffers.size());
     assertArrayEquals(new byte[] { 'H', 'B', 'a', 's', 0, 81 }, 
         buffers.get(0).array());
+    assertArrayEquals(new byte[4], buffers.get(1).array());
   }
   
   @Test
@@ -238,20 +239,20 @@ public class TestSecureRpcHelper96 extends BaseTestSecureRpcHelper {
   }
   
   @Test
-  public void handleResponseProcessChallengeNotCompleted() throws Exception {
+  public void handleResponseProcessChallengeCompleted() throws Exception {
     setupChallenge();
 
-    when(sasl_client.isComplete()).thenReturn(false).thenReturn(false);
+    when(sasl_client.isComplete()).thenReturn(false).thenReturn(true);
     final ChannelBuffer buf = getSaslBuffer(0, new byte[] { 42 });
     assertNull(helper.handleResponse(buf, channel));
-    assertNull(buffers);
-    verify(region_client, never()).becomeReady(channel, 
+    assertEquals(1, buffers.size());
+    verify(region_client, times(1)).becomeReady(channel, 
         RegionClient.SERVER_VERSION_095_OR_ABOVE);
-    verify(sasl_client, never()).getNegotiatedProperty(Sasl.QOP);
+    verify(sasl_client, times(1)).getNegotiatedProperty(Sasl.QOP);
   }
 
   @Test
-  public void handleResponseProcessChallengeNegotiaionException() throws Exception {
+  public void handleResponseProcessChallengeNegotiationException() throws Exception {
     setupChallenge();
 
     when(sasl_client.getNegotiatedProperty(Sasl.QOP))
