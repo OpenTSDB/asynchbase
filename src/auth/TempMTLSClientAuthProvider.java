@@ -381,21 +381,25 @@ public class TempMTLSClientAuthProvider extends ClientAuthProvider
                     + token_status);
               }
               
-              // now we can process the response
-              if (token_status == 200) {
-                final Matcher matcher = TOKEN_REGEX.matcher(token_response);
-                if (matcher.matches()) {
-                  token_response = matcher.group(1);
-                  parseToken(token_response);
-                  deferred.callback(true);
-                } else {
-                  token_exception = new RuntimeException(
-                      "Failed to fetch token from REST server " + host + ":" 
-                          + port + " with status code: " + token_status 
-                          + " and content: " + token_response);
-                  LOG.error("Failed to fetch token.", token_exception);
-                  deferred.callback(token_exception);
+              try {
+                // now we can process the response
+                if (token_status == 200) {
+                  final Matcher matcher = TOKEN_REGEX.matcher(token_response);
+                  if (matcher.matches()) {
+                    token_response = matcher.group(1);
+                    parseToken(token_response);
+                    deferred.callback(true);
+                  } else {
+                    token_exception = new RuntimeException(
+                        "Failed to fetch token from REST server " + host + ":" 
+                            + port + " with status code: " + token_status 
+                            + " and content: " + token_response);
+                    LOG.error("Failed to fetch token.", token_exception);
+                    deferred.callback(token_exception);
+                  }
                 }
+              } finally {
+                bootstrap.shutdown();
               }
             }
             
