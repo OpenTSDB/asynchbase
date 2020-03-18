@@ -376,10 +376,8 @@ public class TempMTLSClientAuthProvider extends ClientAuthProvider
 
             @Override
             public void operationComplete(ChannelFuture future) throws Exception {
-              if (LOG.isDebugEnabled()) {
-                LOG.debug("Completed REST token request with HTTP status code: " 
-                    + token_status);
-              }
+              LOG.info("Completed REST token request with HTTP status code: " 
+                  + token_status);
               
               try {
                 // now we can process the response
@@ -504,6 +502,7 @@ public class TempMTLSClientAuthProvider extends ClientAuthProvider
       // password
       len = TempMTLSClientAuthProvider.readVInt(data, offset);
       pass = Arrays.copyOfRange(data, offset[0], offset[0] + len);
+      LOG.info("Successfully parsed Digest token.");
     } catch (IOException e) {
       LOG.error("Unable to parse the token.", e);
     }
