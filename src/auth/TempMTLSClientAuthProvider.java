@@ -37,7 +37,9 @@ import java.security.Principal;
 import java.security.PrivilegedExceptionAction;
 import java.util.Arrays;
 import java.util.Map;
+import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -80,6 +82,8 @@ import org.jboss.netty.handler.codec.http.HttpResponse;
 import org.jboss.netty.handler.codec.http.HttpVersion;
 import org.jboss.netty.handler.ssl.SslHandler;
 import org.jboss.netty.util.CharsetUtil;
+import org.jboss.netty.util.Timeout;
+import org.jboss.netty.util.TimerTask;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -345,10 +349,9 @@ public class TempMTLSClientAuthProvider extends ClientAuthProvider
     final String host = uri.getHost() == null? "127.0.0.1" : uri.getHost();
     final int port = uri.getPort() < 1 ? 443 : uri.getPort();
     
+    final ExecutorService executors = Executors.newCachedThreadPool();
     final ClientBootstrap bootstrap = new ClientBootstrap(
-        new NioClientSocketChannelFactory(
-            Executors.newCachedThreadPool(), 
-            Executors.newCachedThreadPool()));
+        new NioClientSocketChannelFactory(executors, executors));
       bootstrap.setPipelineFactory(new HttpClientPipelineFactory(host, port));
       if (LOG.isDebugEnabled()) {
         LOG.debug("Fetching token from REST server at: " + host + ":" + port);
@@ -397,7 +400,24 @@ public class TempMTLSClientAuthProvider extends ClientAuthProvider
                   }
                 }
               } finally {
-                bootstrap.shutdown();
+                hbase_client.getTimer().newTimeout(new TimerTask() {
+                  // note that we throw it in a timer task here because it may
+                  // be run from a netty worker thread the first time and the
+                  // netty code checks to see if this is called from an I/O
+                  // thread, throwing an exception if so.
+                  @Override
+                  public void run(Timeout timeout) throws Exception {
+                    try {
+                      executors.shutdownNow();
+                      bootstrap.shutdown();
+                      LOG.info("Successfully shut down the http client.");
+                    } catch (Throwable t) {
+                      LOG.error("Failed to properly shut down the http client.", t);
+                    }
+                  }
+                  
+                }, 1, TimeUnit.MILLISECONDS);
+                
               }
             }
             
