@@ -354,7 +354,7 @@ public class TempMTLSClientAuthProvider extends ClientAuthProvider
         new NioClientSocketChannelFactory(executors, executors));
       bootstrap.setPipelineFactory(new HttpClientPipelineFactory(host, port));
       if (LOG.isDebugEnabled()) {
-        LOG.debug("Fetching token from REST server at: " + host + ":" + port);
+        LOG.info("Fetching token from REST server at: " + host + ":" + port);
       }
       final ChannelFuture future = bootstrap.connect(
           new InetSocketAddress(host, port));
