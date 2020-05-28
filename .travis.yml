@@ -1,4 +1,5 @@
 language: java
+dist: trusty
 before_install:
   - cat /etc/hosts # optionally check the content *before*
   - sudo hostname "$(hostname | cut -c1-63)"
@@ -12,7 +13,6 @@ before_script:
   - make pom.xml
 script: export MAVEN_OPTS="-Xmx1024m" && mvn test --quiet
 jdk:
-  - openjdk7
   - oraclejdk8
 notifications:
     email: false
