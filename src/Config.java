@@ -300,6 +300,7 @@ public class Config {
     default_map.put("hbase.rpcs.buffered_flush_interval", "1000");
     default_map.put("hbase.rpcs.batch.size", "1024");
     default_map.put("hbase.rpcs.jitter", "5");
+    default_map.put("hbase.rpcs.rebatch_retries", "false");
     default_map.put("hbase.region_client.check_channel_write_status", "false");
     default_map.put("hbase.region_client.inflight_limit", "0");
     default_map.put("hbase.region_client.pending_limit", "0");
