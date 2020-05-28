@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2010-2012  The Async HBase Authors.  All rights reserved.
+ * Copyright (C) 2010-2020  The Async HBase Authors.  All rights reserved.
  * This file is part of Async HBase.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -29,6 +29,9 @@ package org.hbase.async;
 import java.nio.charset.Charset;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
+import java.util.HashSet;
+import java.util.Set;
 
 import org.jboss.netty.buffer.ChannelBuffer;
 
@@ -45,7 +48,6 @@ import org.hbase.async.generated.ClientPB.ScanResponse;
 import org.hbase.async.generated.FilterPB;
 import org.hbase.async.generated.HBasePB.TimeRange;
 import static org.hbase.async.HBaseClient.EMPTY_ARRAY;
-
 
 /**
  * Creates a scanner to read data sequentially from HBase.
@@ -197,6 +199,26 @@ public final class Scanner {
 
   private boolean moreRows;
   private boolean scannerClosedOnServer;
+  
+  /**
+   * Number of rows scanned
+   */
+  private long rows_fetched = 0;
+  
+  /**
+   * Number of data points or key values scanned
+   */
+  private long columns_fetched = 0;
+  
+  /** Total number of bytes (roughly) received by this scanner over it's life. */
+  private long total_bytes_fetched = 0;
+  
+  /** Number of bytes (roughly) received by this scanner from the last call to 
+   * {@link #nextRows()} */
+  private long last_bytes_fetched = 0;
+
+  /** A unique list of region servers this scanner encountered */
+  private final Set<String> region_servers;
 
   /**
    * Constructor.
@@ -207,6 +229,7 @@ public final class Scanner {
     KeyValue.checkTable(table);
     this.client = client;
     this.table = table;
+    region_servers = new HashSet<String>();
   }
 
   /**
@@ -701,6 +724,37 @@ public final class Scanner {
     this.max_timestamp = max_timestamp;
   }
 
+  /** @return The total number of rows fetched by the scanner. That is
+   * the number returned from HBase, not necessarily how many were read and
+   * filtered through the HBase server side filter. */
+  public long getRowsFetched() {
+    return rows_fetched;
+  }
+
+  /** @return The total number of columns fetched by the scanner. That is
+   * the number returned from HBase, not necessarily how many were read and
+   * filtered through the HBase server side filter. */
+  public long getColumnsFetched() {
+    return columns_fetched;
+  }
+  
+  /** @return The total number of bytes (roughly) fetched by the scanner over it's
+   * entire life span. */
+  public long getTotalBytesFetched() {
+    return total_bytes_fetched;
+  }
+  
+  /** @return The number of bytes (roughly) fetched by the scanner from the last
+   * call to {@link #nextRows()}. */
+  public long getLastBytesFetched() {
+    return last_bytes_fetched;
+  }
+  
+  /** @return A unique set of region server endpoints scanned by this scanner */
+  public Set<String> regionServersScanned() {
+    return Collections.unmodifiableSet(region_servers);
+  }
+  
   /**
    * Scans a number of rows.  Calling this method is equivalent to:
    * <pre>
@@ -1068,6 +1122,9 @@ public final class Scanner {
       // TODO allocation for the other bits
       .append(", minTimestamp=").append(min_timestamp)
       .append(", maxTimestamp=").append(max_timestamp)
+      .append(", rowsFetched=").append(rows_fetched)
+      .append(", columnsFetched=").append(columns_fetched)
+      .append(", bytesFetched=").append(total_bytes_fetched)
       .append(')');
     return buf.toString();
   }
@@ -1462,17 +1519,31 @@ public final class Scanner {
 
     @Override
     Response deserialize(final ChannelBuffer buf, final int cell_size) {
+      if (regionClient() != null) {
+        region_servers.add(regionClient().getRemoteAddress());
+      }
+      // Less accurate than resp.getSerializedSize() but faster. At this point
+      // we *should* have verified all bytes are in so we won't replay.
+      last_bytes_fetched = buf.writerIndex() - buf.readerIndex();
+      total_bytes_fetched += last_bytes_fetched;
       final ScanResponse resp = readProtobuf(buf, ScanResponse.PARSER);
       if (!resp.hasScannerId()) {
         throw new InvalidResponseException("Scan RPC response doesn't contain a"
                                            + " scanner ID", resp);
       }
+      
       final boolean scannerClosedOnServer = resp.hasMoreResultsInRegion() && !resp.getMoreResultsInRegion();
-      return new Response(resp.getScannerId(),
-                          getRows(resp, buf, cell_size),
-                          resp.getMoreResults(), scannerClosedOnServer);
+      final ArrayList<ArrayList<KeyValue>> rows = getRows(resp, buf, cell_size);
+      // counters
+      if (rows != null) {
+        rows_fetched += rows.size();
+        for (final ArrayList<KeyValue> row : rows) {
+          columns_fetched += row.size();
+        }
+      }
+      return new Response(resp.getScannerId(), rows, resp.getMoreResults(), scannerClosedOnServer);
     }
-
+    
     public String toString() {
       return "OpenScannerRequest(scanner=" + Scanner.this.toString() + ')';
     }
@@ -1516,6 +1587,14 @@ public final class Scanner {
 
     @Override
     Response deserialize(final ChannelBuffer buf, final int cell_size) {
+      if (get_next_rows_request != null && 
+          get_next_rows_request.regionClient() != null) {
+        region_servers.add(
+            get_next_rows_request.regionClient().getRemoteAddress());
+      }
+      // Less accurate than resp.getSerializedSize() but faster. At this point
+      // we *should* have verified all bytes are in so we won't replay.
+      total_bytes_fetched += buf.writerIndex() - buf.readerIndex();
       final ScanResponse resp = readProtobuf(buf, ScanResponse.PARSER);
       final long id = resp.getScannerId();
       if (scanner_id != id) {
@@ -1526,6 +1605,12 @@ public final class Scanner {
       final ArrayList<ArrayList<KeyValue>> rows = getRows(resp, buf, cell_size);
       if (rows == null) {
         return null;
+      }
+      
+      // counters
+      rows_fetched += rows.size();
+      for (final ArrayList<KeyValue> row : rows) {
+        columns_fetched += row.size();
       }
       final boolean scannerClosedOnServer = resp.hasMoreResultsInRegion() && !resp.getMoreResultsInRegion();
       return new Response(resp.getScannerId(), rows, resp.getMoreResults(), scannerClosedOnServer);
