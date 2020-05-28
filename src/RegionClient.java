@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2010-2018  The Async HBase Authors.  All rights reserved.
+ * Copyright (C) 2010-2020  The Async HBase Authors.  All rights reserved.
  * This file is part of Async HBase.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -272,6 +272,10 @@ public final class RegionClient extends ReplayingDecoder<VoidEnum> {
   /** Number of batchable RPCs allowed in a single batch before it's sent off */
   private int batch_size;
   
+  /** When an NSRE or other issue occurs, whether or not to re-batch the RPCs from
+   * a multi-action that are destined for the same region. */
+  private boolean rebatch_batched_retries;
+  
   /**
    * Constructor.
    * @param hbase_client The HBase client this instance belongs to.
@@ -287,6 +291,8 @@ public final class RegionClient extends ReplayingDecoder<VoidEnum> {
     batch_size = hbase_client.getConfig().getInt("hbase.rpcs.batch.size");
     meta_lookups = new Semaphore(hbase_client.getConfig()
         .getInt("hbase.client.meta.permits"));
+    rebatch_batched_retries = hbase_client.getConfig()
+        .getBoolean("hbase.rpcs.rebatch_retries");
     LimitPolicy policy = new RateLimitPolicyImpl(
         hbase_client.getConfig()
                 .getInt("hbase.rpc.ratelimit.policy.min_success_rate"),
@@ -992,8 +998,10 @@ public final class RegionClient extends ReplayingDecoder<VoidEnum> {
       return HBaseClient.tooManyAttempts(rpc, e);
     }
     // This RPC has already been delayed because of a failure,
-    // so make sure we don't buffer it again.
-    rpc.setBufferable(false);
+    // so make sure we don't buffer it again if not explicitly told to
+    if (!rebatch_batched_retries) {
+      rpc.setBufferable(false);
+    }
     final class RetryTimer implements TimerTask {
       public void run(final Timeout timeout) {
         hbase_client.sendRpcToRegion(rpc);
