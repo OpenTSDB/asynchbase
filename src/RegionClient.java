@@ -255,7 +255,7 @@ public final class RegionClient extends ReplayingDecoder<VoidEnum> {
    * start to throttle ourselves slightly.
    * @see #acquireMetaLookupPermit
    */
-  private final Semaphore meta_lookups = new Semaphore(100);
+  private final Semaphore meta_lookups;
 
   /** An optional rate limiter for mutation RPCs. */
   private final WriteRateLimiter rate_limiter;
@@ -285,6 +285,8 @@ public final class RegionClient extends ReplayingDecoder<VoidEnum> {
     pending_limit = hbase_client.getConfig().getInt(
         "hbase.region_client.pending_limit");
     batch_size = hbase_client.getConfig().getInt("hbase.rpcs.batch.size");
+    meta_lookups = new Semaphore(hbase_client.getConfig()
+        .getInt("hbase.client.meta.permits"));
     LimitPolicy policy = new RateLimitPolicyImpl(
         hbase_client.getConfig()
                 .getInt("hbase.rpc.ratelimit.policy.min_success_rate"),
