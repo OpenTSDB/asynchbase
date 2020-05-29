@@ -1652,7 +1652,6 @@ public final class RegionClient extends ReplayingDecoder<VoidEnum> {
     // RPC. For now though, something went really pear shaped so we should
     // toss an exception.
     assert rpc.rpc_id == rpcid;
-    rate_limiter.ping(WriteRateLimiter.SIGNAL.SUCCESS);
     
     final Object decoded;
     try {
@@ -1686,6 +1685,7 @@ public final class RegionClient extends ReplayingDecoder<VoidEnum> {
         TRACE_LOG.info("Failed to deserialize RPC response: " + rpc 
             + " Server: " + this, e);
       }
+      
       rpc.callback(e);
       removeRpc(rpc, false);
       throw e;
@@ -1757,6 +1757,8 @@ public final class RegionClient extends ReplayingDecoder<VoidEnum> {
         TRACE_LOG.info("Calling back RPC: " + rpc + " Server: " + this 
             + " Response: " + decoded);
       }
+      
+      rate_limiter.ping(WriteRateLimiter.SIGNAL.SUCCESS);
       rpc.callback(decoded);
     } catch (Exception e) {
       LOG.error("Unexpected exception while handling RPC #" + rpcid
