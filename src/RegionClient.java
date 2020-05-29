@@ -264,17 +264,20 @@ public final class RegionClient extends ReplayingDecoder<VoidEnum> {
   private SecureRpcHelper secure_rpc_helper;
   
   /** Maximum number of inflight RPCs. If 0, unlimited */
-  private int inflight_limit;
+  private final int inflight_limit;
   
   /** Maximum number of RPCs queued while waiting to connect. If 0, unlimited */
-  private int pending_limit;
+  private final int pending_limit;
   
   /** Number of batchable RPCs allowed in a single batch before it's sent off */
-  private int batch_size;
+  private final int batch_size;
   
   /** When an NSRE or other issue occurs, whether or not to re-batch the RPCs from
    * a multi-action that are destined for the same region. */
-  private boolean rebatch_batched_retries;
+  private final boolean rebatch_batched_retries;
+  
+  /** Whether or not we're using Oath's append co-proc */
+  private final boolean append_multi_action;
   
   /**
    * Constructor.
@@ -293,6 +296,8 @@ public final class RegionClient extends ReplayingDecoder<VoidEnum> {
         .getInt("hbase.client.meta.permits"));
     rebatch_batched_retries = hbase_client.getConfig()
         .getBoolean("hbase.rpcs.rebatch_retries");
+    append_multi_action = hbase_client.getConfig()
+        .getBoolean("hbase.region_client.append_multi_action");
     LimitPolicy policy = new RateLimitPolicyImpl(
         hbase_client.getConfig()
                 .getInt("hbase.rpc.ratelimit.policy.min_success_rate"),
@@ -871,7 +876,11 @@ public final class RegionClient extends ReplayingDecoder<VoidEnum> {
 
     synchronized (this) {
       if (batched_rpcs == null) {
-        batched_rpcs = new MultiAction();
+        if (append_multi_action) {
+          batched_rpcs = new MultiActionAppend();
+        } else {
+          batched_rpcs = new MultiAction();
+        }
         addMultiActionCallbacks(batched_rpcs);
         schedule_flush = true;
       }
@@ -884,7 +893,11 @@ public final class RegionClient extends ReplayingDecoder<VoidEnum> {
       } else {
         // Execute the edits buffered so far.  But first we must clear
         // the reference to the buffer we're about to send to HBase.
-        batched_rpcs = new MultiAction();
+        if (append_multi_action) {
+          batched_rpcs = new MultiActionAppend();
+        } else {
+          batched_rpcs = new MultiAction();
+        }
         addMultiActionCallbacks(batched_rpcs);
       }
     }
@@ -900,7 +913,7 @@ public final class RegionClient extends ReplayingDecoder<VoidEnum> {
    * Creates callbacks to handle a multi-put and adds them to the request.
    * @param request The request for which we must handle the response.
    */
-  private void addMultiActionCallbacks(final MultiAction request) {
+  void addMultiActionCallbacks(final MultiAction request) {
     final class MultiActionCallback implements Callback<Object, Object> {
       public Object call(final Object resp) {
         if (!(resp instanceof MultiAction.Response)) {

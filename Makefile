@@ -101,6 +101,7 @@ asynchbase_SOURCES := \
 	src/KeyRegexpFilter.java	\
 	src/KeyValue.java	\
 	src/MultiAction.java	\
+	src/MultiActionAppend.java \
 	src/MultipleColumnPrefixFilter.java	\
 	src/NoSuchColumnFamilyException.java	\
 	src/NonRecoverableException.java	\
@@ -187,6 +188,7 @@ unittest_SRC := \
 	test/TestHBaseRpc.java	\
 	test/TestMETALookup.java	\
 	test/TestMultiAction.java	\
+	test/TestMultiActionApend.java  \
 	test/TestNSREEvent.java	\
 	test/TestNSREMeta.java	\
 	test/TestNSREs.java	\
