@@ -51,7 +51,7 @@ import org.hbase.async.generated.HBasePB.NameBytesPair;
  * https://issues.apache.org/jira/browse/HBASE-17924) so that the 
  * responses can be matched to the original RPC.
  */
-final class MultiAction extends HBaseRpc implements HBaseRpc.IsEdit {
+class MultiAction extends HBaseRpc implements HBaseRpc.IsEdit {
 
   // NOTE: I apologize for the long methods and complex control flow logic,
   // with many nested loops and `if's.  `multiPut' and `multi' have always
@@ -94,7 +94,7 @@ final class MultiAction extends HBaseRpc implements HBaseRpc.IsEdit {
    * We'll sort this list before serializing it.
    * @see MultiActionComparator
    */
-  private final ArrayList<BatchableRpc> batch = new ArrayList<BatchableRpc>();
+  protected final ArrayList<BatchableRpc> batch = new ArrayList<BatchableRpc>();
 
   @Override
   byte[] method(final byte server_version) {
@@ -251,7 +251,7 @@ final class MultiAction extends HBaseRpc implements HBaseRpc.IsEdit {
   }
 
   /** Serializes this request for HBase 0.94 and before.  */
-  private ChannelBuffer serializeOld(final byte server_version) {
+  protected ChannelBuffer serializeOld(final byte server_version) {
     // Due to the wire format expected by HBase, we need to group all the
     // edits by region, then by key, then by family.  HBase does this by
     // building a crazy map-of-map-of-map-of-list-of-edits, but this is
