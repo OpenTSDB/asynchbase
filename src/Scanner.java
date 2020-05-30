@@ -1340,6 +1340,11 @@ public final class Scanner {
               : OPEN_SCANNER);
     }
 
+    @Override
+    boolean isMutation() {
+      return false;
+    }
+    
     /**
      * Predicts a lower bound on the serialized size of this RPC.
      * This is to avoid using a dynamic buffer, to avoid re-sizing the buffer.
@@ -1563,6 +1568,11 @@ public final class Scanner {
               ? SCAN
               : NEXT);  // "next"...  Great method name!
     }
+    
+    @Override
+    boolean isMutation() {
+      return false;
+    }
 
     /** Serializes this request.  */
     ChannelBuffer serialize(final byte server_version) {
@@ -1645,6 +1655,11 @@ public final class Scanner {
               : CLOSE);  // "close"...  Great method name!
     }
 
+    @Override
+    boolean isMutation() {
+      return false;
+    }
+    
     /** Serializes this request.  */
     ChannelBuffer serialize(final byte server_version) {
       if (server_version < RegionClient.SERVER_VERSION_095_OR_ABOVE) {

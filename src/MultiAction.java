@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2010-2018  The Async HBase Authors.  All rights reserved.
+ * Copyright (C) 2010-2020  The Async HBase Authors.  All rights reserved.
  * This file is part of Async HBase.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -104,6 +104,14 @@ class MultiAction extends HBaseRpc implements HBaseRpc.IsEdit {
     return server_version >= USE_MULTI ? MULTI : MULTI_PUT;
   }
 
+  /**
+   * <b>WARNING:</b> Naturally this may contain mutations.
+   */
+  @Override
+  boolean isMutation() {
+    return false;
+  }
+  
   /** Returns the number of RPCs in this batch.  */
   public int size() {
     return batch.size();

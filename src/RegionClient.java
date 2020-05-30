@@ -30,6 +30,8 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
+import java.util.Iterator;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.RejectedExecutionException;
@@ -150,6 +152,10 @@ public final class RegionClient extends ReplayingDecoder<VoidEnum> {
 
   /** Whether or not to check the channel write status before sending RPCs */
   private final boolean check_write_status;
+  
+  /** Whether or not to immediately fail call queue to big exceptions on
+   * mutation RPCs. */
+  private final boolean fail_cqtbes;
   
   /**
    * The channel we're connected to.
@@ -349,6 +355,8 @@ public final class RegionClient extends ReplayingDecoder<VoidEnum> {
         .getBoolean("hbase.rpcs.rebatch_retries");
     append_multi_action = hbase_client.getConfig()
         .getBoolean("hbase.region_client.append_multi_action");
+    fail_cqtbes = hbase_client.getConfig()
+        .getBoolean("hbase.region_client.fail_cqtbe_mutables");
     if (hbase_client.getConfig()
         .getBoolean("hbase.client.extended_stats")) {
       exception_counters = Maps.newConcurrentMap();
@@ -712,6 +720,11 @@ public final class RegionClient extends ReplayingDecoder<VoidEnum> {
     byte[] method(final byte unused_server_version) {
       return GET_PROTOCOL_VERSION;
     }
+    
+    @Override
+    boolean isMutation() {
+      return false;
+    }
 
     ChannelBuffer serialize(final byte server_version) {
     /** Pre-serialized form for this RPC, which is always the same.  */
@@ -872,6 +885,11 @@ public final class RegionClient extends ReplayingDecoder<VoidEnum> {
       byte[] method(final byte server_version) {
         return server_version >= SERVER_VERSION_095_OR_ABOVE
           ? GetRequest.GGET : GET_CLOSEST_ROW_BEFORE;
+      }
+      
+      @Override
+      boolean isMutation() {
+        return false;
       }
 
       @Override
@@ -1054,11 +1072,25 @@ public final class RegionClient extends ReplayingDecoder<VoidEnum> {
           }
           return e;  // Can't recover from this error, let it propagate.
         }
+        
+        final List<BatchableRpc> rpcs = request.batch();
+        if (e instanceof CallQueueTooBigException && fail_cqtbes) {
+          final Iterator<BatchableRpc> iterator = rpcs.iterator();
+          while (iterator.hasNext()) {
+            final BatchableRpc rpc = iterator.next();
+            if (rpc.isMutation()) {
+              iterator.remove();
+              rpc.callback(e);
+            }
+          }
+        }
+        
         if (LOG.isDebugEnabled()) {
           LOG.debug("Multi-action request failed, retrying each of the "
                     + request.size() + " RPCs individually.", e);
         }
-        for (final BatchableRpc rpc : request.batch()) {
+        for (int i = 0; i < rpcs.size(); i++) {
+          final BatchableRpc rpc = rpcs.get(i);
           if (e instanceof NotServingRegionException ||
               e instanceof RegionMovedException || 
               e instanceof RegionServerStoppedException) {
@@ -1841,6 +1873,12 @@ public final class RegionClient extends ReplayingDecoder<VoidEnum> {
         if (decoded instanceof CallQueueTooBigException) {
           cqtbes++;
           rate_limiter.ping(WriteRateLimiter.SIGNAL.WRITES_BLOCKED);
+          if (fail_cqtbes && rpc.isMutation() && !rpc.isProbe()) {
+            rpc.callback(new PleaseThrottleException(
+                "Region server call queue was full for " + this, 
+                (HBaseException) decoded, rpc, rpc.getDeferred()));
+            return null;
+          }
         } else {
           rate_limiter.ping(WriteRateLimiter.SIGNAL.FAILURE);
         }

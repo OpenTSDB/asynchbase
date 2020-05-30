@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2010-2018  The Async HBase Authors.  All rights reserved.
+ * Copyright (C) 2010-2020  The Async HBase Authors.  All rights reserved.
  * This file is part of Async HBase.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -571,6 +571,13 @@ public abstract class HBaseRpc implements TimerTask {
    */
   abstract byte[] method(byte server_version);
 
+  /** 
+   * Package private way of determining if the RPC is a mutation or not.
+   * @return True if the RPC is a mutation, false if not (or it's a batch).
+   * @since 1.9
+   */
+  abstract boolean isMutation();
+  
   /**
    * Sets the region this RPC is going to.
    * <p>

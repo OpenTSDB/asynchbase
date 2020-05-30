@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2010-2012  The Async HBase Authors.  All rights reserved.
+ * Copyright (C) 2010-2020  The Async HBase Authors.  All rights reserved.
  * This file is part of Async HBase.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -445,6 +445,11 @@ public final class DeleteRequest extends BatchableRpc
             : DELETE);
   }
 
+  @Override
+  boolean isMutation() {
+    return true;
+  }
+  
   @Override
   public byte[] table() {
     return table;

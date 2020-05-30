@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2016  The Async HBase Authors.  All rights reserved.
+ * Copyright (C) 2016-2020  The Async HBase Authors.  All rights reserved.
  * This file is part of Async HBase.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -66,6 +66,11 @@ final class BatchGet extends HBaseRpc {
       return MMULTI;
   }
 
+  @Override
+  boolean isMutation() {
+    return false;
+  }
+  
   void add(final GetRequest rpc) {
     batch.add(new ActionEntry(rpc, batch.size()));
   }
