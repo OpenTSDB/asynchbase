@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2010-2018  The Async HBase Authors.  All rights reserved.
+ * Copyright (C) 2010-2020  The Async HBase Authors.  All rights reserved.
  * This file is part of Async HBase.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -28,6 +28,7 @@ package org.hbase.async;
 
 import java.net.Inet6Address;
 import com.google.common.cache.LoadingCache;
+import com.google.common.collect.Maps;
 import com.google.protobuf.InvalidProtocolBufferException;
 import com.stumbleupon.async.Callback;
 import com.stumbleupon.async.Deferred;
@@ -59,6 +60,7 @@ import org.jboss.netty.channel.socket.nio.NioWorkerPool;
 import org.jboss.netty.handler.timeout.IdleStateAwareChannelHandler;
 import org.jboss.netty.handler.timeout.IdleStateEvent;
 import org.jboss.netty.handler.timeout.IdleStateHandler;
+import org.jboss.netty.handler.traffic.ChannelTrafficShapingHandler;
 import org.jboss.netty.util.HashedWheelTimer;
 import org.jboss.netty.util.ThreadNameDeterminer;
 import org.jboss.netty.util.Timeout;
@@ -487,6 +489,12 @@ public final class HBaseClient {
   /** How many {@code .META.} lookups were made (without a permit).  */
   private final Counter meta_lookups_wo_permit = new Counter();
 
+  /** How many {@code .META.} lookups were blocked due to limits.  */
+  private final Counter meta_lookups_permit_blocked = new Counter();
+  
+  /** How many {@code .META.} lookups resulted in exceptions.  */
+  private final Counter meta_lookups_exception = new Counter();
+  
   /** Number of calls to {@link #flush}.  */
   private final Counter num_flushes = new Counter();
 
@@ -526,6 +534,9 @@ public final class HBaseClient {
   /** Number of region clients closed due to being idle.  */
   private final Counter idle_connections_closed = new Counter();
 
+  /** Optional map of exceptions seen by this client. */
+  private final Map<Class<?>, Counter> exception_counters;
+  
   /**
    * Constructor.
    * @param quorum_spec The specification of the quorum, e.g.
@@ -620,6 +631,19 @@ public final class HBaseClient {
     track_nsre_meta = false;
     region_to_nsre_meta = null;
     nsre_events = null;
+    if (config.getBoolean("hbase.client.extended_stats")) {
+      exception_counters = Maps.newConcurrentMap();
+      for (final Exception e : RegionClient.REMOTE_EXCEPTION_TYPES.values()) {
+        exception_counters.put(e.getClass(), new Counter());
+      }
+      exception_counters.put(RuntimeException.class, new Counter());
+      exception_counters.put(Exception.class, new Counter());
+      exception_counters.put(NonRecoverableException.class, new Counter());
+      exception_counters.put(IllegalArgumentException.class, new Counter());
+      exception_counters.put(PleaseThrottleException.class, new Counter());
+    } else {
+      exception_counters = null;
+    }
   }
   
   /**
@@ -715,6 +739,19 @@ public final class HBaseClient {
       region_to_nsre_meta = null;
       nsre_events = null;
     }
+    if (config.getBoolean("hbase.client.extended_stats")) {
+      exception_counters = Maps.newConcurrentMap();
+      for (final Exception e : RegionClient.REMOTE_EXCEPTION_TYPES.values()) {
+        exception_counters.put(e.getClass(), new Counter());
+      }
+      exception_counters.put(RuntimeException.class, new Counter());
+      exception_counters.put(Exception.class, new Counter());
+      exception_counters.put(NonRecoverableException.class, new Counter());
+      exception_counters.put(IllegalArgumentException.class, new Counter());
+      exception_counters.put(PleaseThrottleException.class, new Counter());
+    } else {
+      exception_counters = null;
+    }
   }
   
   /**
@@ -800,6 +837,8 @@ public final class HBaseClient {
     long pending_rpcs = 0;
     long pending_batched_rpcs = 0;
     int dead_region_clients = 0;
+    long bytes_read = 0;
+    long bytes_written = 0;
     
     final Collection<RegionClient> region_clients = client2regions.keySet();
     
@@ -810,6 +849,10 @@ public final class HBaseClient {
       pending_batched_rpcs += stats.pendingBatchedRPCs();
       if (stats.isDead()) {
         dead_region_clients++;
+      }
+      if (stats.extendedStats() != null) {
+        bytes_read += stats.extendedStats().bytesRead();
+        bytes_written += stats.extendedStats().bytesWritten();
       }
     }
     
@@ -836,7 +879,12 @@ public final class HBaseClient {
       pending_batched_rpcs,
       dead_region_clients,
       region_clients.size(),
-      idle_connections_closed.get()
+      idle_connections_closed.get(),
+      config.getBoolean("hbase.client.extended_stats") ? 
+          new ClientStats.ExtendedStats(
+              bytes_read,
+              bytes_written,
+              exception_counters) : null
     );
   }
 
@@ -4033,6 +4081,25 @@ public final class HBaseClient {
   }
   
   /**
+   * Package private method to update the exception counter map.
+   * @param ex The exception class to increment a counter for.
+   */
+  void updateExceptionCounter(final Class<?> ex) {
+    if (exception_counters == null) {
+      return;
+    }
+    Counter counter = exception_counters.get(ex);
+    if (counter == null) {
+      counter = new Counter();
+      Counter extant = exception_counters.putIfAbsent(ex, counter);
+      if (extant != null) {
+        counter = extant;
+      }
+    }
+    counter.increment();
+  }
+  
+  /**
    * Some arbitrary junk that is unlikely to appear in a real row key.
    * @see probeKey
    */
@@ -4163,11 +4230,19 @@ public final class HBaseClient {
     /** A handler to close the connection if we haven't used it in some time */
     private final ChannelHandler timeout_handler;
     
+    /** Optional traffic shapper to track bytes in and out. */
+    private final ChannelTrafficShapingHandler traffic_counter;
+    
     RegionClientPipeline() {
         timeout_handler = new IdleStateHandler(timer,
                 config.getInt("hbase.ipc.client.connection.idle_read_timeout"),
                 config.getInt("hbase.ipc.client.connection.idle_write_timeout"),
                 config.getInt("hbase.hbase.ipc.client.connection.idle_timeout"));
+        if (config.getBoolean("hbase.client.extended_stats")) {
+          traffic_counter = new ChannelTrafficShapingHandler(timer, 1000);
+        } else {
+          traffic_counter = null;
+        }
     }
 
     /**
@@ -4176,9 +4251,12 @@ public final class HBaseClient {
      * before it's used as a pipeline for a channel.
      */
     RegionClient init() {
-      final RegionClient client = new RegionClient(HBaseClient.this);
+      final RegionClient client = new RegionClient(HBaseClient.this, traffic_counter);
       super.addLast("idle_handler", this.timeout_handler);
       super.addLast("idle_cleanup", new RegionClientIdleStateHandler());
+      if (traffic_counter != null) {
+        super.addLast("traffic_counter", traffic_counter);
+      }
       super.addLast("handler", client);
       return client;
     }

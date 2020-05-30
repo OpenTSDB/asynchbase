@@ -30,6 +30,7 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
+import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.Semaphore;
@@ -37,6 +38,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
 
+import com.google.common.collect.Maps;
 import com.google.protobuf.CodedOutputStream;
 
 import org.jboss.netty.buffer.ChannelBuffer;
@@ -51,6 +53,7 @@ import org.jboss.netty.channel.Channels;
 import org.jboss.netty.channel.ExceptionEvent;
 import org.jboss.netty.handler.codec.replay.ReplayingDecoder;
 import org.jboss.netty.handler.codec.replay.VoidEnum;
+import org.jboss.netty.handler.traffic.ChannelTrafficShapingHandler;
 import org.jboss.netty.util.Timeout;
 import org.jboss.netty.util.TimerTask;
 import org.slf4j.Logger;
@@ -94,7 +97,7 @@ public final class RegionClient extends ReplayingDecoder<VoidEnum> {
   private static final Logger TRACE_LOG = LoggerFactory.getLogger("Trace");
 
   /** Maps remote exception types to our corresponding types.  */
-  private static final HashMap<String, HBaseException> REMOTE_EXCEPTION_TYPES;
+  static final HashMap<String, HBaseException> REMOTE_EXCEPTION_TYPES;
   static {
     REMOTE_EXCEPTION_TYPES = new HashMap<String, HBaseException>();
     REMOTE_EXCEPTION_TYPES.put(NoSuchColumnFamilyException.REMOTE_CLASS,
@@ -216,16 +219,23 @@ public final class RegionClient extends ReplayingDecoder<VoidEnum> {
    * they may not have made it all the way */
   private final AtomicInteger rpcs_sent = new AtomicInteger();
   
+  /** The counter of individual RPCs that may or may not have been batched. The
+   * "rpcs_sent" will count all of the RPCs in a batch as 1 increment. */
+  private final AtomicInteger individual_rpcs_sent = new AtomicInteger();
+  
   /** Number of RPCs failed due to timeout */
   private final AtomicInteger rpcs_timedout = new AtomicInteger();
   
   /** The number of responses received from HBase that were timed out, meaning
    * we got the results late. */
-  private final AtomicInteger rpc_response_timedout = new AtomicInteger();
+  private int rpc_response_timedout;
   
   /** The number of responses received from HBase that didn't match an RPC that
    * we sent. This means the ID was greater than our RPC ID counter */
-  private final AtomicInteger rpc_response_unknown = new AtomicInteger();
+  private int rpc_response_unknown;
+  
+  /** RPCs that passed the decode path with valid responses. */
+  private int rpc_success;
   
   /** Number of RPCs that were blocked due to the channel in a non-writable state */
   private final AtomicInteger writes_blocked = new AtomicInteger();
@@ -238,6 +248,41 @@ public final class RegionClient extends ReplayingDecoder<VoidEnum> {
   
   /** Number of RPCs failed due to exceeding the pending limit */
   private final AtomicInteger pending_breached = new AtomicInteger();
+  
+  /* Extra counters for extra stats */
+  /** Number of calls into the decode from buffer */
+  private int decode_called;
+  
+  /** How often received buffers were replayed */
+  private int replays;
+  
+  /** The number of NSRE exceptions received that were sent back to the HBase 
+   * client for re-routing. */
+  private int nsre_exceptions;
+  
+  /** The number of NSRE probes sent to this client. */
+  private final AtomicInteger probes_sent = new AtomicInteger();
+  
+  /** The number of RPCs sent through with more than one attempt. */
+  private final AtomicInteger rpcs_retried = new AtomicInteger();
+  
+  /** The number of probes called back successfully. */
+  private int probes_succeded;
+  
+  /** The number of probes called back with an NSRE. */
+  private int probes_nsred;
+  
+  /** The number of probes called back with a non-NSRE exception. */
+  private int probes_with_exception;
+  
+  /** The number of probes timed-out. */
+  private int probes_timedout;
+  
+  /** The number of CallQueueTooBigExceptions from the region server. */
+  private int cqtbes;
+  
+  /** A map of exceptions to counters for extended details. */
+  private final Map<Class<?>, Counter> exception_counters;
   
   private final TimerTask flush_timer = new TimerTask() {
     public void run(final Timeout timeout) {
@@ -279,12 +324,18 @@ public final class RegionClient extends ReplayingDecoder<VoidEnum> {
   /** Whether or not we're using Oath's append co-proc */
   private final boolean append_multi_action;
   
+  /** Optional handler to track bytes in and out for stats reporting. */
+  private final ChannelTrafficShapingHandler traffic_counter;
+  
   /**
    * Constructor.
    * @param hbase_client The HBase client this instance belongs to.
+   * @param traffic_counter Optional handler for reporting bytes in and out.
    */
-  public RegionClient(final HBaseClient hbase_client) {
+  public RegionClient(final HBaseClient hbase_client,
+                      final ChannelTrafficShapingHandler traffic_counter) {
     this.hbase_client = hbase_client;
+    this.traffic_counter = traffic_counter;
     check_write_status = hbase_client.getConfig().getBoolean(
             "hbase.region_client.check_channel_write_status");
     inflight_limit = hbase_client.getConfig().getInt(
@@ -298,6 +349,20 @@ public final class RegionClient extends ReplayingDecoder<VoidEnum> {
         .getBoolean("hbase.rpcs.rebatch_retries");
     append_multi_action = hbase_client.getConfig()
         .getBoolean("hbase.region_client.append_multi_action");
+    if (hbase_client.getConfig()
+        .getBoolean("hbase.client.extended_stats")) {
+      exception_counters = Maps.newConcurrentMap();
+      for (final Exception e : REMOTE_EXCEPTION_TYPES.values()) {
+        exception_counters.put(e.getClass(), new Counter());
+      }
+      exception_counters.put(RuntimeException.class, new Counter());
+      exception_counters.put(Exception.class, new Counter());
+      exception_counters.put(NonRecoverableException.class, new Counter());
+      exception_counters.put(IllegalArgumentException.class, new Counter());
+      exception_counters.put(PleaseThrottleException.class, new Counter());
+    } else {
+      exception_counters = null;
+    }
     LimitPolicy policy = new RateLimitPolicyImpl(
         hbase_client.getConfig()
                 .getInt("hbase.rpc.ratelimit.policy.min_success_rate"),
@@ -358,6 +423,7 @@ public final class RegionClient extends ReplayingDecoder<VoidEnum> {
     synchronized (this) {
       return new RegionClientStats(
         rpcs_sent.get(),
+        individual_rpcs_sent.get(),
         rpcs_inflight != null ? rpcs_inflight.size() : 0,
         pending_rpcs != null ? pending_rpcs.size() : 0,
         rpcid.get(),
@@ -365,13 +431,31 @@ public final class RegionClient extends ReplayingDecoder<VoidEnum> {
         chan != null ? chan.getRemoteAddress().toString() : "",
         batched_rpcs != null ? batched_rpcs.size() : 0,
         rpcs_timedout.get(),
+        rpc_success,
+        rpcs_retried.get(),
         writes_blocked.get(),
-        rpc_response_timedout.get(),
-        rpc_response_unknown.get(),
+        rpc_response_timedout,
+        rpc_response_unknown,
         inflight_breached.get(),
         pending_breached.get(),
         writes_rate_limited.get(),
-        rate_limiter.getCurrentRate()
+        rate_limiter.getCurrentRate(),
+        hbase_client.getConfig().getBoolean("hbase.client.extended_stats") ?
+            new RegionClientStats.ExtendedStats(
+                decode_called,
+                replays,
+                nsre_exceptions,
+                probes_sent.get(),
+                probes_succeded,
+                probes_nsred,
+                probes_with_exception,
+                probes_timedout,
+                cqtbes,
+                traffic_counter != null ? 
+                    traffic_counter.getTrafficCounter().getCumulativeReadBytes() : 0,
+                traffic_counter != null ? 
+                    traffic_counter.getTrafficCounter().getCumulativeWrittenBytes() : 0,
+                exception_counters) : null
       );
     }
   }
@@ -596,10 +680,12 @@ public final class RegionClient extends ReplayingDecoder<VoidEnum> {
           }
           final Throwable t = future.getCause();
           if (t instanceof Exception) {
+            updateExceptionCounter(t.getClass());
             d.callback(t);
           } else {
             // Wrap the Throwable because Deferred doesn't handle Throwables,
             // it only uses Exception.
+            updateExceptionCounter(NonRecoverableException.class);
             d.callback(new NonRecoverableException("Failed to shutdown: "
                                                    + RegionClient.this, t));
           }
@@ -922,6 +1008,7 @@ public final class RegionClient extends ReplayingDecoder<VoidEnum> {
           } else if (resp instanceof Exception) {
             return handleException((Exception) resp);
           }
+          updateExceptionCounter(InvalidResponseException.class);
           throw new InvalidResponseException(MultiAction.Response.class, resp);
         }
         final MultiAction.Response response = (MultiAction.Response) resp;
@@ -1068,6 +1155,7 @@ public final class RegionClient extends ReplayingDecoder<VoidEnum> {
           && !(rpc instanceof GetRequest)
           && (server_version >= SERVER_VERSION_092_OR_ABOVE  // Before 0.92,
               || rpc instanceof PutRequest)) {  // we could only batch "put".
+        individual_rpcs_sent.incrementAndGet();
         final BatchableRpc edit = (BatchableRpc) rpc;
         if (edit.canBuffer() && hbase_client.getFlushInterval() > 0) {
           bufferEdit(edit);
@@ -1082,7 +1170,9 @@ public final class RegionClient extends ReplayingDecoder<VoidEnum> {
         final MultiAction batch = (MultiAction) rpc;
         if (batch.size() == 1) {
           rpc = multiActionToSingleAction(batch);
+          individual_rpcs_sent.incrementAndGet();
         } else {
+          individual_rpcs_sent.addAndGet(batch.rpc_id);
           hbase_client.num_multi_rpcs.increment();
         }
       }
@@ -1103,6 +1193,7 @@ public final class RegionClient extends ReplayingDecoder<VoidEnum> {
             handleRpcOnDeadClient(rpc);
           } else {
             rate_limiter.ping(WriteRateLimiter.SIGNAL.WRITES_BLOCKED);
+            updateExceptionCounter(PleaseThrottleException.class);
             rpc.callback(new PleaseThrottleException("Region client [" + this + 
                 " ] channel is not writeable.", null, rpc, rpc.getDeferred()));
             // TODO - requeue this at some point instead of throwing it back
@@ -1116,6 +1207,12 @@ public final class RegionClient extends ReplayingDecoder<VoidEnum> {
         rpc.enqueueTimeout(this);
         Channels.write(chan, serialized);
         rate_limiter.ping(WriteRateLimiter.SIGNAL.ATTEMPT);
+        if (rpc.attempt > 0) {
+          rpcs_retried.incrementAndGet();
+        }
+        if (rpc.isProbe()) {
+          probes_sent.incrementAndGet();
+        }
         rpcs_sent.incrementAndGet();
         if (rpc.isTraceRPC()) {
           TRACE_LOG.info("Wrote RPC to channel: " + rpc + " Server: " 
@@ -1142,6 +1239,7 @@ public final class RegionClient extends ReplayingDecoder<VoidEnum> {
             TRACE_LOG.info("RPC blocked due to too many pending RPCs: " 
                 + rpc + " Server: " + this);
           }
+          updateExceptionCounter(PleaseThrottleException.class);
           rpc.callback(new PleaseThrottleException(
               "Exceeded the pending RPC limit", null, rpc, rpc.getDeferred()));
           pending_breached.incrementAndGet();
@@ -1183,6 +1281,7 @@ public final class RegionClient extends ReplayingDecoder<VoidEnum> {
   private void handleRpcOnDeadClient(final HBaseRpc rpc) {
     if (rpc.getRegion() == null  // Can't retry, dunno where it should go.
         || rpc.failfast()) {
+      updateExceptionCounter(ConnectionResetException.class);
       rpc.callback(new ConnectionResetException(chan));
     } else {
       LOG.warn("Returning RPC to HBaseClient as this region client has been "
@@ -1331,6 +1430,7 @@ public final class RegionClient extends ReplayingDecoder<VoidEnum> {
       failOrRetryRpcs(rpcs, exception);
     }
     if (batch != null) {
+      updateExceptionCounter(ConnectionResetException.class);
       batch.callback(exception);  // Make it fail.
     }
   }
@@ -1351,6 +1451,7 @@ public final class RegionClient extends ReplayingDecoder<VoidEnum> {
           TRACE_LOG.info("Failing queued or inflight RPC: " + rpc 
               + " Server: " + this);
         }
+        updateExceptionCounter(ConnectionResetException.class);
         rpc.callback(exception);
       } else {
         final NotServingRegionException nsre =
@@ -1384,6 +1485,7 @@ public final class RegionClient extends ReplayingDecoder<VoidEnum> {
     } else {
       LOG.error("Unexpected exception from downstream on " + c, e);
     }
+    updateExceptionCounter(e.getClass());
     if (c.isOpen()) {
       Channels.close(c);  // Will trigger channelClosed(), which will cleanup()
     } else {              // else: presumably a connection timeout.
@@ -1433,6 +1535,7 @@ public final class RegionClient extends ReplayingDecoder<VoidEnum> {
         !rpc.isProbe()) {
       inflight_breached.incrementAndGet();
       rate_limiter.ping(WriteRateLimiter.SIGNAL.BREACHED_INFLIGHT_QUEUE);
+      updateExceptionCounter(PleaseThrottleException.class);
       rpc.callback(new PleaseThrottleException(
           "Exceeded the inflight RPC limit", null, rpc, 
           rpc.getDeferred()));
@@ -1440,6 +1543,7 @@ public final class RegionClient extends ReplayingDecoder<VoidEnum> {
     }
     
     if (!rate_limiter.isHealthy()) {
+      updateExceptionCounter(PleaseThrottleException.class);
       rpc.callback(new PleaseThrottleException("Write rate is restricted by the"
               + "rate limiter (" + this.rate_limiter.toString()+")", 
                null, rpc, rpc.getDeferred()));
@@ -1517,6 +1621,7 @@ public final class RegionClient extends ReplayingDecoder<VoidEnum> {
       }
     } catch (Exception e) {
       LOG.error("Uncaught exception while serializing RPC: " + rpc, e);
+      updateExceptionCounter(e.getClass());
       rpc.callback(e);  // Make the RPC fail with the exception.
       return null;
     }
@@ -1536,6 +1641,7 @@ public final class RegionClient extends ReplayingDecoder<VoidEnum> {
       // were serializing the RPC.
       if (inflight_limit > 0 && rpcs_inflight.size() >= inflight_limit && 
           !rpc.isProbe()) {
+        updateExceptionCounter(PleaseThrottleException.class);
         rpc.callback(new PleaseThrottleException(
             "Exceeded the inflight RPC limit", null, rpc, rpc.getDeferred()));
         inflight_breached.incrementAndGet();
@@ -1549,6 +1655,7 @@ public final class RegionClient extends ReplayingDecoder<VoidEnum> {
           + ".  This happened when sending out: " + rpc;
         LOG.error(wtf);
         // Make it fail.  This isn't an expected failure mode.
+        updateExceptionCounter(NonRecoverableException.class);
         oldrpc.callback(new NonRecoverableException(wtf));
       }
     }
@@ -1576,199 +1683,231 @@ public final class RegionClient extends ReplayingDecoder<VoidEnum> {
                           final Channel chan,
                           final ChannelBuffer channel_buffer,
                           final VoidEnum unused) {
+    decode_called++;
     ChannelBuffer buf = channel_buffer;
     final long start = System.nanoTime();
     final int rdx = buf.readerIndex();
-    LOG.debug("------------------>> ENTERING DECODE >>------------------");
-    final int rpcid;
-    final RPCPB.ResponseHeader header;
     
-    if (secure_rpc_helper != null) {
-      buf = secure_rpc_helper.handleResponse(buf, chan);
-      if (buf == null) {
-        // everything in the buffer was part of the security handshake so we're
-        // done here.
+    try {
+      LOG.debug("------------------>> ENTERING DECODE >>------------------");
+      final int rpcid;
+      final RPCPB.ResponseHeader header;
+      
+      if (secure_rpc_helper != null) {
+        buf = secure_rpc_helper.handleResponse(buf, chan);
+        if (buf == null) {
+          // everything in the buffer was part of the security handshake so we're
+          // done here.
+          return null;
+        }
+      }
+      
+      final int size;
+      if (server_version >= SERVER_VERSION_095_OR_ABOVE) {
+        size = buf.readInt();
+        ensureReadable(buf, size);
+        HBaseRpc.checkArrayLength(buf, size);
+        header = HBaseRpc.readProtobuf(buf, RPCPB.ResponseHeader.PARSER);
+        if (!header.hasCallId()) {
+          final String msg = "RPC response (size: " + size + ") doesn't"
+            + " have a call ID: " + header + ", buf=" + Bytes.pretty(buf);
+          updateExceptionCounter(NonRecoverableException.class);
+          throw new NonRecoverableException(msg);
+        }
+        rpcid = header.getCallId();
+      } else {  // HBase 0.94 and before.
+        size = 0;
+        header = null;  // No protobuf back then.
+        rpcid = buf.readInt();
+      }
+  
+      final HBaseRpc rpc = rpcs_inflight.get(rpcid);
+      if (rpc == null) {
+        // make sure to consume the RPC body so that we can decode the next
+        // RPC in the buffer if there is one. Do this before incrementing counters
+        // as with pre-protobuf RPCs we may throw replays while consuming.
+        if (server_version >= SERVER_VERSION_095_OR_ABOVE) {
+          buf.readerIndex(rdx + size + 4);
+          if (LOG.isDebugEnabled()) {
+            LOG.debug("Skipped timed out RPC ID " + rpcid + " of " + size + 
+                " bytes on " + this);
+          }
+        } else {
+          consumeTimedoutNonPBufRPC(buf, rdx, rpcid);
+        }
+        
+        // TODO - account for the rpcid overflow
+        if (rpcid > -1 && rpcid <= this.rpcid.get()) {
+          if (LOG.isDebugEnabled()) {
+            LOG.debug("Received a response for rpcid: " + rpcid + 
+                " that is no longer in our inflight map on region client " + this + 
+                ". It may have been evicted. buf=" + Bytes.pretty(buf));
+          }
+          rpc_response_timedout++;
+        } else {
+          if (LOG.isDebugEnabled()) {
+            LOG.debug("Received rpcid: " + rpcid + " that doesn't seem to be a "
+                + "valid ID on region client " + this + ". This packet may have "
+                + "been corrupted. buf=" + Bytes.pretty(buf));
+          }
+          rpc_response_unknown++;
+        }
         return null;
       }
-    }
-    
-    final int size;
-    if (server_version >= SERVER_VERSION_095_OR_ABOVE) {
-      size = buf.readInt();
-      ensureReadable(buf, size);
-      HBaseRpc.checkArrayLength(buf, size);
-      header = HBaseRpc.readProtobuf(buf, RPCPB.ResponseHeader.PARSER);
-      if (!header.hasCallId()) {
-        final String msg = "RPC response (size: " + size + ") doesn't"
-          + " have a call ID: " + header + ", buf=" + Bytes.pretty(buf);
-        throw new NonRecoverableException(msg);
-      }
-      rpcid = header.getCallId();
-    } else {  // HBase 0.94 and before.
-      size = 0;
-      header = null;  // No protobuf back then.
-      rpcid = buf.readInt();
-    }
-
-    final HBaseRpc rpc = rpcs_inflight.get(rpcid);
-    if (rpc == null) {
-      // make sure to consume the RPC body so that we can decode the next
-      // RPC in the buffer if there is one. Do this before incrementing counters
-      // as with pre-protobuf RPCs we may throw replays while consuming.
-      if (server_version >= SERVER_VERSION_095_OR_ABOVE) {
-        buf.readerIndex(rdx + size + 4);
-        if (LOG.isDebugEnabled()) {
-          LOG.debug("Skipped timed out RPC ID " + rpcid + " of " + size + 
-              " bytes on " + this);
-        }
-      } else {
-        consumeTimedoutNonPBufRPC(buf, rdx, rpcid);
+      
+      if (rpc.isTraceRPC()) {
+        TRACE_LOG.info("Received response for RPC: " + rpc + " Server: " + this);
       }
       
-      // TODO - account for the rpcid overflow
-      if (rpcid > -1 && rpcid <= this.rpcid.get()) {
-        if (LOG.isDebugEnabled()) {
-          LOG.debug("Received a response for rpcid: " + rpcid + 
-              " that is no longer in our inflight map on region client " + this + 
-              ". It may have been evicted. buf=" + Bytes.pretty(buf));
+      
+      // TODO - if the RPC doesn't match we could search the map for the proper
+      // RPC. For now though, something went really pear shaped so we should
+      // toss an exception.
+      assert rpc.rpc_id == rpcid;
+      
+      final Object decoded;
+      try {
+        if (server_version >= SERVER_VERSION_095_OR_ABOVE) {
+          if (header.hasException()) {
+            decoded = decodeException(rpc, header.getException());
+          } else {
+            final int cell_size;
+            {
+              final RPCPB.CellBlockMeta cellblock = header.getCellBlockMeta();
+              if (cellblock == null) {
+                cell_size = 0;
+              } else {
+                cell_size = cellblock.getLength();
+                HBaseRpc.checkArrayLength(buf, cell_size);
+              }
+            }
+            decoded = rpc.deserialize(buf, cell_size);
+          }
+        } else {  // HBase 0.94 and before.
+          decoded = deserialize(buf, rpc);
         }
-        rpc_response_timedout.incrementAndGet();
-      } else {
-        if (LOG.isDebugEnabled()) {
-          LOG.debug("Received rpcid: " + rpcid + " that doesn't seem to be a "
-              + "valid ID on region client " + this + ". This packet may have "
-              + "been corrupted. buf=" + Bytes.pretty(buf));
+      } catch (RuntimeException e) {
+        final String msg = "Uncaught error during de-serialization of " + rpc
+          + ", rpcid=" + rpcid;
+        LOG.error(msg);
+        if (!(e instanceof HBaseException)) {
+          e = new NonRecoverableException(msg, e);
         }
-        rpc_response_unknown.incrementAndGet();
+        if (rpc.isTraceRPC()) {
+          TRACE_LOG.info("Failed to deserialize RPC response: " + rpc 
+              + " Server: " + this, e);
+        }
+        
+        updateExceptionCounter(e.getClass());
+        rpc.callback(e);
+        removeRpc(rpc, false);
+        throw e;
       }
-      return null;
-    }
-    
-    if (rpc.isTraceRPC()) {
-      TRACE_LOG.info("Received response for RPC: " + rpc + " Server: " + this);
-    }
-    
-    // TODO - if the RPC doesn't match we could search the map for the proper
-    // RPC. For now though, something went really pear shaped so we should
-    // toss an exception.
-    assert rpc.rpc_id == rpcid;
-    
-    final Object decoded;
-    try {
-      if (server_version >= SERVER_VERSION_095_OR_ABOVE) {
-        if (header.hasException()) {
-          decoded = decodeException(rpc, header.getException());
+  
+      if (LOG.isDebugEnabled()) {
+        LOG.debug("rpcid=" + rpcid
+                  + ", response size=" + (buf.readerIndex() - rdx) + " bytes"
+                  + ", " + actualReadableBytes() + " readable bytes left"
+                  + ", rpc=" + rpc);
+      }
+      removeRpc(rpc, false);
+  
+      if ((decoded instanceof NotServingRegionException ||
+           decoded instanceof RegionMovedException || 
+             (decoded instanceof RegionServerStoppedException && 
+              !(rpc instanceof MultiAction)))
+         && rpc.getRegion() != null) {
+        updateExceptionCounter(decoded.getClass());
+        
+        // We only handle NSREs for RPCs targeted at a specific region, because
+        // if we don't know which region caused the NSRE (e.g. during multiPut)
+        // we can't do anything about it.
+        nsre_exceptions++;
+        hbase_client.handleNSRE(rpc, rpc.getRegion().name(),
+                                (RecoverableException) decoded,
+                                chan != null ? 
+                                    chan.getRemoteAddress().toString() : "null");
+        if (rpc.isProbe()) {
+          ++probes_nsred;
+        }
+        return null;
+      } else if (decoded instanceof RecoverableException && 
+          // RSSE could pop on a multi action in which case we want to pass it
+          // on to the multi action callback handler.
+          !(decoded instanceof RegionServerStoppedException && 
+            rpc instanceof MultiAction)) {
+        updateExceptionCounter(decoded.getClass());
+        
+        if (decoded instanceof CallQueueTooBigException) {
+          cqtbes++;
+          rate_limiter.ping(WriteRateLimiter.SIGNAL.WRITES_BLOCKED);
         } else {
-          final int cell_size;
-          {
-            final RPCPB.CellBlockMeta cellblock = header.getCellBlockMeta();
-            if (cellblock == null) {
-              cell_size = 0;
+          rate_limiter.ping(WriteRateLimiter.SIGNAL.FAILURE);
+        }
+        
+        if (rpc.isProbe()) {
+          ++probes_with_exception;
+        }
+        
+        // retry a recoverable RPC that doesn't conform to the NSRE path
+        if (hbase_client.cannotRetryRequest(rpc)) {
+          return HBaseClient.tooManyAttempts(rpc, (RecoverableException)decoded);
+        }
+        
+        final class RetryTimer implements TimerTask {
+          public void run(final Timeout timeout) {
+            if (isAlive()) {
+              sendRpc(rpc);
             } else {
-              cell_size = cellblock.getLength();
-              HBaseRpc.checkArrayLength(buf, cell_size);
+              if (rpc instanceof MultiAction) {
+                if (decoded != null && decoded instanceof Exception) {
+                  updateExceptionCounter(decoded.getClass());
+                }
+                ((MultiAction) rpc).callback(decoded);
+              } else {
+                hbase_client.sendRpcToRegion(rpc);
+              }
             }
           }
-          decoded = rpc.deserialize(buf, cell_size);
+          @Override
+          public String toString() {
+            return "RPC Recoverable Retry Timer Task: " + rpc;
+          }
         }
-      } else {  // HBase 0.94 and before.
-        decoded = deserialize(buf, rpc);
+        
+        rpc.cancelTimeout();
+        hbase_client.newTimeout(new RetryTimer(), 
+            rpc.getRetryDelay(hbase_client.jitter_percent));
+        return null;
       }
-    } catch (RuntimeException e) {
-      final String msg = "Uncaught error during de-serialization of " + rpc
-        + ", rpcid=" + rpcid;
-      LOG.error(msg);
-      if (!(e instanceof HBaseException)) {
-        e = new NonRecoverableException(msg, e);
+  
+      try {
+        if (rpc.isTraceRPC()) {
+          TRACE_LOG.info("Calling back RPC: " + rpc + " Server: " + this 
+              + " Response: " + decoded);
+        }
+        
+        rate_limiter.ping(WriteRateLimiter.SIGNAL.SUCCESS);
+        if (rpc.isProbe()) {
+          ++probes_succeded;
+        }
+        rpc_success++;
+        rpc.callback(decoded);
+      } catch (Exception e) {
+        LOG.error("Unexpected exception while handling RPC #" + rpcid
+                  + ", rpc=" + rpc + ", buf=" + Bytes.pretty(buf), e);
       }
-      if (rpc.isTraceRPC()) {
-        TRACE_LOG.info("Failed to deserialize RPC response: " + rpc 
-            + " Server: " + this, e);
+      if (LOG.isDebugEnabled()) {
+        LOG.debug("------------------<< LEAVING  DECODE <<------------------"
+                  + " time elapsed: " + ((System.nanoTime() - start) / 1000) + "us");
       }
-      
-      rpc.callback(e);
-      removeRpc(rpc, false);
+      return null;  // Stop processing here.  The Deferred does everything else.
+    } catch (final Error e) {
+      // if we don't have enough bytes, the ReplayingDecoder throws a ReplayError
+      // which is private and inaccessible. So just catch the error and re-throw.
+      replays++;
       throw e;
     }
-
-    if (LOG.isDebugEnabled()) {
-      LOG.debug("rpcid=" + rpcid
-                + ", response size=" + (buf.readerIndex() - rdx) + " bytes"
-                + ", " + actualReadableBytes() + " readable bytes left"
-                + ", rpc=" + rpc);
-    }
-    removeRpc(rpc, false);
-
-    if ((decoded instanceof NotServingRegionException ||
-         decoded instanceof RegionMovedException || 
-           (decoded instanceof RegionServerStoppedException && 
-            !(rpc instanceof MultiAction)))
-       && rpc.getRegion() != null) {
-      
-      // We only handle NSREs for RPCs targeted at a specific region, because
-      // if we don't know which region caused the NSRE (e.g. during multiPut)
-      // we can't do anything about it.
-      hbase_client.handleNSRE(rpc, rpc.getRegion().name(),
-                              (RecoverableException) decoded,
-                              chan != null ? 
-                                  chan.getRemoteAddress().toString() : "null");
-      return null;
-    } else if (decoded instanceof RecoverableException && 
-        // RSSE could pop on a multi action in which case we want to pass it
-        // on to the multi action callback handler.
-        !(decoded instanceof RegionServerStoppedException && 
-          rpc instanceof MultiAction)) {
-      
-      if (decoded instanceof CallQueueTooBigException) {
-        rate_limiter.ping(WriteRateLimiter.SIGNAL.WRITES_BLOCKED);
-      }
-      
-      // retry a recoverable RPC that doesn't conform to the NSRE path
-      if (hbase_client.cannotRetryRequest(rpc)) {
-        return HBaseClient.tooManyAttempts(rpc, (RecoverableException)decoded);
-      }
-      
-      final class RetryTimer implements TimerTask {
-        public void run(final Timeout timeout) {
-          if (isAlive()) {
-            sendRpc(rpc);
-          } else {
-            if (rpc instanceof MultiAction) {
-              ((MultiAction) rpc).callback(decoded);
-            } else {
-              hbase_client.sendRpcToRegion(rpc);
-            }
-          }
-        }
-        @Override
-        public String toString() {
-          return "RPC Recoverable Retry Timer Task: " + rpc;
-        }
-      }
-      
-      rpc.cancelTimeout();
-      hbase_client.newTimeout(new RetryTimer(), 
-          rpc.getRetryDelay(hbase_client.jitter_percent));
-      return null;
-    }
-
-    try {
-      if (rpc.isTraceRPC()) {
-        TRACE_LOG.info("Calling back RPC: " + rpc + " Server: " + this 
-            + " Response: " + decoded);
-      }
-      
-      rate_limiter.ping(WriteRateLimiter.SIGNAL.SUCCESS);
-      rpc.callback(decoded);
-    } catch (Exception e) {
-      LOG.error("Unexpected exception while handling RPC #" + rpcid
-                + ", rpc=" + rpc + ", buf=" + Bytes.pretty(buf), e);
-    }
-    if (LOG.isDebugEnabled()) {
-      LOG.debug("------------------<< LEAVING  DECODE <<------------------"
-                + " time elapsed: " + ((System.nanoTime() - start) / 1000) + "us");
-    }
-    return null;  // Stop processing here.  The Deferred does everything else.
   }
 
   /**
@@ -2229,12 +2368,17 @@ public final class RegionClient extends ReplayingDecoder<VoidEnum> {
       LOG.error("Removed the wrong RPC " + old_rpc + 
           " when we meant to remove " + rpc);
       if (old_rpc != null) {
+        updateExceptionCounter(NonRecoverableException.class);
         old_rpc.callback(new NonRecoverableException(
             "Removed the wrong RPC from client " + this));
       }
     }
     if (timedout) {
       rpcs_timedout.incrementAndGet();
+      
+      if (rpc.isProbe()) {
+        probes_timedout++;
+      }
     }
     return old_rpc;
   }
@@ -2437,5 +2581,26 @@ public final class RegionClient extends ReplayingDecoder<VoidEnum> {
   /** @return The rate limiter for this region client. */
   WriteRateLimiter getRateLimiter() {
     return rate_limiter;
+  }
+
+  /**
+   * Helper to increment the exception counters.
+   * @param ex The non-null exception to update.
+   */
+  private void updateExceptionCounter(final Class<?> ex) {
+    if (exception_counters == null) {
+      return;
+    }
+    
+    Counter counter = exception_counters.get(ex);
+    if (counter == null) {
+      counter = new Counter();
+      Counter extant = exception_counters.putIfAbsent(ex, counter);
+      if (extant != null) {
+        counter = extant;
+      }
+    }
+    counter.increment();
+    hbase_client.updateExceptionCounter(ex);
   }
 }

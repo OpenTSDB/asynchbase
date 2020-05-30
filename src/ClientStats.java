@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2012  The Async HBase Authors.  All rights reserved.
+ * Copyright (C) 2012-20120 The Async HBase Authors.  All rights reserved.
  * This file is part of Async HBase.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -26,7 +26,12 @@
  */
 package org.hbase.async;
 
+import java.util.Collection;
+import java.util.Map;
+import java.util.Map.Entry;
+
 import com.google.common.cache.CacheStats;
+import com.google.common.collect.Maps;
 
 /**
  * {@link HBaseClient} usage statistics.
@@ -63,6 +68,7 @@ public final class ClientStats {
   private final int dead_region_clients;
   private final int region_clients;
   private final long idle_connections_closed;
+  private final ExtendedStats extended_stats;
 
   /** Package-private constructor.  */
   ClientStats(final long num_connections_created,
@@ -87,7 +93,8 @@ public final class ClientStats {
               final long pending_batched_rpcs,
               final int dead_region_clients,
               final int region_clients,
-              final long idle_connections_closed) {
+              final long idle_connections_closed,
+              final ExtendedStats extended_stats) {
     // JAVA Y U NO HAVE CASE CLASS LIKE SCALA?!  FFFFFUUUUUUU!!
     this.num_connections_created = num_connections_created;
     this.root_lookups = root_lookups;
@@ -112,6 +119,7 @@ public final class ClientStats {
     this.dead_region_clients = dead_region_clients;
     this.region_clients = region_clients;
     this.idle_connections_closed = idle_connections_closed;
+    this.extended_stats = extended_stats;
   }
 
   /** Number of connections created to connect to RegionServers.  */
@@ -365,4 +373,59 @@ public final class ClientStats {
     return increment_buffer_stats;
   }
 
+  /** @return The extended stats. May be null if not set.
+   * @since 1.9 */
+  public ExtendedStats extendedStats() {
+    return extended_stats;
+  }
+  
+  /**
+   * Extended stats around the client.
+   * @since 1.9
+   */
+  public static class ExtendedStats {
+    private final long bytes_read;
+    private final long bytes_written;
+    private final Map<String, Long> exception_counters;
+    
+    public ExtendedStats(final long bytes_read,
+                         final long bytes_written,
+                         final Map<Class<?>, Counter> exception_counters) {
+      this.bytes_read = bytes_read;
+      this.bytes_written = bytes_written;
+      
+      if (exception_counters != null) {
+        this.exception_counters = Maps.newHashMapWithExpectedSize(exception_counters.size());
+        for (final Entry<Class<?>, Counter> entry : exception_counters.entrySet()) {
+          this.exception_counters.put(entry.getKey().getSimpleName(), 
+              entry.getValue().get());
+        }
+      } else {
+        this.exception_counters = null;
+      }
+    }
+    
+    /**
+     * The total number of bytes read since the existence of this client.
+     * @return The total number of bytes read off the socket.
+     */
+    public long bytesRead() {
+      return bytes_read;
+    }
+    
+    /**
+     * The total number of bytes written since the existence of this client.
+     * @return The total number of bytes written to the socket.
+     */
+    public long bytesWritten() {
+      return bytes_written;
+    }
+    
+    /** @return A map of exception class names to the total number of occurrences
+     * since the client started. */
+    public Map<String, Long> exceptionCounters() {
+      return exception_counters;
+    }
+    
+  }
 }
