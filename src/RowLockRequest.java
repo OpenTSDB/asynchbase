@@ -76,6 +76,11 @@ public final class RowLockRequest extends HBaseRpc
   }
 
   @Override
+  boolean isMutation() {
+    return false;
+  }
+  
+  @Override
   public byte[] table() {
     return table;
   }
@@ -153,6 +158,11 @@ public final class RowLockRequest extends HBaseRpc
       return UNLOCK_ROW;
     }
 
+    @Override
+    boolean isMutation() {
+      return false;
+    }
+    
     ChannelBuffer serialize(final byte server_version) {
       // num param + type 1 + region length + region + type 2 + long
       final ChannelBuffer buf = newBuffer(server_version,

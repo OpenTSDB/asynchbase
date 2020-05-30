@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2010, 2011  StumbleUpon, Inc.  All rights reserved.
+ * Copyright (C) 2010-2020  The Async HBase Authors.  All rights reserved.
  * This file is part of Async HBase.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -87,6 +87,11 @@ final class CompareAndSetRequest extends HBaseRpc
             : CHECKANDPUT);
   }
 
+  @Override
+  boolean isMutation() {
+    return true;
+  }
+  
   @Override
   public byte[] table() {
     return put.table();
