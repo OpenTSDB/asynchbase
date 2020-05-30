@@ -4256,7 +4256,7 @@ public final class HBaseClient {
         timeout_handler = new IdleStateHandler(timer,
                 config.getInt("hbase.ipc.client.connection.idle_read_timeout"),
                 config.getInt("hbase.ipc.client.connection.idle_write_timeout"),
-                config.getInt("hbase.hbase.ipc.client.connection.idle_timeout"));
+                config.getInt("hbase.ipc.client.connection.idle_timeout"));
         if (config.getBoolean("hbase.client.extended_stats")) {
           traffic_counter = new ChannelTrafficShapingHandler(timer, 1000);
         } else {
