@@ -470,6 +470,9 @@ public final class HBaseClient {
   /** How many times to retry write RPCs. */
   private final int mutation_rpc_retries;
   
+  /** Whether or not to block unpermitted meta requests to prevent meta storms. */
+  private final boolean block_unpermitted_meta;
+
   /** Whether or not increments are batched. */
   private boolean increment_buffer_durable = false;
   
@@ -631,6 +634,8 @@ public final class HBaseClient {
     track_nsre_meta = false;
     region_to_nsre_meta = null;
     nsre_events = null;
+    block_unpermitted_meta = config.getBoolean(
+        "hbase.client.meta.block_unpermitted");
     if (config.getBoolean("hbase.client.extended_stats")) {
       exception_counters = Maps.newConcurrentMap();
       for (final Exception e : RegionClient.REMOTE_EXCEPTION_TYPES.values()) {
@@ -739,6 +744,8 @@ public final class HBaseClient {
       region_to_nsre_meta = null;
       nsre_events = null;
     }
+    block_unpermitted_meta = config.getBoolean(
+        "hbase.client.meta.block_unpermitted");
     if (config.getBoolean("hbase.client.extended_stats")) {
       exception_counters = Maps.newConcurrentMap();
       for (final Exception e : RegionClient.REMOTE_EXCEPTION_TYPES.values()) {
@@ -2926,6 +2933,18 @@ public final class HBaseClient {
           // this will save us a META lookup.
           if (getRegion(table, key) != null) {
             return Deferred.fromResult(null);  // Looks like no lookup needed.
+          }
+          
+          if (block_unpermitted_meta) {
+            updateExceptionCounter(PleaseThrottleException.class);
+            meta_lookups_permit_blocked.increment();
+            return Deferred.fromError(new PleaseThrottleException(
+                "Unable to acquire permit against the meta table. Maximum "
+                    + "permits is set to: " 
+                    + config.getInt("hbase.client.meta.permits"), 
+                null, 
+                request, 
+                request.getDeferred()));
           }
         }
         Deferred<Object> d = null;
