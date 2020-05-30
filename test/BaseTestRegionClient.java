@@ -114,7 +114,7 @@ public class BaseTestRegionClient {
       }
     }).when(hbase_client, "newClient", anyString(), anyInt());
     
-    region_client = PowerMockito.spy(new RegionClient(hbase_client));
+    region_client = PowerMockito.spy(new RegionClient(hbase_client, null));
     Whitebox.setInternalState(region_client, "chan", chan);
     Whitebox.setInternalState(region_client, "server_version", 
         RegionClient.SERVER_VERSION_095_OR_ABOVE);
