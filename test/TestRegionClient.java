@@ -77,24 +77,24 @@ public class TestRegionClient extends BaseTestRegionClient {
 
   @Test
   public void ctor() throws Exception {
-    assertNotNull(new RegionClient(hbase_client, null));
+    assertNotNull(new RegionClient(hbase_client, null, "localhost"));
   }
   
   @Test (expected = NullPointerException.class)
   public void ctorNullClient() throws Exception {
-    new RegionClient(null, null);
+    new RegionClient(null, null, "localhost");
   }
 
   @Test
   public void getClosestRowBefore() throws Exception {
-    final RegionClient rclient = new RegionClient(hbase_client, null);
+    final RegionClient rclient = new RegionClient(hbase_client, null, "localhost");
     rclient.getClosestRowBefore(region, TABLE, KEY, FAMILY);
     verifyPrivate(rclient).invoke("sendRpc", rpc);
   }
   
   @Test
   public void getRemoteAddressChanNotSet() throws Exception {
-    RegionClient rclient = new RegionClient(hbase_client, null);
+    RegionClient rclient = new RegionClient(hbase_client, null, "localhost");
     
     assertNull(Whitebox.getInternalState(rclient, "chan"));
     assertNull(rclient.getRemoteAddress());
@@ -117,7 +117,8 @@ public class TestRegionClient extends BaseTestRegionClient {
   public void exceptionCaught() throws Exception {
     PowerMockito.mockStatic(Channels.class);
     when(chan.isOpen()).thenReturn(true);
-    final RegionClient rclient = PowerMockito.spy(new RegionClient(hbase_client, null));
+    final RegionClient rclient = PowerMockito.spy(new RegionClient(
+        hbase_client, null, "localhost"));
     PowerMockito.field(RegionClient.class, "chan").set(rclient, chan);
     final ExceptionEvent event = new DefaultExceptionEvent(chan, 
         new RuntimeException("Boo!"));
@@ -132,7 +133,8 @@ public class TestRegionClient extends BaseTestRegionClient {
   @Test
   public void exceptionCaughtChNotOpen() throws Exception {
     PowerMockito.mockStatic(Channels.class);
-    final RegionClient rclient = PowerMockito.spy(new RegionClient(hbase_client, null));
+    final RegionClient rclient = PowerMockito.spy(new RegionClient(
+        hbase_client, null, "localhost"));
     PowerMockito.field(RegionClient.class, "chan").set(rclient, chan);
     final ExceptionEvent event = new DefaultExceptionEvent(chan, 
         new RuntimeException("Boo!"));
@@ -146,13 +148,13 @@ public class TestRegionClient extends BaseTestRegionClient {
   
   @Test (expected = NullPointerException.class)
   public void exceptionCaughtNullEvent() throws Exception {
-    final RegionClient rclient = new RegionClient(hbase_client, null);
+    final RegionClient rclient = new RegionClient(hbase_client, null, "localhost");
     rclient.exceptionCaught(null, null);
   }
   
   @Test (expected = NullPointerException.class)
   public void exceptionCaughtNullChannel() throws Exception {
-    final RegionClient rclient = new RegionClient(hbase_client, null);
+    final RegionClient rclient = new RegionClient(hbase_client, null, "localhost");
     final ExceptionEvent event = new DefaultExceptionEvent(null, 
         new RuntimeException("Boo!"));
     rclient.exceptionCaught(null, event);
@@ -160,7 +162,7 @@ public class TestRegionClient extends BaseTestRegionClient {
   
   @Test (expected = NullPointerException.class)
   public void exceptionCaughtNullException() throws Exception {
-    final RegionClient rclient = new RegionClient(hbase_client, null);
+    final RegionClient rclient = new RegionClient(hbase_client, null, "localhost");
     final ExceptionEvent event = new DefaultExceptionEvent(chan, null);
     rclient.exceptionCaught(null, event);
   }
@@ -172,7 +174,8 @@ public class TestRegionClient extends BaseTestRegionClient {
     // honey badger don't care; apparently we can call this with any old channel.
     final Channel ch = mock(Channel.class, Mockito.RETURNS_DEEP_STUBS);
     when(ch.isOpen()).thenReturn(true);
-    final RegionClient rclient = PowerMockito.spy(new RegionClient(hbase_client, null));
+    final RegionClient rclient = PowerMockito.spy(new RegionClient(
+        hbase_client, null, "localhost"));
     PowerMockito.field(RegionClient.class, "chan").set(rclient, chan);
     final ExceptionEvent event = new DefaultExceptionEvent(ch, 
         new RuntimeException("Boo!"));
@@ -189,7 +192,8 @@ public class TestRegionClient extends BaseTestRegionClient {
     PowerMockito.mockStatic(Channels.class);
     // honey badger don't care; apparently we can call this with any old channel.
     final Channel ch = mock(Channel.class, Mockito.RETURNS_DEEP_STUBS);
-    final RegionClient rclient = PowerMockito.spy(new RegionClient(hbase_client, null));
+    final RegionClient rclient = PowerMockito.spy(new RegionClient(
+        hbase_client, null, "localhost"));
     PowerMockito.field(RegionClient.class, "chan").set(rclient, chan);
     final ExceptionEvent event = new DefaultExceptionEvent(ch, 
         new RuntimeException("Boo!"));
@@ -204,7 +208,8 @@ public class TestRegionClient extends BaseTestRegionClient {
   @SuppressWarnings("rawtypes")
   @Test
   public void channelDisconnected() throws Exception {
-    RegionClient rclient = PowerMockito.spy(new RegionClient(hbase_client, null));
+    RegionClient rclient = PowerMockito.spy(new RegionClient(
+        hbase_client, null, "localhost"));
     PowerMockito.field(RegionClient.class, "chan").set(rclient, chan);
     
     when(cse.getChannel()).thenReturn(chan);
@@ -222,7 +227,7 @@ public class TestRegionClient extends BaseTestRegionClient {
   
   @Test
   public void channelClosed() throws Exception {
-    RegionClient rclient = new RegionClient(hbase_client, null);
+    RegionClient rclient = new RegionClient(hbase_client, null, "localhost");
     assertNotNull(rclient);
     rclient.becomeReady(chan, SERVER_VERSION_UNKNOWN);
     
@@ -454,13 +459,13 @@ public class TestRegionClient extends BaseTestRegionClient {
   
   @Test (expected=InvalidResponseException.class)
   public void badResponse() throws Exception {
-    RegionClient rclient = new RegionClient(hbase_client, null);
+    RegionClient rclient = new RegionClient(hbase_client, null, "localhost");
     Whitebox.invokeMethod(rclient, "badResponse", "ZOMG ERRMSG"); 
   }
   
   @Test
   public void commonHeader() throws Exception {
-    RegionClient rclient = new RegionClient(hbase_client, null);
+    RegionClient rclient = new RegionClient(hbase_client, null, "localhost");
     final byte[] buf = new byte[42];
     
     ChannelBuffer commonHeader = 

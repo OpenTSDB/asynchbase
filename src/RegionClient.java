@@ -155,7 +155,7 @@ public final class RegionClient extends ReplayingDecoder<VoidEnum> {
   
   /** Whether or not to immediately fail call queue to big exceptions on
    * mutation RPCs. */
-  private final boolean fail_cqtbes;
+  private final boolean fail_cqtbe_mutations;
   
   /**
    * The channel we're connected to.
@@ -333,13 +333,21 @@ public final class RegionClient extends ReplayingDecoder<VoidEnum> {
   /** Optional handler to track bytes in and out for stats reporting. */
   private final ChannelTrafficShapingHandler traffic_counter;
   
+  /** The generic throttle exceptions for this host. */
+  private final PleaseThrottleException throttle_not_writeable_ex;
+  private final PleaseThrottleException throttle_pending_ex;
+  private final PleaseThrottleException throttle_inflight_ex;
+  private final PleaseThrottleException throttle_rate_limited_ex;
+  private final PleaseThrottleException throttle_cqtbe_ex;
+  
   /**
    * Constructor.
    * @param hbase_client The HBase client this instance belongs to.
    * @param traffic_counter Optional handler for reporting bytes in and out.
    */
   public RegionClient(final HBaseClient hbase_client,
-                      final ChannelTrafficShapingHandler traffic_counter) {
+                      final ChannelTrafficShapingHandler traffic_counter,
+                      final String host) {
     this.hbase_client = hbase_client;
     this.traffic_counter = traffic_counter;
     check_write_status = hbase_client.getConfig().getBoolean(
@@ -355,7 +363,7 @@ public final class RegionClient extends ReplayingDecoder<VoidEnum> {
         .getBoolean("hbase.rpcs.rebatch_retries");
     append_multi_action = hbase_client.getConfig()
         .getBoolean("hbase.region_client.append_multi_action");
-    fail_cqtbes = hbase_client.getConfig()
+    fail_cqtbe_mutations = hbase_client.getConfig()
         .getBoolean("hbase.region_client.fail_cqtbe_mutables");
     if (hbase_client.getConfig()
         .getBoolean("hbase.client.extended_stats")) {
@@ -390,6 +398,24 @@ public final class RegionClient extends ReplayingDecoder<VoidEnum> {
         hbase_client.getTimer(),
         hbase_client.getConfig()
                 .getInt("hbase.rpc.ratelimit.time_frame"));
+    throttle_not_writeable_ex = new PleaseThrottleException(
+        "Channel is not writeable for region server: " + host, null, null, null);
+    throttle_pending_ex = new PleaseThrottleException(
+        "Exceeded the pending RPC limit of " 
+            + hbase_client.getConfig().getInt("hbase.region_client.pending_limit") 
+            + " on region server: " + host, 
+        null, null, null);
+    throttle_inflight_ex = new PleaseThrottleException(
+        "Exceeded the pending RPC limit of " 
+            + hbase_client.getConfig().getInt("hbase.region_client.inflight_limit") 
+            + " on region server: " + host, 
+        null, null, null);
+    throttle_rate_limited_ex = new PleaseThrottleException(
+        "Client rate limiting has been enabled against region server: " 
+            + host, null, null, null);
+    throttle_cqtbe_ex = new PleaseThrottleException(
+        "Region server call queue was full for region server: " 
+            + host, null, null, null);
   }
 
   /**
@@ -1074,7 +1100,7 @@ public final class RegionClient extends ReplayingDecoder<VoidEnum> {
         }
         
         final List<BatchableRpc> rpcs = request.batch();
-        if (e instanceof CallQueueTooBigException && fail_cqtbes) {
+        if (e instanceof CallQueueTooBigException && fail_cqtbe_mutations) {
           final Iterator<BatchableRpc> iterator = rpcs.iterator();
           while (iterator.hasNext()) {
             final BatchableRpc rpc = iterator.next();
@@ -1226,8 +1252,10 @@ public final class RegionClient extends ReplayingDecoder<VoidEnum> {
           } else {
             rate_limiter.ping(WriteRateLimiter.SIGNAL.WRITES_BLOCKED);
             updateExceptionCounter(PleaseThrottleException.class);
-            rpc.callback(new PleaseThrottleException("Region client [" + this + 
-                " ] channel is not writeable.", null, rpc, rpc.getDeferred()));
+            rpc.callback(hbase_client.genericThrottleExceptions() ?
+                throttle_not_writeable_ex :
+                new PleaseThrottleException("Region client [" + this + 
+                    " ] channel is not writeable.", null, rpc, rpc.getDeferred()));
             // TODO - requeue this at some point instead of throwing it back
             // immediately
           }
@@ -1272,7 +1300,8 @@ public final class RegionClient extends ReplayingDecoder<VoidEnum> {
                 + rpc + " Server: " + this);
           }
           updateExceptionCounter(PleaseThrottleException.class);
-          rpc.callback(new PleaseThrottleException(
+          rpc.callback(hbase_client.genericThrottleExceptions() ? 
+              throttle_pending_ex : new PleaseThrottleException(
               "Exceeded the pending RPC limit", null, rpc, rpc.getDeferred()));
           pending_breached.incrementAndGet();
           return;
@@ -1568,7 +1597,8 @@ public final class RegionClient extends ReplayingDecoder<VoidEnum> {
       inflight_breached.incrementAndGet();
       rate_limiter.ping(WriteRateLimiter.SIGNAL.BREACHED_INFLIGHT_QUEUE);
       updateExceptionCounter(PleaseThrottleException.class);
-      rpc.callback(new PleaseThrottleException(
+      rpc.callback(hbase_client.genericThrottleExceptions() ? 
+          throttle_inflight_ex : new PleaseThrottleException(
           "Exceeded the inflight RPC limit", null, rpc, 
           rpc.getDeferred()));
       return null;
@@ -1576,7 +1606,9 @@ public final class RegionClient extends ReplayingDecoder<VoidEnum> {
     
     if (!rate_limiter.isHealthy()) {
       updateExceptionCounter(PleaseThrottleException.class);
-      rpc.callback(new PleaseThrottleException("Write rate is restricted by the"
+      rpc.callback(hbase_client.genericThrottleExceptions() ? 
+          throttle_rate_limited_ex : 
+            new PleaseThrottleException("Write rate is restricted by the"
               + "rate limiter (" + this.rate_limiter.toString()+")", 
                null, rpc, rpc.getDeferred()));
       writes_rate_limited.incrementAndGet();
@@ -1674,7 +1706,8 @@ public final class RegionClient extends ReplayingDecoder<VoidEnum> {
       if (inflight_limit > 0 && rpcs_inflight.size() >= inflight_limit && 
           !rpc.isProbe()) {
         updateExceptionCounter(PleaseThrottleException.class);
-        rpc.callback(new PleaseThrottleException(
+        rpc.callback(hbase_client.genericThrottleExceptions() ? 
+            throttle_inflight_ex : new PleaseThrottleException(
             "Exceeded the inflight RPC limit", null, rpc, rpc.getDeferred()));
         inflight_breached.incrementAndGet();
         rate_limiter.ping(WriteRateLimiter.SIGNAL.BREACHED_INFLIGHT_QUEUE);
@@ -1844,21 +1877,24 @@ public final class RegionClient extends ReplayingDecoder<VoidEnum> {
       }
       removeRpc(rpc, false);
   
-      if ((decoded instanceof NotServingRegionException ||
-           decoded instanceof RegionMovedException || 
-             (decoded instanceof RegionServerStoppedException && 
-              !(rpc instanceof MultiAction)))
-         && rpc.getRegion() != null) {
+      if (decoded instanceof NotServingRegionException ||
+          decoded instanceof RegionMovedException || 
+          decoded instanceof RegionServerStoppedException) {
         updateExceptionCounter(decoded.getClass());
         
         // We only handle NSREs for RPCs targeted at a specific region, because
         // if we don't know which region caused the NSRE (e.g. during multiPut)
         // we can't do anything about it.
         nsre_exceptions++;
-        hbase_client.handleNSRE(rpc, rpc.getRegion().name(),
-                                (RecoverableException) decoded,
-                                chan != null ? 
-                                    chan.getRemoteAddress().toString() : "null");
+        if (rpc instanceof MultiAction) {
+          // TODO - for now, use the NSRE logic in the callback. There can be some
+          // odd behavior here if we have 
+          rpc.callback(decoded);
+        } else {
+          hbase_client.handleNSRE(rpc, rpc.getRegion().name(),
+                                  (RecoverableException) decoded,
+                                  chan == null ? "null" : chan.getRemoteAddress().toString());
+        }
         if (rpc.isProbe()) {
           ++probes_nsred;
         }
@@ -1873,8 +1909,11 @@ public final class RegionClient extends ReplayingDecoder<VoidEnum> {
         if (decoded instanceof CallQueueTooBigException) {
           cqtbes++;
           rate_limiter.ping(WriteRateLimiter.SIGNAL.WRITES_BLOCKED);
-          if (fail_cqtbes && rpc.isMutation() && !rpc.isProbe()) {
-            rpc.callback(new PleaseThrottleException(
+          if (fail_cqtbe_mutations && 
+              (rpc.isMutation() || rpc instanceof MultiAction /** TEMP **/) && 
+              !rpc.isProbe()) {
+            rpc.callback(hbase_client.genericThrottleExceptions() ?
+                throttle_cqtbe_ex : new PleaseThrottleException(
                 "Region server call queue was full for " + this, 
                 (HBaseException) decoded, rpc, rpc.getDeferred()));
             return null;
@@ -1894,17 +1933,24 @@ public final class RegionClient extends ReplayingDecoder<VoidEnum> {
         
         final class RetryTimer implements TimerTask {
           public void run(final Timeout timeout) {
-            if (isAlive()) {
-              sendRpc(rpc);
-            } else {
-              if (rpc instanceof MultiAction) {
-                if (decoded != null && decoded instanceof Exception) {
-                  updateExceptionCounter(decoded.getClass());
+            try {
+              if (isAlive()) {
+                if (rpc instanceof MultiAction) {
+                  ((MultiAction) rpc).incrementAttempts();
+                } else {
+                  rpc.attempt++;
                 }
-                ((MultiAction) rpc).callback(decoded);
+                sendRpc(rpc);
               } else {
-                hbase_client.sendRpcToRegion(rpc);
+                if (rpc instanceof MultiAction) {
+                  ((MultiAction) rpc).callback(decoded);
+                } else {
+                  hbase_client.sendRpcToRegion(rpc);
+                }
               }
+            } catch (Exception e) {
+              LOG.error("Failed to retry RPC locally", e);
+              rpc.callback(e);
             }
           }
           @Override

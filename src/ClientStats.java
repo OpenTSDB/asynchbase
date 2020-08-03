@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2012-20120 The Async HBase Authors.  All rights reserved.
+ * Copyright (C) 2012-2020 The Async HBase Authors.  All rights reserved.
  * This file is part of Async HBase.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -26,7 +26,6 @@
  */
 package org.hbase.async;
 
-import java.util.Collection;
 import java.util.Map;
 import java.util.Map.Entry;
 
@@ -46,9 +45,12 @@ import com.google.common.collect.Maps;
 public final class ClientStats {
 
   private final long num_connections_created;
-  private final long root_lookups;
+  private final long root_lookups_with_permit;
+  private final long root_lookups_wo_permit;
+  private final long root_lookups_blocked;
   private final long meta_lookups_with_permit;
   private final long meta_lookups_wo_permit;
+  private final long meta_lookups_blocked;
   private final long num_flushes;
   private final long num_nsres;
   private final long num_nsre_rpcs;
@@ -72,9 +74,12 @@ public final class ClientStats {
 
   /** Package-private constructor.  */
   ClientStats(final long num_connections_created,
-              final long root_lookups,
+              final long root_lookups_with_permit,
+              final long root_lookups_wo_permit,
+              final long root_lookups_blocked,
               final long meta_lookups_with_permit,
               final long meta_lookups_wo_permit,
+              final long meta_lookups_blocked,
               final long num_flushes,
               final long num_nsres,
               final long num_nsre_rpcs,
@@ -97,9 +102,12 @@ public final class ClientStats {
               final ExtendedStats extended_stats) {
     // JAVA Y U NO HAVE CASE CLASS LIKE SCALA?!  FFFFFUUUUUUU!!
     this.num_connections_created = num_connections_created;
-    this.root_lookups = root_lookups;
+    this.root_lookups_with_permit = root_lookups_with_permit;
+    this.root_lookups_wo_permit = root_lookups_wo_permit;
+    this.root_lookups_blocked = root_lookups_blocked;
     this.meta_lookups_with_permit = meta_lookups_with_permit;
     this.meta_lookups_wo_permit = meta_lookups_wo_permit;
+    this.meta_lookups_blocked = meta_lookups_blocked;
     this.num_flushes = num_flushes;
     this.num_nsres = num_nsres;
     this.num_nsre_rpcs = num_nsre_rpcs;
@@ -142,7 +150,7 @@ public final class ClientStats {
   }
   
   /**
-   * Returns how many lookups in {@code -ROOT-} were performed.
+   * Returns how many lookups in {@code -ROOT-} were performed <b>with a permit</b>.
    * <p>
    * This number should remain low.  It will be 1 after the first access to
    * HBase, and will increase by 1 each time the {@code .META.} region moves
@@ -153,7 +161,17 @@ public final class ClientStats {
    * rarely and a message is logged at the INFO whenever it does.
    */
   public long rootLookups() {
-    return root_lookups;
+    return root_lookups_with_permit;
+  }
+  
+  /** @return The number of lookups against root exceeded the semaphore limit. */
+  public long contendedRootLookups() {
+    return root_lookups_wo_permit;
+  }
+  
+  /** @return The number of root lookups that were blocked. */
+  public long blockedRootLookups() {
+    return root_lookups_blocked;
   }
 
   /**
@@ -183,6 +201,11 @@ public final class ClientStats {
     return meta_lookups_wo_permit;
   }
 
+  /** @return The number of meta lookups that were blocked. */
+  public long metaLookupsBlocked() {
+    return meta_lookups_blocked;
+  }
+  
   /** Number of calls to {@link HBaseClient#flush}.  */
   public long flushes() {
     return num_flushes;
@@ -386,13 +409,16 @@ public final class ClientStats {
   public static class ExtendedStats {
     private final long bytes_read;
     private final long bytes_written;
+    private final long rpcs_aged_out;
     private final Map<String, Long> exception_counters;
     
     public ExtendedStats(final long bytes_read,
                          final long bytes_written,
+                         final long rpcs_aged_out,
                          final Map<Class<?>, Counter> exception_counters) {
       this.bytes_read = bytes_read;
       this.bytes_written = bytes_written;
+      this.rpcs_aged_out = rpcs_aged_out;
       
       if (exception_counters != null) {
         this.exception_counters = Maps.newHashMapWithExpectedSize(exception_counters.size());
@@ -419,6 +445,11 @@ public final class ClientStats {
      */
     public long bytesWritten() {
       return bytes_written;
+    }
+    
+    /** @return The number of RPCs killed because of their age. */
+    public long rpcsAgedOut() {
+      return rpcs_aged_out;
     }
     
     /** @return A map of exception class names to the total number of occurrences

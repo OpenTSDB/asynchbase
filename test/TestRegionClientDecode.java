@@ -2118,7 +2118,7 @@ public class TestRegionClientDecode extends BaseTestRegionClient {
    * tests
    */
   private void resetMockClient() throws Exception {
-    region_client = new RegionClient(hbase_client, null);
+    region_client = new RegionClient(hbase_client, null, "localhost");
     Whitebox.setInternalState(region_client, "chan", chan);
     Whitebox.setInternalState(region_client, "server_version", 
         RegionClient.SERVER_VERSION_095_OR_ABOVE);
