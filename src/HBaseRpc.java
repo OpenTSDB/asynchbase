@@ -442,6 +442,9 @@ public abstract class HBaseRpc implements TimerTask {
   /** Whether or not this RPC has timed out already */
   private boolean has_timedout;
   
+  /** When this RPC was instantiated in ms, used to track it's age */
+  private final long created;
+  
   /**
    * If true, this RPC should fail-fast as soon as we know we have a problem.
    */
@@ -519,6 +522,7 @@ public abstract class HBaseRpc implements TimerTask {
   HBaseRpc() {
     table = null;
     key = null;
+    created = System.currentTimeMillis();
   }
 
   /**
@@ -531,6 +535,7 @@ public abstract class HBaseRpc implements TimerTask {
     KeyValue.checkKey(key);
     this.table = table;
     this.key = key;
+    created = System.currentTimeMillis();
   }
 
   /**
@@ -918,6 +923,11 @@ public abstract class HBaseRpc implements TimerTask {
     return attempt < 4
         ? 200 * (attempt + 2)     // 400, 600, 800, 1000
         : 1000 + (1 << attempt);  // 1016, 1032, 1064, 1128, 1256, 1512, ..
+  }
+  
+  /** @return The age of this RPC in ms. */
+  long age() {
+    return System.currentTimeMillis() - created;
   }
   
   /**

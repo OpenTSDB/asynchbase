@@ -767,7 +767,7 @@ public class TestHBaseClientLocateRegion extends BaseTestHBaseClient {
   private void assertCounters(final int root_lookups, 
       final int meta_lookups_with_permit, final int meta_lookups_wo_permit) {
     assertEquals(root_lookups, 
-        ((Counter)Whitebox.getInternalState(client, "root_lookups")).get());
+        ((Counter)Whitebox.getInternalState(client, "root_lookups_with_permit")).get());
     assertEquals(meta_lookups_with_permit, 
         ((Counter)Whitebox.getInternalState(client, 
             "meta_lookups_with_permit")).get());

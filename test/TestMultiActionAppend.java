@@ -111,7 +111,7 @@ public class TestMultiActionAppend {
     client = mock(HBaseClient.class);
     Config config = new Config();
     when(client.getConfig()).thenReturn(config);
-    rc = new RegionClient(client, null);
+    rc = new RegionClient(client, null, "localhost");
     channel = mock(Channel.class);
     when(channel.getLocalAddress()).thenReturn(mock(SocketAddress.class));
     Whitebox.setInternalState(rc, "chan", channel);

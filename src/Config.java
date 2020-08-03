@@ -348,6 +348,7 @@ public class Config {
     default_map.put("hbase.ipc.client.socket.timeout.connect", "5000");
     default_map.put("hbase.ipc.client.tcpnodelay", "true");
     default_map.put("hbase.ipc.client.tcpkeepalive", "true");
+    default_map.put("hbase.ipc.client.exceptions.generic_throttles", "false");
     
     // default rate limiter values
     // Maximum write rate restriction per second, there will not be any 

@@ -723,6 +723,16 @@ class MultiAction extends HBaseRpc implements HBaseRpc.IsEdit {
   }
 
   /**
+   * Updates the attempts on all nested RPCs.
+   */
+  void incrementAttempts() {
+    attempt++;
+    for (int i = 0; i < batch.size(); i++) {
+      batch.get(i).attempt++;
+    }
+  }
+  
+  /**
    * De-serializes the response to a {@link MultiAction} RPC.
    * See HBase's {@code MultiResponse}.
    * Only used with HBase 0.94 and earlier.

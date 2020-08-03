@@ -472,6 +472,14 @@ public final class HBaseClient {
   
   /** Whether or not to block unpermitted meta requests to prevent meta storms. */
   private final boolean block_unpermitted_meta;
+  
+  /** Whether or not to issue generic Please Throttle Exceptions to save on 
+   * garbage, stack tracking and RPC references. Recommended for high-throughput
+   * applications. */
+  private final boolean generic_throttle_exceptions;
+  private final PleaseThrottleException root_throttle_ex;
+  private final PleaseThrottleException meta_throttle_ex;
+  private final PleaseThrottleException nsre_throttle_ex;
 
   /** Whether or not increments are batched. */
   private boolean increment_buffer_durable = false;
@@ -484,7 +492,9 @@ public final class HBaseClient {
   private final Counter num_connections_created = new Counter();
 
   /** How many {@code -ROOT-} lookups were made.  */
-  private final Counter root_lookups = new Counter();
+  private final Counter root_lookups_with_permit = new Counter();
+  private final Counter root_lookups_wo_permit = new Counter();
+  private final Counter root_lookups_blocked = new Counter();
 
   /** How many {@code .META.} lookups were made (with a permit).  */
   private final Counter meta_lookups_with_permit = new Counter();
@@ -493,7 +503,7 @@ public final class HBaseClient {
   private final Counter meta_lookups_wo_permit = new Counter();
 
   /** How many {@code .META.} lookups were blocked due to limits.  */
-  private final Counter meta_lookups_permit_blocked = new Counter();
+  private final Counter meta_lookups_blocked = new Counter();
   
   /** How many {@code .META.} lookups resulted in exceptions.  */
   private final Counter meta_lookups_exception = new Counter();
@@ -537,6 +547,10 @@ public final class HBaseClient {
   /** Number of region clients closed due to being idle.  */
   private final Counter idle_connections_closed = new Counter();
 
+  /** The number of RPCs that were not retried because they exceeded their max
+   age (currently the rpc timeout * 2) */
+  private final Counter rpcs_aged_out = new Counter();
+  
   /** Optional map of exceptions seen by this client. */
   private final Map<Class<?>, Counter> exception_counters;
   
@@ -634,8 +648,25 @@ public final class HBaseClient {
     track_nsre_meta = false;
     region_to_nsre_meta = null;
     nsre_events = null;
+    
+    generic_throttle_exceptions = config.getBoolean(
+        "hbase.ipc.client.exceptions.generic_throttles");
     block_unpermitted_meta = config.getBoolean(
         "hbase.client.meta.block_unpermitted");
+    root_throttle_ex = new PleaseThrottleException(
+        "Unable to acquire permit against the root table. Maximum "
+            + "permits is set to: " 
+            + config.getInt("hbase.client.meta.permits"), 
+        null, null, null);
+    meta_throttle_ex = new PleaseThrottleException(
+        "Unable to acquire permit against the meta table. Maximum "
+            + "permits is set to: " 
+            + config.getInt("hbase.client.meta.permits"), 
+        null, null, null);
+    nsre_throttle_ex = new PleaseThrottleException(
+        "Region is splitting, offline or moving. Please try again after "
+        + "a backoff period.", null, null, null);
+    
     if (config.getBoolean("hbase.client.extended_stats")) {
       exception_counters = Maps.newConcurrentMap();
       for (final Exception e : RegionClient.REMOTE_EXCEPTION_TYPES.values()) {
@@ -695,7 +726,7 @@ public final class HBaseClient {
    * @since 1.7
    */
   public HBaseClient(final Config config, 
-      final ClientSocketChannelFactory channel_factory) {
+                     final ClientSocketChannelFactory channel_factory) {
     this.channel_factory = channel_factory;
     zkclient = new ZKClient(config.getString("hbase.zookeeper.quorum"), 
         config.getString("hbase.zookeeper.znode.parent"));
@@ -718,6 +749,7 @@ public final class HBaseClient {
       scan_meta = Boolean.parseBoolean(
           System.getProperty("hbase.meta.scan", "false"));
     }
+    
     if (config.hasProperty("hbase.meta.split")) {
       split_meta = config.getBoolean("hbase.meta.split");
     } else {
@@ -744,8 +776,23 @@ public final class HBaseClient {
       region_to_nsre_meta = null;
       nsre_events = null;
     }
+    generic_throttle_exceptions = config.getBoolean(
+        "hbase.ipc.client.exceptions.generic_throttles");
     block_unpermitted_meta = config.getBoolean(
         "hbase.client.meta.block_unpermitted");
+    root_throttle_ex = new PleaseThrottleException(
+        "Unable to acquire permit against the root table. Maximum "
+            + "permits is set to: " 
+            + config.getInt("hbase.client.meta.permits"), 
+        null, null, null);
+    meta_throttle_ex = new PleaseThrottleException(
+        "Unable to acquire permit against the meta table. Maximum "
+            + "permits is set to: " 
+            + config.getInt("hbase.client.meta.permits"), 
+        null, null, null);
+    nsre_throttle_ex = new PleaseThrottleException(
+        "Region is splitting, offline or moving. Please try again after "
+        + "a backoff period.", null, null, null);
     if (config.getBoolean("hbase.client.extended_stats")) {
       exception_counters = Maps.newConcurrentMap();
       for (final Exception e : RegionClient.REMOTE_EXCEPTION_TYPES.values()) {
@@ -865,9 +912,12 @@ public final class HBaseClient {
     
     return new ClientStats(
       num_connections_created.get(),
-      root_lookups.get(),
+      root_lookups_with_permit.get(),
+      root_lookups_wo_permit.get(),
+      root_lookups_blocked.get(),
       meta_lookups_with_permit.get(),
       meta_lookups_wo_permit.get(),
+      meta_lookups_blocked.get(),
       num_flushes.get(),
       num_nsres.get(),
       num_nsre_rpcs.get(),
@@ -891,6 +941,7 @@ public final class HBaseClient {
           new ClientStats.ExtendedStats(
               bytes_read,
               bytes_written,
+              rpcs_aged_out.get(),
               exception_counters) : null
     );
   }
@@ -2632,7 +2683,7 @@ public final class HBaseClient {
    */
   @Deprecated
   public long rootLookupCount() {
-    return root_lookups.get();
+    return root_lookups_with_permit.get();
   }
 
   /**
@@ -2683,6 +2734,17 @@ public final class HBaseClient {
    * already.
    */
   boolean cannotRetryRequest(final HBaseRpc rpc) {
+    if (rpc_timeout > 0 && rpc.age() > rpc_timeout * 2) {
+      // This can happen in the case where we have an overloaded client JVM that
+      // is taking a long time to process requests due to GC or other poor 
+      // threading. In such a case, the RPC may be retried against a region
+      // server multiple times, particularly in the case of NSREs. Each time the
+      // RPC is sent, the timeout is reset. So this is an icky backstop to clear
+      // out the RPCs if they sit around too long.
+      rpcs_aged_out.increment();
+      return false;
+    }
+    
     if (rpc instanceof GetRequest || 
         rpc instanceof OpenScannerRequest ||
         rpc instanceof GetNextRowsRequest ||
@@ -2832,6 +2894,11 @@ public final class HBaseClient {
     return rpc_timeout_timer;
   }
   
+  /** @return Package private whether or not to return generic exceptions. */
+  boolean genericThrottleExceptions() {
+    return generic_throttle_exceptions;
+  }
+  
   // --------------------------------------------------- //
   // Code that find regions (in our cache or using RPCs) //
   // --------------------------------------------------- //
@@ -2937,14 +3004,16 @@ public final class HBaseClient {
           
           if (block_unpermitted_meta) {
             updateExceptionCounter(PleaseThrottleException.class);
-            meta_lookups_permit_blocked.increment();
-            return Deferred.fromError(new PleaseThrottleException(
-                "Unable to acquire permit against the meta table. Maximum "
-                    + "permits is set to: " 
-                    + config.getInt("hbase.client.meta.permits"), 
-                null, 
-                request, 
-                request.getDeferred()));
+            meta_lookups_blocked.increment();
+            return Deferred.fromError(
+                generic_throttle_exceptions ? meta_throttle_ex : 
+                  new PleaseThrottleException(
+                      "Unable to acquire permit against the meta table. Maximum "
+                          + "permits is set to: " 
+                          + config.getInt("hbase.client.meta.permits"), 
+                          null, 
+                          request, 
+                          request.getDeferred()));
           }
         }
         Deferred<Object> d = null;
@@ -2977,6 +3046,9 @@ public final class HBaseClient {
           
           if (return_location) {
             if (scan_meta) {
+              if (LOG.isDebugEnabled()) {
+                LOG.debug("Scanning meta for key: " + meta_name);
+              }
               d = scanMeta(client, meta_region, meta_name, meta_key, INFO)
                   .addCallback(meta_lookup_done_return_location);
             } else {
@@ -2986,6 +3058,9 @@ public final class HBaseClient {
             }
           } else {
             if (scan_meta) {
+              if (LOG.isDebugEnabled()) {
+                LOG.debug("Scanning meta for key: " + meta_name);
+              }
               d = scanMeta(client, meta_region, meta_name, meta_key, INFO)
                   .addCallback(meta_lookup_done);
             } else {
@@ -3037,7 +3112,22 @@ public final class HBaseClient {
     final RegionInfo root_region = new RegionInfo(root_table_name, 
                                                   root_region_name,
                                                   EMPTY_ARRAY);
-    root_lookups.increment();
+    final boolean has_permit = rootregion.acquireMetaLookupPermit();
+    if (!has_permit && block_unpermitted_meta) {
+      updateExceptionCounter(PleaseThrottleException.class);
+      root_lookups_blocked.increment();
+      return Deferred.fromError(generic_throttle_exceptions ?
+          root_throttle_ex : new PleaseThrottleException(
+              "Unable to acquire permit against the root table. Maximum "
+                  + "permits is set to: " 
+                  + config.getInt("hbase.client.meta.permits"), 
+                  null, 
+                  request, 
+                  request.getDeferred()));
+    } else if (!has_permit) {
+      root_lookups_wo_permit.increment();
+    }
+    root_lookups_with_permit.increment();
     if (scan_meta) {
       return scanMeta(rootregion, root_region, root_table_name, root_key, INFO)
           .addCallback(root_lookup_done)
@@ -3649,7 +3739,7 @@ public final class HBaseClient {
     ArrayList<HBaseRpc> nsred_rpcs = got_nsre.get(region_name);
     HBaseRpc exists_rpc = null;  // Our "probe" RPC.
     if (nsred_rpcs == null) {  // Looks like this could be a new NSRE...
-      final ArrayList<HBaseRpc> newlist = new ArrayList<HBaseRpc>(64);
+      final ArrayList<HBaseRpc> newlist = new ArrayList<HBaseRpc>();
       // In HBase 0.95 and up, the exists RPC can't use the empty row key,
       // which could happen if we were trying to scan from the beginning of
       // the table.  So instead use "\0" as the key.
@@ -3749,9 +3839,10 @@ public final class HBaseClient {
           }
         }
         if (reject) {
-          rpc.callback(new PleaseThrottleException(size + " RPCs waiting on "
-            + Bytes.pretty(region_name) + " to come back online", e, rpc,
-            exists_rpc.getDeferred()));
+          rpc.callback(generic_throttle_exceptions ? nsre_throttle_ex :
+              new PleaseThrottleException(size + " RPCs waiting on "
+                  + Bytes.pretty(region_name) + " to come back online", e, rpc,
+                  exists_rpc.getDeferred()));
         }
         return;  // This NSRE is already known and being handled.
       }
@@ -4182,7 +4273,7 @@ public final class HBaseClient {
       // unnecessarily complicated to have control over which ChannelPipeline
       // exactly will be given to the channel.  It's over-designed.
       final RegionClientPipeline pipeline = new RegionClientPipeline();
-      client = pipeline.init();
+      client = pipeline.init(host);
       chan = channel_factory.newChannel(pipeline);
       ip2client.put(hostport, client);  // This is guaranteed to return null.
     }
@@ -4268,9 +4359,11 @@ public final class HBaseClient {
      * Initializes this pipeline.
      * This method <strong>MUST</strong> be called on each new instance
      * before it's used as a pipeline for a channel.
+     * @param host The hostname or IP for logging/debugging.
      */
-    RegionClient init() {
-      final RegionClient client = new RegionClient(HBaseClient.this, traffic_counter);
+    RegionClient init(final String host) {
+      final RegionClient client = new RegionClient(HBaseClient.this, 
+          traffic_counter, host);
       super.addLast("idle_handler", this.timeout_handler);
       super.addLast("idle_cleanup", new RegionClientIdleStateHandler());
       if (traffic_counter != null) {
