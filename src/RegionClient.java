@@ -288,7 +288,7 @@ public final class RegionClient extends ReplayingDecoder<VoidEnum> {
   private int cqtbes;
   
   /** A map of exceptions to counters for extended details. */
-  private final Map<Class<?>, Counter> exception_counters;
+  private final ConcurrentHashMap<Class<?>, Counter> exception_counters;
   
   private final TimerTask flush_timer = new TimerTask() {
     public void run(final Timeout timeout) {
@@ -367,7 +367,7 @@ public final class RegionClient extends ReplayingDecoder<VoidEnum> {
         .getBoolean("hbase.region_client.fail_cqtbe_mutables");
     if (hbase_client.getConfig()
         .getBoolean("hbase.client.extended_stats")) {
-      exception_counters = Maps.newConcurrentMap();
+      exception_counters = new ConcurrentHashMap<Class<?>, Counter>();
       for (final Exception e : REMOTE_EXCEPTION_TYPES.values()) {
         exception_counters.put(e.getClass(), new Counter());
       }
