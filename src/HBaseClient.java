@@ -552,7 +552,7 @@ public final class HBaseClient {
   private final Counter rpcs_aged_out = new Counter();
   
   /** Optional map of exceptions seen by this client. */
-  private final Map<Class<?>, Counter> exception_counters;
+  private final ConcurrentHashMap<Class<?>, Counter> exception_counters;
   
   /**
    * Constructor.
@@ -668,7 +668,7 @@ public final class HBaseClient {
         + "a backoff period.", null, null, null);
     
     if (config.getBoolean("hbase.client.extended_stats")) {
-      exception_counters = Maps.newConcurrentMap();
+      exception_counters = new ConcurrentHashMap<Class<?>, Counter>();
       for (final Exception e : RegionClient.REMOTE_EXCEPTION_TYPES.values()) {
         exception_counters.put(e.getClass(), new Counter());
       }
@@ -794,7 +794,7 @@ public final class HBaseClient {
         "Region is splitting, offline or moving. Please try again after "
         + "a backoff period.", null, null, null);
     if (config.getBoolean("hbase.client.extended_stats")) {
-      exception_counters = Maps.newConcurrentMap();
+      exception_counters = new ConcurrentHashMap<Class<?>, Counter>();
       for (final Exception e : RegionClient.REMOTE_EXCEPTION_TYPES.values()) {
         exception_counters.put(e.getClass(), new Counter());
       }
