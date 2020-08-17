@@ -1971,7 +1971,9 @@ public final class RegionClient extends ReplayingDecoder<VoidEnum> {
               + " Response: " + decoded);
         }
         
-        rate_limiter.ping(WriteRateLimiter.SIGNAL.SUCCESS);
+        if (!(decoded instanceof Exception)) {
+          rate_limiter.ping(WriteRateLimiter.SIGNAL.SUCCESS);
+        }
         if (rpc.isProbe()) {
           ++probes_succeded;
         }
