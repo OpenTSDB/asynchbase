@@ -318,7 +318,7 @@ public class Config {
     default_map.put("hbase.ipc.client.connection.idle_read_timeout", "0");
     default_map.put("hbase.ipc.client.connection.idle_write_timeout", "0");
 
-    /**
+    /*
      * How many different counters do we want to keep in memory for buffering.
      * Each entry requires storing the table name, row key, family name and
      * column qualifier, plus 4 small objects.
@@ -331,6 +331,11 @@ public class Config {
      * to expect they'd tune this value to cater to their unusual requirements.
      */
     default_map.put("hbase.increments.buffer_size", "65535");
+
+    /*
+     * HBaseClient will logs WARN if DNS-lookup takes longer than this threshold.
+     */
+    default_map.put("hbase.dns.latency_warn_threshold_nanos", "3000000");
     
     /* --- HBase configs (same names as their HTable counter parts --- 
      * Note that the defaults may differ though */
@@ -339,7 +344,8 @@ public class Config {
     default_map.put("hbase.zookeeper.znode.parent", "/hbase");
     default_map.put("hbase.zookeeper.session.timeout", "5000");
     default_map.put("hbase.client.retries.number", "10");
-    /** Note that HBase's client defaults to 60 seconds. We default to 0 for
+    /*
+     * Note that HBase's client defaults to 60 seconds. We default to 0 for
      * AsyncHBase backwards compatibility. This may change in the future.
      */
     default_map.put("hbase.rpc.timeout", "0");
