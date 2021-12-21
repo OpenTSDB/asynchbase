@@ -1,0 +1,11 @@
+shared:
+  image: maven:3-adoptopenjdk-8
+
+jobs:
+  pr:
+    steps:
+      - run_arbitrary_script: apt-get update && apt-get install autoconf make -y && make pom.xml && mvn clean test --quiet
+  main:
+    requires: [~pr, ~commit]
+    steps:
+      - run_arbitrary_script: apt-get update && apt-get install autoconf make -y && make pom.xml && mvn clean test --quiet
