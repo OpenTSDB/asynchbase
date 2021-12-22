@@ -4,8 +4,8 @@ shared:
 jobs:
   pr:
     steps:
-      - run_arbitrary_script: apt-get update && apt-get install autoconf make -y && make pom.xml && mvn clean test --quiet
+      - run_arbitrary_script: apt-get update && apt-get install autoconf make wget g++ -y && wget https://github.com/protocolbuffers/protobuf/releases/download/v2.5.0/protobuf-2.5.0.tar.gz && tar xfvz protobuf-2.5.0.tar.gz && cd protobuf-2.5.0 && ./configure && make && make install && ldconfig && cd .. && make pom.xml && mvn clean test --quiet
   main:
     requires: [~pr, ~commit]
     steps:
-      - run_arbitrary_script: apt-get update && apt-get install autoconf make -y && make pom.xml && mvn clean test --quiet
+      - run_arbitrary_script: apt-get update && apt-get install autoconf make wget g++ -y && wget https://github.com/protocolbuffers/protobuf/releases/download/v2.5.0/protobuf-2.5.0.tar.gz && tar xfvz protobuf-2.5.0.tar.gz && cd protobuf-2.5.0 && ./configure && make && make install && ldconfig && cd .. && make pom.xml && mvn clean test --quiet
