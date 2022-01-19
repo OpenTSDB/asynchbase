@@ -1547,6 +1547,7 @@ final class RegionClient extends ReplayingDecoder<VoidEnum> {
       final class RetryTimer implements TimerTask {
         public void run(final Timeout timeout) {
           if (isAlive()) {
+            rpc.attempt++;
             sendRpc(rpc);
           } else {
             if (rpc instanceof MultiAction) {
